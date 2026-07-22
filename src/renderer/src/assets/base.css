@@ -1,0 +1,205 @@
+/* 全局基础层。语义变量与视觉移植自 lx-music-desktop（Apache-2.0, © lyswhut）。
+   --color-primary-* 与字色梯度由主题引擎（theme/apply）运行期注入 :root，此处仅定义语义映射与静态基础。 */
+
+:root {
+  /* ---- 语义色（值经主题引擎注入的梯度解析） ---- */
+  --color-app-background: var(--color-primary-light-600-alpha-600);
+  --color-main-background: rgba(255, 255, 255, 0.9);
+  --color-content-background: var(--color-primary-light-1000);
+  --color-nav-font: var(--color-primary);
+
+  --color-font: var(--color-850);
+  --color-font-label: var(--color-450);
+  --color-primary-font: var(--color-primary);
+  --color-primary-font-hover: var(--color-primary-alpha-300);
+  --color-primary-font-active: var(--color-primary-dark-100-alpha-200);
+
+  --color-primary-background: var(--color-primary-light-400-alpha-700);
+  --color-primary-background-hover: var(--color-primary-light-300-alpha-800);
+  --color-primary-background-active: var(--color-primary-light-100-alpha-800);
+
+  --color-button-font: var(--color-primary-alpha-100);
+  --color-button-font-selected: var(--color-primary-dark-100-alpha-100);
+  --color-button-background: var(--color-primary-light-400-alpha-700);
+  --color-button-background-selected: var(--color-primary-alpha-600);
+  --color-button-background-hover: var(--color-primary-light-300-alpha-600);
+  --color-button-background-active: var(--color-primary-light-100-alpha-600);
+
+  --color-list-header-border-bottom: 1px solid var(--color-primary-alpha-900);
+  --color-badge-primary: var(--color-primary);
+  --color-badge-secondary: #4baed5;
+  --color-badge-tertiary: #e7aa36;
+
+  --background-image: none;
+  --background-image-position: center;
+  --background-image-size: cover;
+
+  /* ---- 尺寸 / 圆角 / 过渡 ---- */
+  --width-aside: 64px;
+  --height-toolbar: 54px;
+  --height-player: 66px;
+  --radius-border: 4px;
+  --form-radius: 3px;
+  --radius-progress: 5px;
+  --transition-fast: 0.3s ease;
+  --transition-normal: 0.4s ease;
+  --transition-slow: 0.6s ease;
+}
+
+/* ---------- 字体栈（按 OS class + 语言，移植自 lx reset.less） ---------- */
+.windows {
+  font-family: 'Segoe WPC', 'Segoe UI', sans-serif;
+}
+.windows:lang(zh-Hans) {
+  font-family: 'Microsoft YaHei', 'Segoe WPC', 'Segoe UI', sans-serif;
+}
+.mac {
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+}
+.mac:lang(zh-Hans) {
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+}
+.linux {
+  font-family: system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+}
+.linux:lang(zh-Hans) {
+  font-family: system-ui, 'Ubuntu', 'Droid Sans', 'Source Han Sans SC', sans-serif;
+}
+
+/* ---------- reset ---------- */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-user-drag: none;
+}
+
+html {
+  font-size: 16px;
+}
+html,
+body,
+#app {
+  height: 100%;
+}
+body {
+  line-height: 1.2;
+  color: var(--color-font);
+  background-color: var(--color-app-background);
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--color-font);
+  background: none;
+  border: none;
+  outline: none;
+}
+button {
+  cursor: pointer;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-font-label);
+}
+img {
+  -webkit-user-drag: none;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+}
+svg {
+  transition: var(--transition-normal);
+  transition-property: fill, color;
+}
+
+::selection {
+  color: var(--color-primary-dark-500-alpha-200);
+  background: var(--color-primary-light-100-alpha-500);
+}
+
+/* ---------- 交互 ---------- */
+.hover {
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+.hover:hover {
+  color: var(--color-primary-font-hover);
+}
+.hover:active {
+  color: var(--color-primary-font-active);
+}
+
+/* ---------- 滚动条（LX 品牌色） ---------- */
+.scroll {
+  overflow: auto;
+}
+.scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+  background-color: transparent;
+}
+.scroll::-webkit-scrollbar-track {
+  background-color: var(--color-primary-light-100-alpha-800);
+  border-radius: 3px;
+}
+.scroll::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background-color: var(--color-primary-alpha-600);
+  transition: background-color 0.4s ease;
+}
+.scroll::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-primary-alpha-400);
+}
+
+/* ---------- 工具类 ---------- */
+.ellipsis {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ellipsis-2 {
+  display: -webkit-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.nobreak {
+  white-space: nowrap;
+}
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* ---------- 页面通用排版 ---------- */
+.page {
+  padding: 20px 25px;
+}
+.page-title {
+  margin-bottom: 16px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-font);
+}
+.hint {
+  padding: 15px 0;
+  color: var(--color-font-label);
+  font-size: 13px;
+}

@@ -1,0 +1,2 @@
+/* 渲染层样式入口：仅聚合基础层，外壳与组件样式走各自 .vue 的 scoped style。 */
+@import './base.css';

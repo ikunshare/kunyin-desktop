@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>坤音</title>
+    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <!-- 渲染层不直接访问外网（网络由主进程负责）；此处放开：远程封面图、直链/自定义协议音频、HMR 的 ws。
+         非加密音频 <audio> 直连远程直链故 media-src 放行 http/https；加密流走 kunyin://。
+         如需收紧可改用 session.webRequest 做 CDN 主机白名单（参考 lx-music）。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; media-src 'self' blob: data: kunyin: http: https:; font-src 'self' data:; connect-src 'self' ws: wss:"
+    />
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

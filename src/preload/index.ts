@@ -1,0 +1,224 @@
+import { contextBridge, ipcRenderer } from 'electron'
+import { electronAPI } from '@electron-toolkit/preload'
+import {
+  IpcChannels,
+  type AppSettings,
+  type DesktopLyricState,
+  type MediaCommand,
+  type QQQRStatusEvent,
+  type SyncStatusSnapshot,
+  type UpdaterEvent,
+  type WindowApi
+} from '@common'
+
+// 渲染层常把 Pinia 响应式 Proxy（MusicItem）传进来；Proxy 无法被 structuredClone
+// （ipcRenderer.invoke 的序列化），会抛 DataCloneError。过 IPC 前统一转普通对象。
+function toPlain<T>(v: T): T {
+  return v == null ? v : (JSON.parse(JSON.stringify(v)) as T)
+}
+
+// 暴露给渲染层的类型化能力面。渲染层不直接触网，一切走此处转发到主进程。
+const api: WindowApi = {
+  app: {
+    getVersion: () => ipcRenderer.invoke(IpcChannels.APP_VERSION),
+    getPlatform: () => ipcRenderer.invoke(IpcChannels.APP_PLATFORM)
+  },
+  settings: {
+    get: () => ipcRenderer.invoke(IpcChannels.SETTINGS_GET),
+    set: (patch) => ipcRenderer.invoke(IpcChannels.SETTINGS_SET, patch),
+    onChange: (cb) => {
+      const listener = (_e: Electron.IpcRendererEvent, settings: AppSettings): void => cb(settings)
+      ipcRenderer.on(IpcChannels.SETTINGS_CHANGED, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.SETTINGS_CHANGED, listener)
+      }
+    }
+  },
+  search: {
+    songs: (source, keyword, page, size) =>
+      ipcRenderer.invoke(IpcChannels.SEARCH_SONGS, source, keyword, page, size),
+    hot: (source) => ipcRenderer.invoke(IpcChannels.SEARCH_HOT, source),
+    tip: (source, keyword) => ipcRenderer.invoke(IpcChannels.SEARCH_TIP, source, keyword)
+  },
+  player: {
+    resolveUrl: (item, qualityId) =>
+      ipcRenderer.invoke(IpcChannels.PLAYER_RESOLVE_URL, toPlain(item), qualityId),
+    stream: (item, qualityId) =>
+      ipcRenderer.invoke(IpcChannels.PLAYER_STREAM, toPlain(item), qualityId),
+    lyric: (item) => ipcRenderer.invoke(IpcChannels.PLAYER_LYRIC, toPlain(item))
+  },
+  auth: {
+    get: () => ipcRenderer.invoke(IpcChannels.AUTH_GET),
+    validate: (authst) => ipcRenderer.invoke(IpcChannels.AUTH_VALIDATE, authst),
+    clear: () => ipcRenderer.invoke(IpcChannels.AUTH_CLEAR)
+  },
+  library: {
+    playlists: () => ipcRenderer.invoke(IpcChannels.LIBRARY_PLAYLISTS),
+    playlistSongs: (playlistId, limit, offset) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_PLAYLIST_SONGS, playlistId, limit, offset),
+    createPlaylist: (name, opts) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_CREATE_PLAYLIST, name, opts),
+    deletePlaylist: (playlistId) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_DELETE_PLAYLIST, playlistId),
+    renamePlaylist: (playlistId, newName) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_RENAME_PLAYLIST, playlistId, newName),
+    addToPlaylist: (playlistId, item) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_ADD_TO_PLAYLIST, playlistId, toPlain(item)),
+    removeFromPlaylist: (playlistId, item) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_REMOVE_FROM_PLAYLIST, playlistId, toPlain(item)),
+    moveSong: (playlistId, item, newPosition) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_MOVE_SONG, playlistId, toPlain(item), newPosition),
+    movePlaylist: (playlistId, targetIndex) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_MOVE_PLAYLIST, playlistId, targetIndex),
+    isFavorite: (item) => ipcRenderer.invoke(IpcChannels.LIBRARY_IS_FAVORITE, toPlain(item)),
+    toggleFavorite: (item) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_TOGGLE_FAVORITE, toPlain(item)),
+    addToTrial: (item, atHead) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_ADD_TO_TRIAL, toPlain(item), atHead),
+    trialSongs: () => ipcRenderer.invoke(IpcChannels.LIBRARY_TRIAL_SONGS),
+    onChange: (cb) => {
+      const listener = (): void => cb()
+      ipcRenderer.on(IpcChannels.LIBRARY_CHANGED, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.LIBRARY_CHANGED, listener)
+      }
+    }
+  },
+  discover: {
+    playlistInfo: (source, input) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_PLAYLIST_INFO, source, input),
+    playlistSongs: (source, id, page, size) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_PLAYLIST_SONGS, source, id, page, size),
+    albumInfo: (source, id) => ipcRenderer.invoke(IpcChannels.DISCOVER_ALBUM_INFO, source, id),
+    albumSongs: (source, id, page, size) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_ALBUM_SONGS, source, id, page, size),
+    artistInfo: (source, id) => ipcRenderer.invoke(IpcChannels.DISCOVER_ARTIST_INFO, source, id),
+    artistSongs: (source, id, page, size) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_ARTIST_SONGS, source, id, page, size),
+    searchAlbum: (source, keyword, page, size) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_SEARCH_ALBUM, source, keyword, page, size),
+    searchArtist: (source, keyword, page, size) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_SEARCH_ARTIST, source, keyword, page, size),
+    searchPlaylist: (source, keyword, page, size) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_SEARCH_PLAYLIST, source, keyword, page, size),
+    userPlaylists: (source) => ipcRenderer.invoke(IpcChannels.DISCOVER_USER_PLAYLISTS, source),
+    mvQualities: (item) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_MV_QUALITIES, item.type, toPlain(item)),
+    mvUrl: (item, quality) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_MV_URL, item.type, toPlain(item), quality)
+  },
+  media: {
+    onCommand: (cb) => {
+      const listener = (_e: Electron.IpcRendererEvent, cmd: MediaCommand): void => cb(cmd)
+      ipcRenderer.on(IpcChannels.MEDIA_COMMAND, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.MEDIA_COMMAND, listener)
+      }
+    }
+  },
+  desktopLyric: {
+    toggle: (enabled) => ipcRenderer.invoke(IpcChannels.DESKTOP_LYRIC_TOGGLE, enabled),
+    push: (state) => ipcRenderer.send(IpcChannels.DESKTOP_LYRIC_PUSH, state),
+    onState: (cb) => {
+      const listener = (_e: Electron.IpcRendererEvent, state: DesktopLyricState): void => cb(state)
+      ipcRenderer.on(IpcChannels.DESKTOP_LYRIC_STATE, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.DESKTOP_LYRIC_STATE, listener)
+      }
+    },
+    setLock: (locked) => ipcRenderer.send(IpcChannels.DESKTOP_LYRIC_SET_LOCK, locked)
+  },
+  download: {
+    add: (input) =>
+      ipcRenderer.invoke(IpcChannels.DOWNLOAD_ADD, { ...input, item: toPlain(input.item) }),
+    list: () => ipcRenderer.invoke(IpcChannels.DOWNLOAD_LIST),
+    pause: (taskKey) => ipcRenderer.invoke(IpcChannels.DOWNLOAD_PAUSE, taskKey),
+    resume: (taskKey) => ipcRenderer.invoke(IpcChannels.DOWNLOAD_RESUME, taskKey),
+    retry: (taskKey) => ipcRenderer.invoke(IpcChannels.DOWNLOAD_RETRY, taskKey),
+    remove: (taskKey, deleteFile) =>
+      ipcRenderer.invoke(IpcChannels.DOWNLOAD_REMOVE, taskKey, deleteFile),
+    clearCompleted: () => ipcRenderer.invoke(IpcChannels.DOWNLOAD_CLEAR_COMPLETED),
+    onChange: (cb) => {
+      const listener = (): void => cb()
+      ipcRenderer.on(IpcChannels.DOWNLOAD_CHANGED, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.DOWNLOAD_CHANGED, listener)
+      }
+    }
+  },
+  account: {
+    list: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_LIST),
+    logout: (provider) => ipcRenderer.invoke(IpcChannels.ACCOUNT_LOGOUT, provider),
+    kgSave: (creds) => ipcRenderer.invoke(IpcChannels.ACCOUNT_KG_SAVE, creds),
+    webviewLogin: (provider) => ipcRenderer.invoke(IpcChannels.ACCOUNT_WEBVIEW_LOGIN, provider),
+    wyQrCreate: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_WY_QR_CREATE),
+    wyQrPoll: (unikey) => ipcRenderer.invoke(IpcChannels.ACCOUNT_WY_QR_POLL, unikey),
+    qqQrStart: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_QQ_QR_START),
+    qqQrStop: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_QQ_QR_STOP),
+    onQQEvent: (cb) => {
+      const listener = (_e: Electron.IpcRendererEvent, evt: QQQRStatusEvent): void => cb(evt)
+      ipcRenderer.on(IpcChannels.ACCOUNT_QQ_QR_EVENT, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.ACCOUNT_QQ_QR_EVENT, listener)
+      }
+    },
+    onChange: (cb) => {
+      const listener = (): void => cb()
+      ipcRenderer.on(IpcChannels.ACCOUNT_CHANGED, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.ACCOUNT_CHANGED, listener)
+      }
+    }
+  },
+  sync: {
+    status: () => ipcRenderer.invoke(IpcChannels.SYNC_STATUS),
+    connect: () => ipcRenderer.invoke(IpcChannels.SYNC_CONNECT),
+    disconnect: () => ipcRenderer.invoke(IpcChannels.SYNC_DISCONNECT),
+    reset: () => ipcRenderer.invoke(IpcChannels.SYNC_RESET),
+    onStatus: (cb) => {
+      const listener = (_e: Electron.IpcRendererEvent, s: SyncStatusSnapshot): void => cb(s)
+      ipcRenderer.on(IpcChannels.SYNC_STATUS_CHANGED, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.SYNC_STATUS_CHANGED, listener)
+      }
+    }
+  },
+  backup: {
+    exportFull: (filePath) => ipcRenderer.invoke(IpcChannels.BACKUP_EXPORT_FULL, filePath),
+    exportPlaylists: (filePath, opts) =>
+      ipcRenderer.invoke(IpcChannels.BACKUP_EXPORT_PLAYLISTS, filePath, opts),
+    parse: (filePath) => ipcRenderer.invoke(IpcChannels.BACKUP_PARSE, filePath),
+    restore: (filePath, options) =>
+      ipcRenderer.invoke(IpcChannels.BACKUP_RESTORE, filePath, options),
+    lxParse: (filePath) => ipcRenderer.invoke(IpcChannels.BACKUP_LX_PARSE, filePath),
+    lxImport: (filePath) => ipcRenderer.invoke(IpcChannels.BACKUP_LX_IMPORT, filePath),
+    pickSave: (defaultName) => ipcRenderer.invoke(IpcChannels.BACKUP_PICK_SAVE, defaultName),
+    pickOpen: (filters) => ipcRenderer.invoke(IpcChannels.BACKUP_PICK_OPEN, filters)
+  },
+  updater: {
+    check: () => ipcRenderer.invoke(IpcChannels.UPDATER_CHECK),
+    download: () => ipcRenderer.invoke(IpcChannels.UPDATER_DOWNLOAD),
+    install: () => ipcRenderer.invoke(IpcChannels.UPDATER_INSTALL),
+    onEvent: (cb) => {
+      const listener = (_e: Electron.IpcRendererEvent, evt: UpdaterEvent): void => cb(evt)
+      ipcRenderer.on(IpcChannels.UPDATER_EVENT, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.UPDATER_EVENT, listener)
+      }
+    }
+  }
+}
+
+if (process.contextIsolated) {
+  try {
+    contextBridge.exposeInMainWorld('electron', electronAPI)
+    contextBridge.exposeInMainWorld('api', api)
+  } catch (error) {
+    console.error(error)
+  }
+} else {
+  // @ts-ignore (define in dts)
+  window.electron = electronAPI
+  // @ts-ignore (define in dts)
+  window.api = api
+}

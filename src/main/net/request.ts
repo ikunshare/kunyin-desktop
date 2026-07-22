@@ -1,0 +1,70 @@
+/**
+ * 主进程 HTTP 请求封装（音源用）。Electron 主进程 Node 环境自带全局 fetch。
+ * 代理（settings.network.proxy）后续接入。
+ */
+export interface RequestOptions {
+  method?: string
+  headers?: Record<string, string>
+  query?: Record<string, string | number | boolean | undefined>
+  /** 对象 → JSON；字符串/URLSearchParams 原样发送 */
+  body?: string | URLSearchParams | Record<string, unknown>
+  cookie?: string
+  timeout?: number
+}
+
+const DEFAULT_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+
+function buildUrl(url: string, query?: RequestOptions['query']): string {
+  if (!query) return url
+  const params = new URLSearchParams()
+  for (const [k, v] of Object.entries(query)) {
+    if (v !== undefined) params.append(k, String(v))
+  }
+  const qs = params.toString()
+  if (!qs) return url
+  return url + (url.includes('?') ? '&' : '?') + qs
+}
+
+export async function requestRaw(url: string, options: RequestOptions = {}): Promise<Response> {
+  const headers: Record<string, string> = { 'User-Agent': DEFAULT_UA, ...options.headers }
+  if (options.cookie) headers['Cookie'] = options.cookie
+
+  let body: string | URLSearchParams | undefined
+  if (options.body != null) {
+    if (typeof options.body === 'string' || options.body instanceof URLSearchParams) {
+      body = options.body
+    } else {
+      body = JSON.stringify(options.body)
+      headers['Content-Type'] ??= 'application/json'
+    }
+  }
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), options.timeout ?? 15000)
+  try {
+    return await fetch(buildUrl(url, options.query), {
+      method: options.method ?? 'GET',
+      headers,
+      body,
+      signal: controller.signal
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export async function requestJson<T>(url: string, options: RequestOptions = {}): Promise<T> {
+  const resp = await requestRaw(url, options)
+  return (await resp.json()) as T
+}
+
+export async function requestText(url: string, options: RequestOptions = {}): Promise<string> {
+  const resp = await requestRaw(url, options)
+  return resp.text()
+}
+
+export async function requestBuffer(url: string, options: RequestOptions = {}): Promise<Buffer> {
+  const resp = await requestRaw(url, options)
+  return Buffer.from(await resp.arrayBuffer())
+}
