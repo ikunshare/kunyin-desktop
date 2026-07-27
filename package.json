@@ -1,6 +1,6 @@
 {
   "name": "kunyin-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "一个音乐查找助手",
   "main": "./out/main/index.js",
   "author": "ikunshare",
