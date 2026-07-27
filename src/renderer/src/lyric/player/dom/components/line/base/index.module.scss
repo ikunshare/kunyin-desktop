@@ -1,0 +1,38 @@
+@use '../common.scss' as *;
+
+.wrapper {
+  @include set-root-variable('line-position', center);
+  @each $pos in $positions {
+    &[position='#{$pos}'] {
+      @include set-root-variable('line-position', $pos);
+    }
+  }
+
+  @include set-root-variable('line-animation-duration', 1000ms);
+  @include set-root-variable('line-animation-delay', 0ms);
+
+  display: flex;
+  position: absolute;
+  width: build-root-variable('container-width');
+
+  opacity: 1;
+
+  // transform uses the full duration. opacity and filter run at 50% of it (same delay)
+  transition:
+    transform build-line-variable('animation', '', 'duration') build-root-variable('scroll-easing')
+      build-line-variable('animation', '', 'delay'),
+    opacity calc(#{build-line-variable('animation', '', 'duration')} * 0.5) ease
+      build-line-variable('animation', '', 'delay'),
+    filter calc(#{build-line-variable('animation', '', 'duration')} * 0.5) ease
+      build-line-variable('animation', '', 'delay');
+
+  pointer-events: none;
+  justify-content: build-line-variable('position');
+  text-align: build-line-variable('position');
+  transform-origin: build-line-variable('position') center;
+
+  // Only lines inside the animation window get a compositor layer.
+  &[animatable] {
+    will-change: transform;
+  }
+}

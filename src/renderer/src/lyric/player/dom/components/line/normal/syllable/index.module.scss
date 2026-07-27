@@ -1,0 +1,104 @@
+@use '../../common.scss' as *;
+
+.syllable {
+  @include apply-line-font('main-syllable');
+}
+
+.cell {
+  --emphasize-padding-horizontal: 0px;
+  --emphasize-padding-vertical: 0px;
+
+  // Per-word horizontal gap (per side); 0 by default, set inline by WordElement from config when the word carries annotation rows.
+  --word-gap: 0px;
+
+  // Top pad that lifts a word with shorter upper rows onto the shared baseline; set inline by WordElement.
+  --word-align-top: 0px;
+
+  // Stack the word-mask wipe group and any independent-timeline rows in one column, always centered.
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  // Top-align the cells and reserve each word's upper-rows shortfall so every word shares one baseline.
+  vertical-align: top;
+  padding-top: var(--word-align-top);
+
+  // Cancel the inner word's emphasize padding at the line footprint (keeps layout put), then add the per-word gap when annotation rows are present.
+  margin: calc(-1 * var(--emphasize-padding-vertical))
+    calc(var(--word-gap) - var(--emphasize-padding-horizontal));
+}
+
+.annotation-row {
+  display: flex;
+  // [vendor patch] 上游为 `width: 100%`，即把注解行钉死在主词单字的宽度上；
+  // 拼音（soengcu 之类）比一个汉字宽得多，于是横向溢出到邻字甚至屏幕外。
+  // 改成由内容撑宽、cell 随之变宽（cell 是 inline-flex + align-items:center，汉字自然居中对齐拼音）。
+  width: max-content;
+  // [vendor patch] 悬挂余量：拼音常比单个汉字略宽（soeng/zoeng 这类 5-6 字母音节），
+  // 纯 max-content 每个字都被自家拼音撑宽，整行字距明显膨胀。两侧各让出 --word-gap
+  // （即配置 gap 的一半，注解行所在 cell 必有该 margin）的负 margin：cell 宽按
+  // 「拼音宽 - 整个 gap」计，轻微超宽的拼音悬进 gap 里而不推开汉字；只有超出的部分
+  // （长音译如 "(EasonChan)"）才继续撑 cell。悬挂上限=gap 的一半 × 两侧，
+  // 相邻拼音各自用完自家余量时恰好相接，不会重叠。
+  margin: 0 calc(-1 * var(--word-gap));
+  // [vendor patch] 上游为 `min-height: 1em`，只有字号的 1 倍高，装不下 g/p/y 的下降部；
+  // 而擦除 mask 按 span.clientHeight 生成，盒子矮一截就把下降部连同 mask 一起切掉。
+  // 改 auto：高度由字体自身的行盒决定（注解行本就总有内容，不需要 1em 兜底占位）。
+  min-height: auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.wipe {
+  // The two mask stops multiply the word's own opacity, resolved from the configured syllable opacities:
+  // - unsung side defaults to 1 and is pulled down to normal/active on the active line below.
+  // - sung side carries the active opacity.
+  --mask-normal-opacity: 1;
+  --mask-active-opacity: #{build-line-variable('normal', 'main-syllable-active', 'opacity')};
+
+  // The word and the rows riding its mask share one wipe, stacked and centered relative to each other.
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+
+  mask-mode: alpha;
+  mask-repeat: no-repeat;
+
+  // On the singing line the base opacity is the active opacity, so pull the unsung side back down to normal brightness.
+  [active] & {
+    --mask-normal-opacity: calc(
+      #{build-line-variable('normal', 'main-syllable', 'opacity')} /
+        #{build-line-variable('normal', 'main-syllable-active', 'opacity')}
+    );
+  }
+}
+
+.word {
+  display: inline-block;
+  transition: opacity 0.8s ease;
+
+  // Padded room for the emphasize scale / glow; the emphasize padding vars are inherited from `.cell`, whose negative margin keeps the layout box unchanged.
+  padding: var(--emphasize-padding-vertical) var(--emphasize-padding-horizontal);
+
+  @include apply-line-style('main-syllable');
+
+  // Switch opacity instantly on the active line (no fade) so unsung syllables hold normal brightness while the wipe reveals them word by word.
+  [active] & {
+    transition-duration: 0s;
+  }
+}
+
+.char {
+  display: inline-block;
+}
+
+.space-end {
+  :is([position='left'], [position='center']) & {
+    margin-right: calc(0.3em - var(--emphasize-padding-horizontal));
+  }
+}
+
+.space-start {
+  :is([position='right']) & {
+    margin-left: calc(0.3em - var(--emphasize-padding-horizontal));
+  }
+}

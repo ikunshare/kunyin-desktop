@@ -1,0 +1,17 @@
+@use '../../common.scss' as *;
+
+.translate,
+.roman {
+  display: inline-block;
+  transition: opacity 0.6s ease;
+}
+
+.translate {
+  @include apply-line-font('annotation-translate');
+  @include apply-line-style('annotation-translate');
+}
+
+.roman {
+  @include apply-line-font('annotation-roman');
+  @include apply-line-style('annotation-roman');
+}

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import type { PlayListInfoResult } from '@common'
+import { coverUrl } from '../utils/cover'
 
 const props = defineProps<{ item: PlayListInfoResult }>()
 const router = useRouter()
@@ -13,7 +14,7 @@ function open(): void {
 <template>
   <div class="card" @click="open">
     <div class="cover">
-      <img :src="item.cover" alt="" />
+      <img :src="coverUrl(item.cover)" alt="" />
       <span v-if="item.total" class="count">{{ item.total }} 首</span>
     </div>
     <div class="name ellipsis-2">{{ item.name }}</div>

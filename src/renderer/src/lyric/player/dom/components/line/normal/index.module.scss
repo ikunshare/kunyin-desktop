@@ -1,0 +1,56 @@
+@use '../common.scss' as *;
+
+.normal {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  row-gap: 8px;
+  pointer-events: auto;
+  transition: opacity 0.6s ease;
+
+  @include apply-line-font('base');
+  @include apply-line-style('base');
+
+  // A played line at zero opacity is visually hidden yet still captures clicks.
+  // Drop pointer-events when that opacity resolves to 0 so the hidden line ignores input.
+  [played]:not([scrolling] [played]) & {
+    @container style(--lyric-player-line-normal-base-played-opacity: 0) {
+      pointer-events: none;
+    }
+  }
+
+  &::before {
+    content: '';
+    display: block;
+    position: absolute;
+    inset: -14px;
+    transform: scale(1);
+    border-radius: 12px;
+    background-color: currentColor;
+    opacity: 0;
+    z-index: 0;
+    pointer-events: none;
+    transition:
+      opacity 0.2s ease,
+      inset 0.15s ease,
+      transform 0.2s ease;
+  }
+
+  &:hover::before {
+    opacity: 0.08;
+  }
+
+  &:active::before {
+    inset: -10px -10px -8px -8px;
+    opacity: 0.16;
+  }
+}
+
+// [vendor patch] 上游 `.background`（独立背景行：默认 opacity 0 / scale 0.6，激活才浮现放大）
+// 已随独立背景行一并删除。背景人声改为主行内的常显子行：小字、随主行一起分层显隐，
+// 不再有激活/退场瞬间推挤后续行的布局跳动。
+.backgroundRow {
+  font-size: 0.62em;
+  font-weight: 500;
+  opacity: 0.72;
+}

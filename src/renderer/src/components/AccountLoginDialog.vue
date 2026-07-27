@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import QRCode from 'qrcode'
 import { useApi } from '../composables/useApi'
 import type { AccountProvider, QQQRStatusEvent } from '@common'
@@ -9,8 +9,8 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'done'): void }>()
 
 const api = useApi()
 
-type Tab = 'qr' | 'webview' | 'manual'
-const tab = ref<Tab>(props.provider === 'kg' ? 'manual' : 'qr')
+// qq/wy 走扫码，kg 无 native 签名库故手填凭据（网页登录已移除）
+const mode = props.provider === 'kg' ? 'manual' : 'qr'
 
 const qrImage = ref('') // 二维码图片 data URL
 const statusText = ref('')
@@ -100,25 +100,10 @@ async function refreshQR(): Promise<void> {
   else if (props.provider === 'qq') await startQqQR()
 }
 
-// 切到扫码 tab 时启动对应流程；离开时清理
-watch(
-  tab,
-  async (t, prev) => {
-    if (prev === 'qr') {
-      clearWy()
-      await clearQq()
-    }
-    if (t === 'qr') await refreshQR()
-  },
-  { immediate: true }
-)
-
-async function webviewLogin(): Promise<void> {
-  if (props.provider === 'kg') return
-  await api.account.webviewLogin(props.provider)
-  // WebView 关闭后由主进程广播 account:changed，这里直接关对话框
-  emit('close')
-}
+// 扫码平台：打开即启动二维码流程（卸载时的清理见 onBeforeUnmount）
+onMounted(() => {
+  if (mode === 'qr') void refreshQR()
+})
 
 // —— kg 手动 ——
 const kgUserid = ref('')
@@ -160,27 +145,14 @@ const title =
         <button class="close" @click="emit('close')">✕</button>
       </div>
 
-      <div v-if="provider !== 'kg'" class="tabs">
-        <button class="tab" :class="{ on: tab === 'qr' }" @click="tab = 'qr'">扫码登录</button>
-        <button class="tab" :class="{ on: tab === 'webview' }" @click="tab = 'webview'">
-          网页登录
-        </button>
-      </div>
-
       <!-- 扫码 -->
-      <div v-if="tab === 'qr'" class="body qr-body">
+      <div v-if="mode === 'qr'" class="body qr-body">
         <div class="qr-box">
           <img v-if="qrImage" :src="qrImage" alt="二维码" class="qr-img" />
           <div v-else class="qr-loading">生成中…</div>
         </div>
         <p class="status">{{ statusText }}</p>
         <button class="btn" @click="refreshQR">刷新二维码</button>
-      </div>
-
-      <!-- WebView -->
-      <div v-else-if="tab === 'webview'" class="body web-body">
-        <p class="web-tip">将打开{{ title }}官网登录页，登录完成后关闭该窗口即自动保存凭据。</p>
-        <button class="btn primary" @click="webviewLogin">打开登录页</button>
       </div>
 
       <!-- kg 手动 -->
@@ -246,21 +218,6 @@ const title =
   color: var(--color-font-label);
   font-size: 14px;
 }
-.tabs {
-  display: flex;
-  gap: 8px;
-  padding: 0 16px 4px;
-}
-.tab {
-  padding: 6px 12px;
-  font-size: 13px;
-  color: var(--color-font-label);
-  border-radius: var(--form-radius);
-}
-.tab.on {
-  color: #fff;
-  background: var(--color-primary);
-}
 .body {
   padding: 16px;
 }
@@ -291,16 +248,6 @@ const title =
   font-size: 13px;
   color: var(--color-font);
   min-height: 18px;
-}
-.web-body {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.web-tip {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--color-font-label);
 }
 .manual-body {
   display: flex;

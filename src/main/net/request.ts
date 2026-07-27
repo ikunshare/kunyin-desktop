@@ -1,7 +1,11 @@
 /**
- * 主进程 HTTP 请求封装（音源用）。Electron 主进程 Node 环境自带全局 fetch。
- * 代理（settings.network.proxy）后续接入。
+ * 主进程 HTTP 请求封装（音源用）。
+ *
+ * 走 Electron net.fetch（Chromium 网络栈）而非 Node 全局 fetch：
+ * 前者遵循 net/proxy.ts 经 session.setProxy 应用的代理设置，后者完全无视——
+ * 换用后音源接口（搜索/歌词/歌单）与取流、封面同一条代理路径，行为一致。
  */
+
 export interface RequestOptions {
   method?: string
   headers?: Record<string, string>

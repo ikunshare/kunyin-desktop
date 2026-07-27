@@ -5,8 +5,9 @@
  * `MusicItem` 为按 `type` 分发的可辨识联合（discriminated union）。
  */
 
-/** 音源标识（反序列化分发用）。注意：与后端 getUrl 的 platform 名不同，映射见 crypto/请求层。 */
-export type MusicSource = 'wy' | 'qq' | 'kg' | 'kw' | 'joox'
+/** 音源标识（反序列化分发用）。注意：与后端 getUrl 的 platform 名不同，映射见 crypto/请求层。
+ * `local` 为本地文件（不走任何 Provider / 后端），仅出现在歌单里。 */
+export type MusicSource = 'wy' | 'qq' | 'kg' | 'kw' | 'joox' | 'sp' | 'local'
 
 /** 跨平台统一的音质键 */
 export type QualityId = '128k' | '320k' | 'flac' | 'hires' | 'master' | 'atmos' | 'atmos_plus'
@@ -86,12 +87,37 @@ export interface JooxMusicItem extends BaseMusicItem {
   mid?: string
 }
 
-export type MusicItem =
-  NeteaseMusicItem | QQMusicItem | KugouMusicItem | KuwoMusicItem | JooxMusicItem
+/** 本地文件（「添加本地歌曲」导入）。id 为文件路径哈希（确定性，重复导入自动去重）。 */
+export interface LocalMusicItem extends BaseMusicItem {
+  type: 'local'
+  filePath: string
+}
 
-/** 唯一键：一般为 `type_id`，酷狗优先 `kg_hash`。 */
+/**
+ * Spotify（自建后端 /music/* 中转）。sid 为真实曲目 id（base62 字符串），
+ * id 仅为凑 BaseMusicItem 数值身份的 sid 哈希——唯一性以 sid 为准（见 getMusicItemKey）。
+ */
+export interface SpotifyMusicItem extends BaseMusicItem {
+  type: 'sp'
+  sid: string
+}
+
+export type MusicItem =
+  | NeteaseMusicItem
+  | QQMusicItem
+  | KugouMusicItem
+  | KuwoMusicItem
+  | JooxMusicItem
+  | SpotifyMusicItem
+  | LocalMusicItem
+
+/** 唯一键：一般为 `type_id`，酷狗优先 `kg_hash`，Spotify 用 `sp_sid`（id 只是 sid 的哈希）。 */
 export function getMusicItemKey(item: MusicItem): string {
   if (item.type === 'kg' && item.hash) return `kg_${item.hash}`
+  // 酷狗歌词直链重定向目标（RedirectDialog buildKgTarget）没有 hash 且 id 恒为 0，
+  // 不区分会让所有此类目标共享 `kg_0` 一个键（歌词缓存互相串）；用 downloadId 区分
+  if (item.type === 'kg' && item.lyricDownloadId) return `kg_lyric_${item.lyricDownloadId}`
+  if (item.type === 'sp') return `sp_${item.sid}`
   return `${item.type}_${item.id}`
 }
 
@@ -112,6 +138,22 @@ export interface Lyric {
   chroma: string
   /** AI 谐音 */
   phonetic: string
+}
+
+/**
+ * 酷狗歌词候选（歌词重定向对话框用，对应安卓 KgProvider.KgLyricCandidate）。
+ * typeBadges 为探测出的歌词内容类型徽标（逐字/逐行/翻译/音译/逐字音译/谐音）。
+ */
+export interface KgLyricCandidate {
+  accessKey: string
+  downloadId: string
+  contenttype: number
+  song: string
+  singer: string
+  language: string
+  durationMs: number
+  score: number
+  typeBadges: string[]
 }
 
 /** 空歌词 */

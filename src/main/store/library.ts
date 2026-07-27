@@ -8,7 +8,14 @@
  * 收藏 = 操作 favorites 系统歌单；试听列表（trial）= 累积列表，点单曲时追加（对齐 Android
  * addToTrial，默认追加末尾不头插；atHead 由设置 trialListAddToHead 控制）。
  */
-import type { LocalPlaylist, MusicItem, MusicSource, SystemKind } from '@common'
+import type {
+  LocalPlaylist,
+  MusicItem,
+  MusicSource,
+  PlaylistSortField,
+  PlaylistSortOrder,
+  SystemKind
+} from '@common'
 import {
   getDb,
   SYSTEM_KIND_FAVORITES,
@@ -268,6 +275,85 @@ export function removeFromPlaylist(playlistId: number, item: MusicItem): void {
 
 export function moveSongInPlaylist(playlistId: number, item: MusicItem, newPosition: number): void {
   moveSongInPlaylistDirect(playlistId, item.id, songSource(item), newPosition)
+  notifyChange()
+}
+
+/**
+ * 歌单内歌曲整体排序（LX「排序歌曲」）：按字段与方向重排后重写全部 position。
+ * 文本字段用中文感知的 Collator（拼音序、数字自然序）；random 为 Fisher-Yates 打乱。
+ */
+export function sortPlaylistSongs(
+  playlistId: number,
+  field: PlaylistSortField,
+  order: PlaylistSortOrder
+): void {
+  const items = queryPlaylistSongs(playlistId)
+  if (items.length < 2) return
+
+  let sorted: MusicItem[]
+  if (order === 'random') {
+    sorted = [...items]
+    for (let i = sorted.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[sorted[i], sorted[j]] = [sorted[j], sorted[i]]
+    }
+  } else {
+    const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+    const keyOf = (m: MusicItem): string | number => {
+      switch (field) {
+        case 'title':
+          return m.title
+        case 'artist':
+          return m.artist
+        case 'album':
+          return m.album
+        case 'duration':
+          return m.duration
+        case 'source':
+          return m.type
+      }
+    }
+    sorted = [...items].sort((a, b) => {
+      const ka = keyOf(a)
+      const kb = keyOf(b)
+      const cmp =
+        typeof ka === 'number' && typeof kb === 'number'
+          ? ka - kb
+          : collator.compare(String(ka), String(kb))
+      return order === 'desc' ? -cmp : cmp
+    })
+  }
+
+  const d = getDb()
+  const upd = d.prepare(
+    `UPDATE ${TABLE_PLAYLIST_SONGS} SET position = ? WHERE playlist_id = ? AND song_id = ? AND source = ?`
+  )
+  const tx = d.transaction(() => {
+    sorted.forEach((m, i) => upd.run(i, playlistId, m.id, songSource(m)))
+  })
+  tx()
+  notifyChange()
+}
+
+/**
+ * 整体替换歌单曲目（远端歌单「更新」）：清空后按传入顺序重建。
+ * 事务内完成，中途失败自动回滚不丢原数据。
+ */
+export function replacePlaylistSongs(playlistId: number, items: MusicItem[]): void {
+  const d = getDb()
+  const now = Date.now()
+  const ins = d.prepare(
+    `INSERT OR IGNORE INTO ${TABLE_PLAYLIST_SONGS}
+      (playlist_id, song_id, source, added_at, position) VALUES (?, ?, ?, ?, ?)`
+  )
+  const tx = d.transaction(() => {
+    d.prepare(`DELETE FROM ${TABLE_PLAYLIST_SONGS} WHERE playlist_id = ?`).run(playlistId)
+    items.forEach((m, i) => {
+      upsertSong(m)
+      ins.run(playlistId, m.id, songSource(m), now, i)
+    })
+  })
+  tx()
   notifyChange()
 }
 

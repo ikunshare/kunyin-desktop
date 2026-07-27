@@ -3,8 +3,8 @@
 
 :root {
   /* ---- 语义色（值经主题引擎注入的梯度解析） ---- */
-  --color-app-background: var(--color-primary-light-600-alpha-600);
-  --color-main-background: rgba(255, 255, 255, 0.9);
+  --color-app-background: var(--color-primary-light-600-alpha-700);
+  --color-main-background: rgba(255, 255, 255, 1);
   --color-content-background: var(--color-primary-light-1000);
   --color-nav-font: var(--color-primary);
 
@@ -30,6 +30,11 @@
   --color-badge-secondary: #4baed5;
   --color-badge-tertiary: #e7aa36;
 
+  /* 窗口控制按钮 hover 底色（LX） */
+  --color-btn-hide: #3bc2b2;
+  --color-btn-min: #85c43b;
+  --color-btn-close: #fab4a0;
+
   --background-image: none;
   --background-image-position: center;
   --background-image-size: cover;
@@ -47,23 +52,34 @@
 }
 
 /* ---------- 字体栈（按 OS class + 语言，移植自 lx reset.less） ---------- */
+/* --app-font 由设置注入（用户自选软件字体），空则回退各 OS 默认栈。 */
 .windows {
-  font-family: 'Segoe WPC', 'Segoe UI', sans-serif;
+  font-family: var(--app-font, ''), 'Segoe WPC', 'Segoe UI', sans-serif;
 }
 .windows:lang(zh-Hans) {
-  font-family: 'Microsoft YaHei', 'Segoe WPC', 'Segoe UI', sans-serif;
+  font-family: var(--app-font, ''), 'Microsoft YaHei', 'Segoe WPC', 'Segoe UI', sans-serif;
 }
 .mac {
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family:
+    var(--app-font, ''),
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
 }
 .mac:lang(zh-Hans) {
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  font-family:
+    var(--app-font, ''),
+    -apple-system,
+    BlinkMacSystemFont,
+    'PingFang SC',
+    'Hiragino Sans GB',
+    sans-serif;
 }
 .linux {
-  font-family: system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+  font-family: var(--app-font, ''), system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
 }
 .linux:lang(zh-Hans) {
-  font-family: system-ui, 'Ubuntu', 'Droid Sans', 'Source Han Sans SC', sans-serif;
+  font-family: var(--app-font, ''), system-ui, 'Ubuntu', 'Droid Sans', 'Source Han Sans SC';
 }
 
 /* ---------- reset ---------- */
@@ -80,17 +96,28 @@ html {
   font-size: 16px;
 }
 html,
-body,
-#app {
+body {
   height: 100%;
 }
 body {
   line-height: 1.2;
   color: var(--color-font);
-  background-color: var(--color-app-background);
   overflow: hidden;
   user-select: none;
   -webkit-font-smoothing: antialiased;
+}
+/* #app = LX #root：主题背景图 + 内容底色（侧栏 app-background 半透明时透出的底）。
+   字体大小档位经 --app-zoom（=fontSize/16）整体缩放。Chromium 128+ 标准化了 zoom：
+   百分比已按有效 zoom 解析（100% 即精确填满视口），不要再用 calc(100%/zoom) 反向
+   补偿——那是老内核 hack，如今会双重缩小，右/底露出窗口白底。 */
+#app {
+  width: 100%;
+  height: 100%;
+  zoom: var(--app-zoom, 1);
+  background: var(--background-image) var(--background-image-position) no-repeat;
+  background-size: var(--background-image-size);
+  background-color: var(--color-content-background);
+  transition: background-color var(--transition-normal);
 }
 
 ul,

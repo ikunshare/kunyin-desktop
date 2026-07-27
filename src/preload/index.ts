@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { electronAPI } from '@electron-toolkit/preload'
 import {
   IpcChannels,
@@ -23,6 +25,12 @@ const api: WindowApi = {
     getVersion: () => ipcRenderer.invoke(IpcChannels.APP_VERSION),
     getPlatform: () => ipcRenderer.invoke(IpcChannels.APP_PLATFORM)
   },
+  window: {
+    minimize: () => ipcRenderer.invoke(IpcChannels.WINDOW_MINIMIZE),
+    close: () => ipcRenderer.invoke(IpcChannels.WINDOW_CLOSE),
+    setSize: (width, height) => ipcRenderer.invoke(IpcChannels.WINDOW_SET_SIZE, width, height),
+    ready: () => ipcRenderer.send(IpcChannels.WINDOW_READY)
+  },
   settings: {
     get: () => ipcRenderer.invoke(IpcChannels.SETTINGS_GET),
     set: (patch) => ipcRenderer.invoke(IpcChannels.SETTINGS_SET, patch),
@@ -32,7 +40,12 @@ const api: WindowApi = {
       return () => {
         ipcRenderer.off(IpcChannels.SETTINGS_CHANGED, listener)
       }
-    }
+    },
+    proxyStatus: () => ipcRenderer.invoke(IpcChannels.SETTINGS_PROXY_STATUS)
+  },
+  cache: {
+    stats: () => ipcRenderer.invoke(IpcChannels.CACHE_STATS),
+    clear: (kind) => ipcRenderer.invoke(IpcChannels.CACHE_CLEAR, kind)
   },
   search: {
     songs: (source, keyword, page, size) =>
@@ -45,7 +58,9 @@ const api: WindowApi = {
       ipcRenderer.invoke(IpcChannels.PLAYER_RESOLVE_URL, toPlain(item), qualityId),
     stream: (item, qualityId) =>
       ipcRenderer.invoke(IpcChannels.PLAYER_STREAM, toPlain(item), qualityId),
-    lyric: (item) => ipcRenderer.invoke(IpcChannels.PLAYER_LYRIC, toPlain(item))
+    lyric: (item) => ipcRenderer.invoke(IpcChannels.PLAYER_LYRIC, toPlain(item)),
+    invalidateUrl: (item, qualityId) =>
+      ipcRenderer.invoke(IpcChannels.PLAYER_URL_INVALIDATE, toPlain(item), qualityId)
   },
   auth: {
     get: () => ipcRenderer.invoke(IpcChannels.AUTH_GET),
@@ -76,6 +91,16 @@ const api: WindowApi = {
     addToTrial: (item, atHead) =>
       ipcRenderer.invoke(IpcChannels.LIBRARY_ADD_TO_TRIAL, toPlain(item), atHead),
     trialSongs: () => ipcRenderer.invoke(IpcChannels.LIBRARY_TRIAL_SONGS),
+    sortSongs: (playlistId, field, order) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_SORT_SONGS, playlistId, field, order),
+    replaceSongs: (playlistId, items) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_REPLACE_SONGS, playlistId, items.map(toPlain)),
+    addLocalSongs: (playlistId) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_ADD_LOCAL_SONGS, playlistId),
+    getRedirect: (item) => ipcRenderer.invoke(IpcChannels.LIBRARY_GET_REDIRECT, toPlain(item)),
+    setRedirect: (item, target) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_SET_REDIRECT, toPlain(item), toPlain(target)),
+    clearRedirect: (item) => ipcRenderer.invoke(IpcChannels.LIBRARY_CLEAR_REDIRECT, toPlain(item)),
     onChange: (cb) => {
       const listener = (): void => cb()
       ipcRenderer.on(IpcChannels.LIBRARY_CHANGED, listener)
@@ -106,6 +131,12 @@ const api: WindowApi = {
       ipcRenderer.invoke(IpcChannels.DISCOVER_MV_QUALITIES, item.type, toPlain(item)),
     mvUrl: (item, quality) =>
       ipcRenderer.invoke(IpcChannels.DISCOVER_MV_URL, item.type, toPlain(item), quality)
+  },
+  redirect: {
+    lookup: (source, key, value) =>
+      ipcRenderer.invoke(IpcChannels.REDIRECT_LOOKUP, source, key, value),
+    kgSearch: (keyword, durationMs) =>
+      ipcRenderer.invoke(IpcChannels.REDIRECT_KG_SEARCH, keyword, durationMs)
   },
   media: {
     onCommand: (cb) => {
@@ -150,7 +181,6 @@ const api: WindowApi = {
     list: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_LIST),
     logout: (provider) => ipcRenderer.invoke(IpcChannels.ACCOUNT_LOGOUT, provider),
     kgSave: (creds) => ipcRenderer.invoke(IpcChannels.ACCOUNT_KG_SAVE, creds),
-    webviewLogin: (provider) => ipcRenderer.invoke(IpcChannels.ACCOUNT_WEBVIEW_LOGIN, provider),
     wyQrCreate: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_WY_QR_CREATE),
     wyQrPoll: (unikey) => ipcRenderer.invoke(IpcChannels.ACCOUNT_WY_QR_POLL, unikey),
     qqQrStart: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_QQ_QR_START),
@@ -209,10 +239,25 @@ const api: WindowApi = {
   }
 }
 
+// 首屏主题防闪烁：同步读取 settings.json 的外观段，渲染层在 mount 前即可注入正确主题变量。
+// 读不到（首次启动）时为 null，渲染层回退默认绿色主题。
+function readInitialAppearance(): AppSettings['appearance'] | null {
+  try {
+    // 主进程返回的是应用数据目录 userData/data/（settings.json 在其中）
+    const dataPath = ipcRenderer.sendSync(IpcChannels.APP_USERDATA_PATH) as string
+    const raw = readFileSync(join(dataPath, 'settings.json'), 'utf-8')
+    return (JSON.parse(raw) as AppSettings).appearance ?? null
+  } catch {
+    return null
+  }
+}
+const initialAppearance = readInitialAppearance()
+
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
+    contextBridge.exposeInMainWorld('__INITIAL_APPEARANCE__', initialAppearance)
   } catch (error) {
     console.error(error)
   }
@@ -221,4 +266,6 @@ if (process.contextIsolated) {
   window.electron = electronAPI
   // @ts-ignore (define in dts)
   window.api = api
+  // @ts-ignore (define in dts)
+  window.__INITIAL_APPEARANCE__ = initialAppearance
 }

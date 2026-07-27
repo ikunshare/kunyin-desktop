@@ -22,7 +22,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('../views/PlaylistsView.vue')
       },
       { path: 'download', name: 'download', component: () => import('../views/DownloadView.vue') },
-      { path: 'settings', name: 'settings', component: () => import('../views/SettingsView.vue') },
+      {
+        path: 'settings',
+        name: 'settings',
+        component: () => import('../views/settings/index.vue')
+      },
       {
         path: 'playlist/:playlistId',
         name: 'playlist',
@@ -52,3 +56,25 @@ export const router = createRouter({
   history: createWebHashHistory(),
   routes
 })
+
+// ============ 记住最后所在页面（启动恢复；全屏播放器不记） ============
+const LAST_ROUTE_KEY = 'kunyin:lastRoute'
+
+router.afterEach((to) => {
+  if (to.path.startsWith('/player')) return
+  try {
+    localStorage.setItem(LAST_ROUTE_KEY, to.fullPath)
+  } catch {
+    /* ignore */
+  }
+})
+
+/** 启动时读取上次停留的页面（'/' 或无记录返回 null，走默认重定向） */
+export function getLastRoute(): string | null {
+  try {
+    const p = localStorage.getItem(LAST_ROUTE_KEY)
+    return p && p !== '/' ? p : null
+  } catch {
+    return null
+  }
+}

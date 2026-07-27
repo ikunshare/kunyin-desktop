@@ -7,7 +7,7 @@
  * - 主窗口经 DESKTOP_LYRIC_PUSH 推状态，此处转发 DESKTOP_LYRIC_STATE 给歌词窗。
  */
 import { app, BrowserWindow, ipcMain, screen } from 'electron'
-import path, { join } from 'node:path'
+import { join } from 'node:path'
 import { is } from '@electron-toolkit/utils'
 import { IpcChannels, type DesktopLyricState } from '@common'
 import { getSettings, updateSettings } from '../../store/settings'
@@ -43,8 +43,7 @@ function createLyricWindow(): BrowserWindow {
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
-    },
-    icon: path.join(__dirname, 'resources/icons/icon.png')
+    }
   })
   win.setAlwaysOnTop(true, 'screen-saver')
 

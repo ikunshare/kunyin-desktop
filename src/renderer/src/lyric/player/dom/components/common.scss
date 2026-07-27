@@ -1,0 +1,14 @@
+// Reference a player CSS custom property by key (without the `--lyric-player-` prefix); pass `$default` for a fallback.
+// e.g. `build-root-variable('container-width')` -> `var(--lyric-player-container-width)`.
+@function build-root-variable($target, $default: null) {
+  @if $default == '' or $default == null {
+    @return var(--lyric-player-#{$target});
+  } @else {
+    @return var(--lyric-player-#{$target}, #{$default});
+  }
+}
+
+// Declare a player CSS custom property; the `--lyric-player-` prefix lives here, so call sites pass only the key.
+@mixin set-root-variable($key, $value) {
+  --lyric-player-#{$key}: #{$value};
+}

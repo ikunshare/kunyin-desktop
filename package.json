@@ -25,7 +25,12 @@
     "@electron-toolkit/utils": "^4.0.0",
     "better-sqlite3": "^13.0.1",
     "electron-updater": "^6.3.9",
+    "gl-matrix": "^4.0.0-beta.2",
+    "lodash-es": "^4.18.1",
+    "music-lyric-model": "^5.0.0",
+    "music-metadata": "^11.14.0",
     "qrcode": "^1.5.4",
+    "semver": "^7.8.5",
     "ws": "^8.21.1"
   },
   "devDependencies": {
@@ -40,12 +45,11 @@
     "electron": "^39.2.6",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
-    "eslint": "^9.39.1",
+    "eslint": "^10.8.0",
     "eslint-plugin-vue": "^10.6.2",
-    "music-lyric-kit": "^0.18.0",
-    "music-lyric-player": "^0.18.1",
     "pinia": "^3.0.3",
     "prettier": "^3.7.4",
+    "sass": "^1.102.0",
     "typescript": "^5.9.3",
     "vite": "^7.2.6",
     "vue": "^3.5.25",
@@ -59,6 +63,7 @@
     "electron-winstaller@5.4.0": true,
     "esbuild@0.25.12": true,
     "esbuild@0.28.1": true,
-    "phantomjs-prebuilt@2.1.16": true
+    "phantomjs-prebuilt@2.1.16": true,
+    "@parcel/watcher@2.6.0": true
   }
 }

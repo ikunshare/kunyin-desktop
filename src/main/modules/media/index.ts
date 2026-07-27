@@ -8,9 +8,10 @@
  * 命令经 MEDIA_COMMAND 转发给渲染层 player。
  */
 import { app, globalShortcut, Menu, Tray, nativeImage } from 'electron'
-import { join } from 'node:path'
 import { IpcChannels, type MediaCommand } from '@common'
 import { getMainWindow, createMainWindow } from '../../windows/main'
+import trayIconIco from '../../../../resources/icons/icon.ico?asset'
+import trayIconPng from '../../../../resources/icons/32x32.png?asset'
 
 let tray: Tray | null = null
 
@@ -35,10 +36,14 @@ function registerGlobalShortcuts(): void {
 
 function buildTray(): void {
   if (tray) return
-  const iconPath = join(__dirname, '../../resources/icon.png')
-  let image = nativeImage.createFromPath(iconPath)
-  if (!image.isEmpty()) image = image.resize({ width: 16, height: 16 })
-  tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image)
+  if (process.platform === 'win32') {
+    // ico 含多尺寸，系统按 DPI 自动取合适的一档
+    tray = new Tray(trayIconIco)
+  } else {
+    let image = nativeImage.createFromPath(trayIconPng)
+    if (!image.isEmpty()) image = image.resize({ width: 16, height: 16 })
+    tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image)
+  }
   tray.setToolTip('坤音')
 
   const menu = Menu.buildFromTemplate([

@@ -12,15 +12,29 @@ import { qqQrcDecrypt } from './qqDes'
 const KRC_KEY = Buffer.from([64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105])
 const YEELION = Buffer.from('yeelion', 'latin1')
 
-function fmtLrcTime(ms: number): string {
-  // 保留完整毫秒精度（3 位小数，截断不四舍五入）。
-  // 逐字歌词的行起始必须与翻译/音译 LRC 的行时间精确到毫秒一致，
-  // 否则 music-lyric-kit 以 0 容差按时间对齐翻译/音译时会整行漏配（错位）。
+/**
+ * 行首时间标签 `[mm:ss.xxx]`（对齐安卓 LrcParser.msFormat / formatTime）。
+ */
+function msFormat(ms: number): string {
   const total = Math.max(0, Math.floor(ms))
-  const m = Math.floor(total / 60000)
-  const s = Math.floor((total % 60000) / 1000)
   const frac = total % 1000
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(frac).padStart(3, '0')}`
+  let rem = Math.floor(total / 1000)
+  const s = rem % 60
+  rem = Math.floor(rem / 60)
+  const m = rem
+  return `[${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(frac).padStart(3, '0')}]`
+}
+
+/**
+ * 逐字时间标签内容 `mm:ss.xxx`（对齐安卓 formatElyricTime 的 `%02d:%06.3f`）。
+ * 秒段含小数，两位整数补零，故 06.3f 即「ss.xxx」。
+ */
+function formatElyricTime(ms: number): string {
+  const total = Math.max(0, ms)
+  const minutes = Math.floor(total / 60000)
+  const seconds = (total % 60000) / 1000
+  const secStr = seconds.toFixed(3).padStart(6, '0')
+  return `${String(minutes).padStart(2, '0')}:${secStr}`
 }
 
 /** 酷狗 KRC 解密 → UTF-8 文本 */
@@ -79,26 +93,157 @@ export function decryptQrc(hex: string): string {
   }
 }
 
+/** 酷狗 KRC 六轨解析结果（对齐安卓 LrcParser.LyricResult 的 KRC 字段）。 */
+export interface KrcResult {
+  lrc: string
+  char: string
+  chroma: string
+  trans: string
+  roma: string
+  phonetic: string
+}
+
 /**
- * 酷狗 KRC 文本 → 增强 LRC。
- * KRC 行：[start,dur]<off,dur,x>字...  →  [mm:ss.xx]<off,dur>字...
+ * 从 `[language:base64]` 头解出 KRC 的翻译 / 逐字音译 / AI 谐音三类附加轨。
+ * JSON 结构：content[]{ type, lyricContent[][] }；type 0=逐字音译(按字数组)，其余=翻译；
+ * contentV2[]{ type } type 2=AI 谐音。对齐安卓 parseKg 的解析分支。
  */
-export function krcToLrc(text: string): string {
-  const out: string[] = []
-  for (const raw of text.split('\n')) {
-    const line = raw.trim()
-    const m = /^\[(\d+),(\d+)\](.*)$/.exec(line)
-    if (!m) continue
-    const lineStart = parseInt(m[1], 10)
-    // KRC 逐字 <off,dur,x>字（off 相对行首）→ <mm:ss.xx>字（绝对时间）
-    const content = m[3].replace(
-      /<(\d+),(\d+),\d+>([^<]*)/g,
-      (_all, off: string, _dur: string, word: string) =>
-        `<${fmtLrcTime(lineStart + parseInt(off, 10))}>${word}`
-    )
-    out.push(`[${fmtLrcTime(lineStart)}]${content}`)
+function parseKrcLanguage(b64: string): {
+  romaList: string[]
+  romaCharList: string[][]
+  transList: string[]
+  phoneticList: string[]
+} {
+  const romaList: string[] = []
+  const romaCharList: string[][] = []
+  const transList: string[] = []
+  const phoneticList: string[] = []
+  try {
+    const json = JSON.parse(Buffer.from(b64, 'base64').toString('utf-8'))
+    const content: unknown[] = Array.isArray(json?.content) ? json.content : []
+    for (const raw of content) {
+      const item = raw as { type?: number; lyricContent?: unknown[] }
+      const lc = Array.isArray(item?.lyricContent) ? item.lyricContent : []
+      if (item?.type === 0) {
+        for (const row of lc) {
+          if (Array.isArray(row) && row.length) {
+            const chars = row.map((s) => String(s ?? ''))
+            romaCharList.push(chars)
+            romaList.push(chars.join(''))
+          } else {
+            romaCharList.push([])
+            romaList.push(String(row ?? ''))
+          }
+        }
+      } else {
+        for (const row of lc) {
+          transList.push(
+            Array.isArray(row) ? row.map((s) => String(s ?? '')).join('') : String(row ?? '')
+          )
+        }
+      }
+    }
+    const contentV2: unknown[] = Array.isArray(json?.contentV2) ? json.contentV2 : []
+    for (const raw of contentV2) {
+      const item = raw as { type?: number; lyricContent?: unknown[] }
+      if (item?.type !== 2) continue
+      const lc = Array.isArray(item?.lyricContent) ? item.lyricContent : []
+      for (const row of lc) {
+        phoneticList.push(
+          Array.isArray(row) ? row.map((s) => String(s ?? '')).join('') : String(row ?? '')
+        )
+      }
+    }
+  } catch {
+    /* 语言头非法则各轨为空 */
   }
-  return out.join('\n')
+  return { romaList, romaCharList, transList, phoneticList }
+}
+
+/**
+ * 酷狗 KRC 文本 → 六轨（行级 lrc + 逐字 char + 逐字音译 chroma + 翻译 trans + 行级音译 roma + AI 谐音 phonetic）。
+ * 1:1 移植安卓 LrcParser.parseKg：
+ * - 逐字 `<off,dur,x>字`（off 相对行首）→ 绝对时间 char 轨；行尾补 lastEnd。
+ * - `[language:base64]` JSON 提供翻译/音译/AI 谐音，按行索引对齐；逐字音译按每字时间挂到 chroma。
+ */
+export function parseKrc(rawText: string): KrcResult {
+  const empty: KrcResult = { lrc: '', char: '', chroma: '', trans: '', roma: '', phonetic: '' }
+  if (!rawText) return empty
+  let text = rawText.replace(/\r/g, '').replace(/^.*\[id:\$\w+]\n/, '')
+
+  const langM = /\[language:([\w=/+]+)]/.exec(text)
+  const lang = langM
+    ? parseKrcLanguage(langM[1])
+    : { romaList: [], romaCharList: [], transList: [], phoneticList: [] }
+  if (langM) text = text.replace(langM[0], '').trim()
+
+  const lrcOut: string[] = []
+  const charOut: string[] = []
+  const chromaOut: string[] = []
+  const transOut: string[] = []
+  const romaOut: string[] = []
+  const phoneticOut: string[] = []
+
+  const rxTime = /\[(\d+),(\d+)]/
+  const rxWord = /<(\d+),(\d+),(\d+)>([^<]*)/g
+  let idx = 0
+
+  for (const raw of text.split('\n')) {
+    const line = raw
+    if (!line.trim()) continue
+    const tm = rxTime.exec(line)
+    if (!tm) continue
+    const startMs = parseInt(tm[1], 10)
+    const cleanLine = line.replace(rxTime, '')
+    const timeTag = msFormat(startMs)
+
+    let textContent = ''
+    let chaseContent = ''
+    let lastEnd = startMs
+    const wordTimings: { absStart: number; absEnd: number }[] = []
+
+    rxWord.lastIndex = 0
+    let wm: RegExpExecArray | null
+    while ((wm = rxWord.exec(cleanLine))) {
+      const off = parseInt(wm[1], 10)
+      const dur = parseInt(wm[2], 10)
+      const word = wm[4]
+      textContent += word
+      const absStart = startMs + off
+      chaseContent += `<${formatElyricTime(absStart)}>${word}`
+      lastEnd = absStart + dur
+      wordTimings.push({ absStart, absEnd: lastEnd })
+    }
+    if (chaseContent) chaseContent += `<${formatElyricTime(lastEnd)}>`
+
+    lrcOut.push(timeTag + textContent)
+    charOut.push(timeTag + chaseContent)
+
+    // 逐字音译（type 0 的按字数组）→ 挂到每字时间
+    const romaChars = lang.romaCharList[idx]
+    if (romaChars && romaChars.length && wordTimings.length) {
+      let chroma = ''
+      const count = Math.min(romaChars.length, wordTimings.length)
+      for (let w = 0; w < count; w++) {
+        chroma += `<${formatElyricTime(wordTimings[w].absStart)}>${romaChars[w]}`
+      }
+      if (count > 0) chroma += `<${formatElyricTime(wordTimings[count - 1].absEnd)}>`
+      chromaOut.push(timeTag + chroma)
+    }
+    if (idx < lang.transList.length) transOut.push(timeTag + lang.transList[idx])
+    if (idx < lang.romaList.length) romaOut.push(timeTag + lang.romaList[idx])
+    if (idx < lang.phoneticList.length) phoneticOut.push(timeTag + lang.phoneticList[idx])
+    idx++
+  }
+
+  return {
+    lrc: lrcOut.join('\n'),
+    char: charOut.join('\n'),
+    chroma: chromaOut.join('\n'),
+    trans: transOut.join('\n'),
+    roma: romaOut.join('\n'),
+    phonetic: phoneticOut.join('\n')
+  }
 }
 
 /**
@@ -106,11 +251,6 @@ export function krcToLrc(text: string): string {
  * - `[kuwo:八进制]` 头 → kwOffset1/2；逐字 <v1,v2> 用除法公式还原绝对时间 → <mm:ss.xxx>字。
  * - 翻译轨靠重复时间戳分离（同一时间戳的第二行视为上一行的翻译）。
  */
-function fmtElyricTime(ms: number): string {
-  const m = Math.floor(ms / 60000)
-  const s = ((ms % 60000) / 1000).toFixed(3).padStart(6, '0')
-  return `${String(m).padStart(2, '0')}:${s}`
-}
 
 export function parseKuwo(text: string): { lrc: string; char: string; trans: string } {
   const lines = text.split('\n')
@@ -185,11 +325,11 @@ export function parseKuwo(text: string): { lrc: string; char: string; trans: str
         startTime = v1 < lineStartMs / 2 ? lineStartMs + v1 : v1
         endTime = startTime + v2
       }
-      chase += `<${fmtElyricTime(startTime)}>${word}`
+      chase += `<${formatElyricTime(startTime)}>${word}`
       lastEnd = endTime
       prevEnd = endTime
     }
-    if (lineHasWords && lastEnd > 0) chase += `<${fmtElyricTime(lastEnd)}>`
+    if (lineHasWords && lastEnd > 0) chase += `<${formatElyricTime(lastEnd)}>`
     if (lineHasWords) hasWordTiming = true
 
     timeMsList.push(lineStartMs)
@@ -240,41 +380,103 @@ export function parseKuwo(text: string): { lrc: string; char: string; trans: str
 }
 
 /**
- * 网易云 yrc 逐字 → 增强 LRC。
- * yrc 行：[start,dur](absOff,dur,0)字...  →  [mm:ss.xx]<mm:ss.xx>字...（绝对时间）
- * 跳过 `{...}` JSON 元数据行。
+ * QQ / JOOX QRC 文本 → { lrc(行级纯文本), char(逐字增强 LRC) }。
+ * 1:1 移植安卓 LrcParser.parseTxQrc：
+ * - 逐字标签 `(off,dur)` 用 substring 按索引切词，标签之间的文本原样保留（含括号，不丢字）。
+ * - 行首用 `[mm:ss.xxx]`；逐字用绝对偏移 `<mm:ss.xxx>`（formatElyricTime）；行尾补 lastEnd。
  */
-export function yrcToLrc(text: string): string {
-  const out: string[] = []
+export function parseTxQrc(text: string): { lrc: string; char: string } {
+  if (!text) return { lrc: '', char: '' }
+  const cleaned = text.replace(/ LyricContent=".*?"/g, '')
+  const lines = cleaned.split('\n')
+  const lrcLines: string[] = []
+  const chaseLines: string[] = []
+  const rxLine = /^\[(\d+),(\d+)\]/
+  const rxWordSplit = /\((\d+),(\d+)\)/g
+
+  for (const raw of lines) {
+    const line = raw.trim()
+    const lm = rxLine.exec(line)
+    if (!lm) continue
+    const startMs = parseInt(lm[1], 10)
+    const timeTag = msFormat(startMs)
+    const content = line.replace(rxLine, '')
+
+    let cleanText = ''
+    let chaseText = ''
+    let lastIndex = 0
+    let lastEnd = 0
+    rxWordSplit.lastIndex = 0
+    let wm: RegExpExecArray | null
+    while ((wm = rxWordSplit.exec(content))) {
+      const word = content.slice(lastIndex, wm.index)
+      cleanText += word
+      const off = parseInt(wm[1], 10)
+      const dur = parseInt(wm[2], 10)
+      chaseText += `<${formatElyricTime(off)}>${word}`
+      lastEnd = off + dur
+      lastIndex = rxWordSplit.lastIndex
+    }
+    if (lastIndex < content.length) cleanText += content.slice(lastIndex)
+    if (lastEnd > 0) chaseText += `<${formatElyricTime(lastEnd)}>`
+
+    lrcLines.push(timeTag + cleanText)
+    chaseLines.push(timeTag + chaseText)
+  }
+  return { lrc: lrcLines.join('\n'), char: chaseLines.join('\n') }
+}
+
+/** 是否含标准 LRC 行 `[mm:ss.xx]`（对齐安卓 isStandardLrc，用于 QRC 无逐字时的回退判定）。 */
+export function isStandardLrc(text: string): boolean {
+  return text.split('\n').some((l) => /^\[\d{1,2}:\d{1,2}[.:]\d{1,3}\]/.test(l.trim()))
+}
+
+/**
+ * 网易 yrc 逐字文本 → { lyric(行级纯文本), chase(逐字增强 LRC) }。
+ * 1:1 移植安卓 parseLyric：行首 `[start,dur]`，逐字 `(off,dur,?)字`（时间在前、字在后）。
+ * 用 `(时间标签)(字)` 配对正则并按索引取字，含括号也不丢；行尾补 lastEnd。
+ */
+export function parseYrc(text: string): { lyric: string; chase: string } {
+  const lrcLines: string[] = []
+  const lxLines: string[] = []
+  const rxLineTime = /^\[(\d+),(\d+)(?:,\d+)?\]/
+  const rxWordAll = /\(\d+,\d+(?:,\d+)?\)/g
+  const rxPair = /(\(\d+,\d+(?:,\d+)?\))([^(]*)/g
+  const rxTime = /\((\d+),(\d+)(?:,\d+)?\)/
+
   for (const raw of text.split('\n')) {
     const line = raw.trim()
-    if (!line || line.startsWith('{')) continue
-    const m = /^\[(\d+),(\d+)\](.*)$/.exec(line)
-    if (!m) continue
-    const lineStart = parseInt(m[1], 10)
-    const body = m[3].replace(
-      /\((\d+),(\d+),\d+\)([^(]*)/g,
-      (_all, off: string, _dur: string, word: string) => `<${fmtLrcTime(parseInt(off, 10))}>${word}`
-    )
-    if (body.trim()) out.push(`[${fmtLrcTime(lineStart)}]${body}`)
+    const lm = rxLineTime.exec(line)
+    if (!lm) continue
+    const startMs = parseInt(lm[1], 10)
+    const startTag = msFormat(startMs)
+    const words = line.replace(rxLineTime, '')
+
+    // 行级纯文本：剥掉所有逐字时间标签
+    lrcLines.push(startTag + words.replace(rxWordAll, ''))
+
+    // 逐字：(标签)(字) 配对
+    let lx = ''
+    let lastEndAbs = startMs
+    let hasMatches = false
+    rxPair.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = rxPair.exec(words))) {
+      hasMatches = true
+      const tm = rxTime.exec(m[1])
+      if (tm) {
+        const tStart = parseInt(tm[1], 10)
+        const tDur = parseInt(tm[2], 10)
+        lx += `<${formatElyricTime(tStart)}>${m[2]}`
+        lastEndAbs = tStart + tDur
+      }
+    }
+    if (hasMatches) {
+      lx += `<${formatElyricTime(lastEndAbs)}>`
+      lxLines.push(startTag + lx)
+    } else {
+      lxLines.push(startTag + words)
+    }
   }
-  return out.join('\n')
-}
-export function qrcToLrc(text: string): string {
-  // 取出 LyricContent（可能带 XML 包裹，也可能是纯文本）
-  const cm = /LyricContent="([\s\S]*?)"/.exec(text)
-  const content = cm ? cm[1] : text
-  const out: string[] = []
-  const lineRe = /\[(\d+),(\d+)\]([^[]*)/g
-  let lm: RegExpExecArray | null
-  while ((lm = lineRe.exec(content))) {
-    const lineStart = parseInt(lm[1], 10)
-    // QRC 逐字：字(absOff,dur)（字在前，off 绝对）→ <mm:ss.xx>字
-    const body = lm[3].replace(
-      /([^()]*?)\((\d+),(\d+)\)/g,
-      (_all, word: string, off: string, _dur: string) => `<${fmtLrcTime(parseInt(off, 10))}>${word}`
-    )
-    if (body.trim()) out.push(`[${fmtLrcTime(lineStart)}]${body}`)
-  }
-  return out.join('\n')
+  return { lyric: lrcLines.join('\n'), chase: lxLines.join('\n') }
 }

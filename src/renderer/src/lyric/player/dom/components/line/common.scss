@@ -1,0 +1,43 @@
+@forward '../common.scss';
+
+@use '../common.scss' as *;
+
+$positions: left, center, right;
+
+// Reference a line-scoped player var, assembling the key as `line-<module>[-<sub>][-<suffix>]`.
+// e.g. `build-line-variable('normal', 'main-syllable', 'opacity')` -> `var(--lyric-player-line-normal-main-syllable-opacity)`.
+@function build-line-variable($module, $sub: null, $suffix: null, $default: null) {
+  $name: 'line-#{$module}';
+
+  @if $sub != '' and $sub != null {
+    $name: '#{$name}-#{$sub}';
+  }
+  @if $suffix != '' and $suffix != null {
+    $name: '#{$name}-#{$suffix}';
+  }
+
+  @return build-root-variable($name, $default);
+}
+
+// Apply the configured font vars (size / weight / family) for a line element such as 'base' or 'main-syllable'.
+@mixin apply-line-font($element) {
+  font-size: build-line-variable('normal', $element, 'font-size');
+  font-weight: build-line-variable('normal', $element, 'font-weight');
+  font-family: build-line-variable('normal', $element, 'font-family');
+}
+
+// Apply the configured color / opacity vars for a line element, plus its `[active]` and `[played]` variants.
+@mixin apply-line-style($element) {
+  color: build-line-variable('normal', $element, 'color');
+  opacity: build-line-variable('normal', $element, 'opacity');
+
+  [played]:not([scrolling] [played]) & {
+    color: build-line-variable('normal', '#{$element}-played', 'color');
+    opacity: build-line-variable('normal', '#{$element}-played', 'opacity');
+  }
+
+  [active] & {
+    color: build-line-variable('normal', '#{$element}-active', 'color');
+    opacity: build-line-variable('normal', '#{$element}-active', 'opacity');
+  }
+}

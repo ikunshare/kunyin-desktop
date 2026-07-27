@@ -4,42 +4,42 @@
  * 主 lyric 与 roma 走逐字增强，trans 取解密原文（行级）。旧接口回退为 base64+HTML 反转义。
  */
 import { EMPTY_LYRIC, type Lyric } from '@common'
-import { decryptQrc, qrcToLrc } from '../../crypto/lyric'
+import { decryptQrc, isStandardLrc, parseTxQrc } from '../../crypto/lyric'
 
-/** 从 QRC 解密结果里取 LyricContent（XML 包裹）或原样返回 */
-function extractLyricContent(decrypted: string): string {
-  const m = /LyricContent="([\s\S]*?)"/.exec(decrypted)
-  return (m ? m[1] : decrypted).trim()
-}
-
-/** 对应 LrcParser.parseTx：qrcHex/transHex/romaHex → Lyric 六字段 */
+/**
+ * 对应安卓 LrcParser.parseTx：qrcHex/transHex/romaHex → Lyric 六字段。
+ * - 主 lyric：QRC 解密后走 parseTxQrc，得行级纯文本(lrc) + 逐字增强(char)；无逐字则整段当纯文本。
+ * - trans：直接用解密原文（不走逐字解析，安卓即如此）。
+ * - roma：解密后走 parseTxQrc → roma(行级) + chroma(逐字)；无逐字但为标准 LRC 时整段作 roma。
+ */
 export function parseTxLyric(lyricHex?: string, transHex?: string, romaHex?: string): Lyric {
   const out: Lyric = { ...EMPTY_LYRIC }
   if (lyricHex) {
     const dec = decryptQrc(lyricHex)
     if (dec) {
-      const enhanced = qrcToLrc(dec)
-      if (enhanced) {
-        out.lrc = enhanced
-        out.char = enhanced
+      const { lrc, char } = parseTxQrc(dec)
+      if (lrc) {
+        out.lrc = lrc
+        out.char = char
       } else {
-        out.lrc = extractLyricContent(dec)
+        // QRC 解析无结果：整段当标准 LRC / 纯文本
+        out.lrc = dec
       }
     }
   }
   if (transHex) {
     const dec = decryptQrc(transHex)
-    if (dec) out.trans = extractLyricContent(dec)
+    if (dec) out.trans = dec
   }
   if (romaHex) {
     const dec = decryptQrc(romaHex)
     if (dec) {
-      const enhanced = qrcToLrc(dec)
-      if (enhanced) {
-        out.roma = enhanced
-        out.chroma = enhanced
-      } else {
-        out.roma = extractLyricContent(dec)
+      const { lrc, char } = parseTxQrc(dec)
+      if (lrc) {
+        out.roma = lrc
+        out.chroma = char
+      } else if (isStandardLrc(dec)) {
+        out.roma = dec
       }
     }
   }

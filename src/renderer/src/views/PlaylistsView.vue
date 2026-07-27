@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import SongRow from '../components/SongRow.vue'
 import ContextMenu, { type MenuItem } from '../components/ContextMenu.vue'
+import ListAddDialog from '../components/ListAddDialog.vue'
+import QualityDialog from '../components/QualityDialog.vue'
+import PlaylistSortDialog from '../components/PlaylistSortDialog.vue'
+import PlaylistDuplicateDialog from '../components/PlaylistDuplicateDialog.vue'
 import { useLibraryStore } from '../stores/library'
 import { usePlayerStore } from '../stores/player'
-import { useDownloadStore } from '../stores/download'
+import { useSettingsStore } from '../stores/settings'
 import { useApi } from '../composables/useApi'
 import {
   getMusicItemKey,
@@ -19,11 +24,13 @@ import {
 
 defineOptions({ name: 'PlaylistsView' })
 
+const router = useRouter()
 const library = useLibraryStore()
 const player = usePlayerStore()
-const download = useDownloadStore()
 const api = useApi()
 const { playlists } = storeToRefs(library)
+// 「显示列表操作按钮」设置：off 时隐藏行内按钮，列头操作列收窄为仅工具按钮
+const showListOps = computed(() => useSettingsStore().settings.list.showOperationButtons)
 
 // ============ 左栏：列表清单 ============
 // 系统固定入口
@@ -39,6 +46,10 @@ interface PlatformGroup {
   playlists: PlayListInfoResult[]
 }
 const platformGroups = ref<PlatformGroup[]>([])
+// 平铺展示（LX 风格：列表项无平台分组标注）
+const platformItems = computed(() =>
+  platformGroups.value.flatMap((g) => g.playlists.map((p) => ({ g, p })))
+)
 let accountUnsub: (() => void) | null = null
 
 async function loadPlatformPlaylists(): Promise<void> {
@@ -60,9 +71,31 @@ type Selection =
   | { kind: 'platform'; source: MusicSource; id: string; name: string; cover?: string }
 
 const selection = ref<Selection | null>(null)
+
+// 选中列表持久化（刷新后回到同一列表，而不是回落「我的收藏」）
+const SELECTION_KEY = 'kunyin:playlists:selection'
+function saveSelection(): void {
+  try {
+    localStorage.setItem(SELECTION_KEY, JSON.stringify(selection.value ?? null))
+  } catch {
+    /* ignore */
+  }
+}
+function readSavedSelection(): Selection | null {
+  try {
+    return JSON.parse(localStorage.getItem(SELECTION_KEY) ?? 'null') as Selection | null
+  } catch {
+    return null
+  }
+}
 const tracks = ref<MusicItem[]>([])
 const loadingTracks = ref(false)
 const searchText = ref('')
+const searchOpen = ref(false)
+function toggleSearch(): void {
+  searchOpen.value = !searchOpen.value
+  if (!searchOpen.value) searchText.value = ''
+}
 
 /** 当前选中项唯一 key，用于左栏高亮与防竞态 */
 const selectedKey = computed(() => {
@@ -84,12 +117,14 @@ const filteredTracks = computed(() => {
 
 async function selectLocal(p: LocalPlaylist): Promise<void> {
   selection.value = { kind: 'local', id: p.id, name: p.name }
+  saveSelection()
   searchText.value = ''
   clearSelection()
   await loadTracks()
 }
 async function selectPlatform(g: PlatformGroup, p: PlayListInfoResult): Promise<void> {
   selection.value = { kind: 'platform', source: g.source, id: p.id, name: p.name, cover: p.cover }
+  saveSelection()
   searchText.value = ''
   clearSelection()
   await loadTracks()
@@ -151,25 +186,36 @@ function clearSelection(): void {
   selectedKeys.value = new Set()
   anchorIndex.value = -1
 }
-/** 行点击：Shift 连选、Ctrl/Cmd 加减、普通单选 */
+/**
+ * 行点击（对齐 LX handleSelectData）：
+ * - 普通单击：不选中；若已有选中则清空。播放靠双击、菜单靠右键。
+ * - Ctrl/Cmd+单击：切换该曲选中，并把它设为区间锚点。
+ * - Shift+单击：以锚点为端点做区间选中（替换现有选择）。
+ */
 function onRowSelect(e: MouseEvent, index: number): void {
   const list = filteredTracks.value
-  if (e.shiftKey && anchorIndex.value >= 0) {
-    const [a, b] = [anchorIndex.value, index].sort((x, y) => x - y)
+  if (e.shiftKey) {
+    if (selectedKeys.value.size && anchorIndex.value >= 0) {
+      if (anchorIndex.value !== index) {
+        const [a, b] = [anchorIndex.value, index].sort((x, y) => x - y)
+        const next = new Set<string>()
+        for (let i = a; i <= b; i++) next.add(getMusicItemKey(list[i]))
+        selectedKeys.value = next
+      }
+    } else {
+      selectedKeys.value = new Set([getMusicItemKey(list[index])])
+      anchorIndex.value = index
+    }
+  } else if (e.ctrlKey || e.metaKey) {
+    anchorIndex.value = index
+    const key = getMusicItemKey(list[index])
     const next = new Set(selectedKeys.value)
-    for (let i = a; i <= b; i++) next.add(getMusicItemKey(list[i]))
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
     selectedKeys.value = next
-    return
+  } else if (selectedKeys.value.size) {
+    clearSelection()
   }
-  const key = getMusicItemKey(list[index])
-  if (e.ctrlKey || e.metaKey) {
-    const next = new Set(selectedKeys.value)
-    next.has(key) ? next.delete(key) : next.add(key)
-    selectedKeys.value = next
-  } else {
-    selectedKeys.value = new Set([key])
-  }
-  anchorIndex.value = index
 }
 
 function playSelected(): void {
@@ -184,32 +230,21 @@ async function removeSelected(): Promise<void> {
   clearSelection()
   showToast('已从列表移除')
 }
+// 批量下载：先弹音质选择（逐首回退到可用的最接近档位）
+const qualityDialog = ref(false)
 function downloadSelected(): void {
-  for (const item of selectedItems.value) void download.add(item)
+  qualityDialog.value = true
+}
+function onDownloadAdded(): void {
   showToast(`已加入下载 ${selectedItems.value.length} 首`)
+  clearSelection()
 }
 
-// 批量「添加到列表」选单（复用 ContextMenu）
-const addMenu = ref<{ x: number; y: number } | null>(null)
-const addMenuItems = computed<MenuItem[]>(() => {
-  const fav = playlists.value.find((p) => p.systemKind === 'favorites')
-  const items: MenuItem[] = []
-  if (fav) items.push({ key: `add:${fav.id}`, label: '我的收藏', icon: 'heart' })
-  for (const p of customPlaylists.value)
-    items.push({ key: `add:${p.id}`, label: p.name, icon: 'library' })
-  if (!items.length) items.push({ key: 'noop', label: '暂无列表', disabled: true })
-  return items
-})
-function openAddMenu(e: MouseEvent): void {
-  addMenu.value = { x: e.clientX, y: e.clientY }
-}
-async function onAddSelect(key: string): Promise<void> {
-  addMenu.value = null
-  if (!key.startsWith('add:')) return
-  const pid = Number(key.slice(4))
-  const items = selectedItems.value
-  for (const item of items) await library.addToPlaylist(pid, item)
-  showToast(`已添加 ${items.length} 首到列表`)
+// 批量「添加到列表」弹窗（LX ListAddMultipleModal）
+const addDialog = ref(false)
+function onAdded(): void {
+  showToast(`已添加 ${selectedItems.value.length} 首到列表`)
+  clearSelection()
 }
 
 // ============ 新建歌单 ============
@@ -266,7 +301,7 @@ async function confirmDelete(): Promise<void> {
   }
 }
 
-// ============ 右键菜单 ============
+// ============ 右键菜单（项与顺序对齐 LX Music 列表菜单） ============
 interface MenuState {
   x: number
   y: number
@@ -276,15 +311,19 @@ const menu = ref<MenuState | null>(null)
 const menuItems = computed<MenuItem[]>(() => {
   const p = menu.value?.playlist
   if (!p) return []
-  const items: MenuItem[] = [{ key: 'play', label: '播放', icon: 'play' }]
-  if (!p.isSystem) {
-    items.push({ key: 'rename', label: '重命名', icon: 'edit' })
-  }
-  items.push({ key: 'export', label: '导出列表', icon: 'upload', divider: true })
-  if (!p.isSystem) {
-    items.push({ key: 'delete', label: '删除', icon: 'trash', danger: true })
-  }
-  return items
+  const remote = !!(p.remoteSource && p.remoteId)
+  return [
+    { key: 'play', label: '播放', icon: 'play' },
+    { key: 'rename', label: '重命名', icon: 'edit', disabled: p.isSystem },
+    { key: 'sort', label: '排序歌曲', icon: 'sort', divider: true },
+    { key: 'duplicate', label: '重复歌曲', icon: 'copy' },
+    { key: 'addLocal', label: '添加本地歌曲', icon: 'folder' },
+    { key: 'update', label: '更新', icon: 'refresh', divider: true, disabled: !remote },
+    { key: 'detail', label: '歌单详情页', icon: 'library', disabled: !remote },
+    { key: 'import', label: '导入', icon: 'download', divider: true },
+    { key: 'export', label: '导出', icon: 'upload' },
+    { key: 'delete', label: '移除', icon: 'trash', danger: true, disabled: p.isSystem }
+  ]
 })
 function openMenu(e: MouseEvent, p: LocalPlaylist): void {
   menu.value = { x: e.clientX, y: e.clientY, playlist: p }
@@ -301,10 +340,71 @@ async function onMenuSelect(key: string): Promise<void> {
     playAll()
   } else if (key === 'rename') {
     void startRename(p)
+  } else if (key === 'sort') {
+    sortTarget.value = p
+  } else if (key === 'duplicate') {
+    dupTarget.value = p
+  } else if (key === 'addLocal') {
+    void addLocalSongs(p)
+  } else if (key === 'update') {
+    void updateFromRemote(p)
+  } else if (key === 'detail') {
+    void router.push({
+      name: 'playlist',
+      params: { playlistId: p.remoteId },
+      query: { source: p.remoteSource }
+    })
+  } else if (key === 'import') {
+    void importList()
   } else if (key === 'delete') {
     pendingDelete.value = p
   } else if (key === 'export') {
     void exportList(p)
+  }
+}
+
+// ============ 排序歌曲 / 重复歌曲 弹窗 ============
+const sortTarget = ref<LocalPlaylist | null>(null)
+const dupTarget = ref<LocalPlaylist | null>(null)
+function onSorted(): void {
+  showToast('已重新排序')
+  if (selection.value?.kind === 'local') void loadTracks()
+}
+
+// ============ 添加本地歌曲 ============
+async function addLocalSongs(p: LocalPlaylist): Promise<void> {
+  const r = await api.library.addLocalSongs(p.id).catch(() => null)
+  if (!r) return // 用户取消或失败
+  showToast(
+    r.skipped > 0 ? `已添加 ${r.added} 首（跳过 ${r.skipped} 首重复/失败）` : `已添加 ${r.added} 首`
+  )
+}
+
+// ============ 更新（远端绑定歌单重新拉取整单替换） ============
+const updatingId = ref<number | null>(null)
+async function updateFromRemote(p: LocalPlaylist): Promise<void> {
+  if (!p.remoteSource || !p.remoteId || updatingId.value != null) return
+  updatingId.value = p.id
+  showToast(`正在更新「${p.name}」…`)
+  try {
+    const source = p.remoteSource as MusicSource
+    const all: MusicItem[] = []
+    // 分页拉全量；100 页 * 100 首上限护栏，防远端 hasNext 异常导致死循环
+    for (let page = 0; page < 100; page++) {
+      const res = await api.discover.playlistSongs(source, p.remoteId, page, 100)
+      all.push(...res.result)
+      if (!res.hasNext || !res.result.length) break
+    }
+    if (!all.length) {
+      showToast('更新失败：远端歌单为空或拉取失败')
+      return
+    }
+    await api.library.replaceSongs(p.id, all)
+    showToast(`已更新「${p.name}」：${all.length} 首`)
+  } catch {
+    showToast('更新失败')
+  } finally {
+    updatingId.value = null
   }
 }
 
@@ -380,7 +480,20 @@ onMounted(async () => {
   libraryUnsub = api.library.onChange(() => {
     if (selection.value?.kind === 'local') void loadTracks()
   })
-  // 默认选中「我的收藏」
+  // 恢复上次选中的列表；本地列表校验仍存在（可能已被删除/重命名），失效回落「我的收藏」
+  const saved = readSavedSelection()
+  if (saved?.kind === 'local') {
+    const p = playlists.value.find((pl) => pl.id === saved.id)
+    if (p) {
+      void selectLocal(p)
+      return
+    }
+  } else if (saved?.kind === 'platform') {
+    // 平台歌单直接按 source:id 拉曲目，不依赖分组先加载完
+    selection.value = saved
+    void loadTracks()
+    return
+  }
   if (!selection.value && favorites.value) void selectLocal(favorites.value)
 })
 onUnmounted(() => {
@@ -405,20 +518,8 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div v-if="creating" class="create-row">
-        <input
-          v-model="newName"
-          class="inline-input"
-          placeholder="输入列表名称"
-          autofocus
-          @keyup.enter="confirmCreate"
-          @keyup.esc="creating = false"
-          @blur="confirmCreate"
-        />
-      </div>
-
-      <!-- 系统列表 -->
-      <div class="side-group">
+      <div class="side-lists scroll">
+        <!-- 系统列表 / 自建列表 / 平台歌单：全部平铺（LX MyList） -->
         <button
           v-if="trial"
           class="list-item"
@@ -426,9 +527,13 @@ onUnmounted(() => {
           @click="trial && selectLocal(trial)"
           @contextmenu.prevent.stop="trial && openMenu($event, trial)"
         >
-          <span class="li-icon"><AppIcon name="clock" :size="16" /></span>
+          <AppIcon
+            v-if="selectedKey === `local:${trial.id}`"
+            name="chevron-right"
+            :size="12"
+            class="li-mark"
+          />
           <span class="li-name ellipsis">试听列表</span>
-          <span class="li-count">{{ trial.songCount }}</span>
         </button>
         <button
           v-if="favorites"
@@ -437,15 +542,15 @@ onUnmounted(() => {
           @click="favorites && selectLocal(favorites)"
           @contextmenu.prevent.stop="favorites && openMenu($event, favorites)"
         >
-          <span class="li-icon"><AppIcon name="heart" :size="16" /></span>
+          <AppIcon
+            v-if="selectedKey === `local:${favorites.id}`"
+            name="chevron-right"
+            :size="12"
+            class="li-mark"
+          />
           <span class="li-name ellipsis">我的收藏</span>
-          <span class="li-count">{{ favorites.songCount }}</span>
         </button>
-      </div>
 
-      <!-- 自建列表 -->
-      <div class="side-group">
-        <div class="group-label">自建列表</div>
         <template v-for="p in customPlaylists" :key="p.id">
           <div v-if="renamingId === p.id" class="create-row">
             <input
@@ -469,33 +574,44 @@ onUnmounted(() => {
             @drop="onDrop(p)"
             @dragend="onDragEnd"
           >
-            <span class="li-icon"><AppIcon name="library" :size="15" /></span>
+            <AppIcon
+              v-if="selectedKey === `local:${p.id}`"
+              name="chevron-right"
+              :size="12"
+              class="li-mark"
+            />
             <span class="li-name ellipsis">{{ p.name }}</span>
-            <span class="li-count">{{ p.songCount }}</span>
           </button>
         </template>
-        <div v-if="!customPlaylists.length && !creating" class="group-empty">
-          点右上角 + 新建列表
-        </div>
-      </div>
 
-      <!-- 平台歌单分组 -->
-      <div v-for="g in platformGroups" :key="g.source" class="side-group">
-        <div class="group-label">{{ g.displayName }}</div>
         <button
-          v-for="p in g.playlists"
-          :key="p.id"
+          v-for="{ g, p } in platformItems"
+          :key="`platform:${g.source}:${p.id}`"
           class="list-item"
           :class="{ active: selectedKey === `platform:${g.source}:${p.id}` }"
           @click="selectPlatform(g, p)"
         >
-          <span class="li-cover">
-            <img v-if="p.cover" :src="p.cover" alt="" />
-            <AppIcon v-else name="library" :size="14" />
-          </span>
+          <AppIcon
+            v-if="selectedKey === `platform:${g.source}:${p.id}`"
+            name="chevron-right"
+            :size="12"
+            class="li-mark"
+          />
           <span class="li-name ellipsis">{{ p.name }}</span>
-          <span class="li-count">{{ p.total ?? 0 }}</span>
         </button>
+
+        <!-- 新建列表输入行：位于列表末尾（LX） -->
+        <div v-if="creating" class="create-row">
+          <input
+            v-model="newName"
+            class="inline-input"
+            placeholder="输入列表名称"
+            autofocus
+            @keyup.enter="confirmCreate"
+            @keyup.esc="creating = false"
+            @blur="confirmCreate"
+          />
+        </div>
       </div>
     </aside>
 
@@ -503,25 +619,41 @@ onUnmounted(() => {
     <section class="detail">
       <div v-if="!selection" class="detail-empty">选择左侧列表查看歌曲</div>
       <template v-else>
-        <div class="detail-toolbar">
-          <button class="play-all" :disabled="!filteredTracks.length" @click="playAll">
-            <AppIcon name="play" :size="15" />
-            <span>播放全部</span>
-          </button>
-          <div class="detail-title ellipsis">{{ selection.name }}</div>
-          <div class="detail-count">{{ tracks.length }} 首</div>
-          <button
-            v-if="player.current"
-            class="tool-btn"
-            title="定位当前播放"
-            @click="locateCurrent"
-          >
-            <AppIcon name="locate" :size="15" />
-          </button>
-          <div class="detail-search">
-            <AppIcon name="search" :size="14" />
-            <input v-model="searchText" placeholder="搜索列表内歌曲" />
+        <!-- 列头 -->
+        <div class="track-head">
+          <div class="th num">#</div>
+          <div class="th name">歌曲名</div>
+          <div class="th singer">艺术家</div>
+          <div class="th album">专辑名</div>
+          <div class="th time">时长</div>
+          <div class="th ops">
+            <span>{{ showListOps ? '操作' : '' }}</span>
+            <span class="head-tools">
+              <button
+                v-if="player.current"
+                class="head-tool"
+                title="定位当前播放"
+                @click="locateCurrent"
+              >
+                <AppIcon name="locate" :size="14" />
+              </button>
+              <button
+                class="head-tool"
+                :class="{ on: searchOpen }"
+                title="搜索列表内歌曲"
+                @click="toggleSearch"
+              >
+                <AppIcon name="search" :size="14" />
+              </button>
+            </span>
           </div>
+        </div>
+
+        <!-- 列表内搜索（切换显示） -->
+        <div v-if="searchOpen" class="search-row">
+          <AppIcon name="search" :size="14" />
+          <input v-model="searchText" placeholder="搜索当前列表内歌曲" autofocus />
+          <span class="search-count">{{ filteredTracks.length }} 首</span>
         </div>
 
         <div v-if="loadingTracks" class="detail-hint">加载中…</div>
@@ -549,7 +681,7 @@ onUnmounted(() => {
             <button class="batch-btn" @click="playSelected">
               <AppIcon name="play" :size="14" /><span>播放</span>
             </button>
-            <button class="batch-btn" @click="openAddMenu">
+            <button class="batch-btn" @click="addDialog = true">
               <AppIcon name="plus" :size="14" /><span>添加到列表</span>
             </button>
             <button v-if="selection.kind === 'local'" class="batch-btn" @click="removeSelected">
@@ -576,14 +708,37 @@ onUnmounted(() => {
       @close="closeMenu"
     />
 
-    <!-- 批量「添加到列表」选单 -->
-    <ContextMenu
-      v-if="addMenu"
-      :x="addMenu.x"
-      :y="addMenu.y"
-      :items="addMenuItems"
-      @select="onAddSelect"
-      @close="addMenu = null"
+    <!-- 排序歌曲弹窗 -->
+    <PlaylistSortDialog
+      v-if="sortTarget"
+      :playlist-id="sortTarget.id"
+      :playlist-name="sortTarget.name"
+      @sorted="onSorted"
+      @close="sortTarget = null"
+    />
+
+    <!-- 重复歌曲弹窗 -->
+    <PlaylistDuplicateDialog
+      v-if="dupTarget"
+      :playlist-id="dupTarget.id"
+      :playlist-name="dupTarget.name"
+      @close="dupTarget = null"
+    />
+
+    <!-- 批量「添加到列表」弹窗 -->
+    <ListAddDialog
+      v-if="addDialog"
+      :items="selectedItems"
+      @added="onAdded"
+      @close="addDialog = false"
+    />
+
+    <!-- 批量下载音质选择 -->
+    <QualityDialog
+      v-if="qualityDialog"
+      :items="selectedItems"
+      @added="onDownloadAdded"
+      @close="qualityDialog = false"
     />
 
     <!-- 删除确认 -->
@@ -612,28 +767,38 @@ onUnmounted(() => {
   min-height: 0;
 }
 
-/* ---------- 左栏 ---------- */
+/* ---------- 左栏（LX MyList） ---------- */
 .sidebar {
   flex: none;
-  width: 232px;
+  width: 16%;
   height: 100%;
-  padding: 12px 10px;
-  border-right: 1px solid var(--color-primary-alpha-900);
+  display: flex;
+  flex-direction: column;
 }
 .side-head {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 6px 10px;
+  height: 38px;
+  padding: 0 4px 0 10px;
+  border-bottom: var(--color-list-header-border-bottom);
+}
+/* LX：按钮平时近乎隐身，悬停表头才显现 */
+.side-head:hover .icon-btn {
+  opacity: 1;
+}
+.side-lists {
+  flex: 1;
+  min-height: 0;
 }
 .side-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
 }
 .side-title {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 400;
   color: var(--color-font);
 }
 .icon-btn {
@@ -641,119 +806,66 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  color: var(--color-font-label);
-  transition:
-    color 0.2s ease,
-    background 0.2s ease;
+  height: 30px;
+  border-radius: var(--radius-border);
+  color: var(--color-button-font);
+  opacity: 0.1;
+  transition: opacity var(--transition-normal);
 }
 .icon-btn:hover {
-  color: var(--color-primary);
-  background: var(--color-primary-background);
+  opacity: 0.6 !important;
 }
-
-.side-group {
-  margin-bottom: 12px;
-}
-.group-label {
-  padding: 6px 8px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-font-label);
-}
-.group-empty {
-  padding: 6px 8px;
-  font-size: 12px;
-  color: var(--color-font-label);
+.icon-btn:active {
+  opacity: 0.7 !important;
 }
 
 .list-item {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 3px;
   width: 100%;
-  height: 38px;
-  padding: 0 8px;
-  border-radius: var(--radius-border);
+  height: 36px;
+  padding: 0 10px;
   text-align: left;
   color: var(--color-font);
   transition:
-    background 0.18s ease,
-    color 0.18s ease;
+    color 0.2s ease,
+    background 0.2s ease;
 }
-.list-item:hover {
+.list-item:not(.active):hover {
   background: var(--color-primary-background-hover);
 }
 .list-item.active {
-  background: var(--color-primary-background-active);
-  color: var(--color-primary-font);
-}
-/* LX 招牌：选中项左侧强调条 */
-.list-item.active::before {
-  content: '';
-  position: absolute;
-  left: -4px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 16px;
-  border-radius: var(--radius-progress);
-  background: var(--color-primary);
+  color: var(--color-primary);
 }
 .list-item.drop-over {
   box-shadow: inset 0 2px 0 var(--color-primary);
 }
-.li-icon {
+.li-mark {
   flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  color: var(--color-font-label);
-}
-.list-item.active .li-icon {
+  margin-left: -6px;
   color: var(--color-primary);
-}
-.li-cover {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 3px;
-  overflow: hidden;
-  color: var(--color-font-label);
-  background: var(--color-primary-background);
-}
-.li-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 .li-name {
   flex: 1;
   min-width: 0;
   font-size: 13px;
 }
-.li-count {
-  flex: none;
-  font-size: 11px;
-  color: var(--color-font-label);
-}
 
+/* 新建/重命名输入行（LX editing 态） */
 .create-row {
-  padding: 2px 4px 6px;
+  padding: 0 10px;
+  background: var(--color-primary-background-hover);
 }
 .inline-input {
   width: 100%;
-  padding: 7px 9px;
-  border-radius: var(--form-radius);
+  height: 36px;
+  padding: 0;
+  border-radius: 0;
   font-size: 13px;
   color: var(--color-font);
-  background: var(--color-primary-background);
+  background: none;
 }
 
 /* ---------- 右栏 ---------- */
@@ -771,86 +883,96 @@ onUnmounted(() => {
   font-size: 13px;
   color: var(--color-font-label);
 }
-.detail-toolbar {
+
+/* ---------- 列头（LX 表格式） ---------- */
+.track-head {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 16px 20px 12px;
-}
-.play-all {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 18px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 500;
-  color: #fff;
-  background: var(--color-primary);
-  box-shadow: 0 4px 12px var(--color-primary-alpha-300);
-  transition:
-    background 0.2s ease,
-    transform 0.1s ease;
-}
-.play-all:hover {
-  background: var(--color-primary-dark-100);
-}
-.play-all:active {
-  transform: scale(0.97);
-}
-.play-all:disabled {
-  opacity: 0.5;
-  cursor: default;
-  box-shadow: none;
-}
-.detail-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--color-font);
-}
-.detail-count {
-  flex: none;
+  height: 38px;
+  padding: 0 16px;
   font-size: 12px;
   color: var(--color-font-label);
+  border-bottom: var(--color-list-header-border-bottom);
 }
-.tool-btn {
-  flex: none;
+.th {
+  padding: 0 8px;
+  min-width: 0;
+}
+.th.num {
+  flex: 0 0 5%;
+  text-align: center;
+}
+.th.name {
+  flex: 1 1 auto;
+}
+.th.singer {
+  flex: 0 0 22%;
+}
+.th.album {
+  flex: 0 0 22%;
+}
+.th.time {
+  flex: 0 0 9%;
+}
+.th.ops {
+  flex: 0 0 16%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 0;
+  padding-right: 0;
+}
+.head-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.head-tool {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--form-radius);
   color: var(--color-font-label);
   transition:
     color 0.18s ease,
     background 0.18s ease;
 }
-.tool-btn:hover {
+.head-tool:hover,
+.head-tool.on {
   color: var(--color-primary);
-  background: var(--color-primary-background);
+  background: var(--color-button-background-hover);
 }
-.detail-search {
+
+/* ---------- 列表内搜索行 ---------- */
+.search-row {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  padding: 6px 10px;
+  gap: 8px;
+  margin: 8px 16px 0;
+  padding: 7px 12px;
   border-radius: var(--form-radius);
   color: var(--color-font-label);
   background: var(--color-primary-background);
 }
-.detail-search input {
-  width: 150px;
-  font-size: 12px;
+.search-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
   color: var(--color-font);
+}
+.search-count {
+  flex: none;
+  font-size: 12px;
+  color: var(--color-font-label);
 }
 .track-list {
   flex: 1;
   min-height: 0;
-  padding: 0 16px 16px;
+  padding: 6px 16px 16px;
 }
 
 /* ---------- 批量操作栏 ---------- */

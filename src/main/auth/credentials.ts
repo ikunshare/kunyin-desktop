@@ -3,11 +3,11 @@
  * 按 provider key（qq/wy/kg/kw）存各平台 cookie/凭据，safeStorage 加密持久化到
  * userData/credentials.bin（单文件 JSON），启动时与登录后注入 `getProvider(src).credentials`。
  */
-import { app, safeStorage } from 'electron'
-import { join } from 'node:path'
+import { safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { getProvider } from '../providers'
 import type { ProviderCredentials } from '../providers/base'
+import { appDataPath } from '../core/paths'
 
 export type CredProviderKey = 'qq' | 'wy' | 'kg' | 'kw'
 const KEYS: CredProviderKey[] = ['qq', 'wy', 'kg', 'kw']
@@ -28,7 +28,7 @@ function emitChange(): void {
 }
 
 function filePath(): string {
-  return join(app.getPath('userData'), 'credentials.bin')
+  return appDataPath('credentials.bin')
 }
 
 function loadFromDisk(): Record<string, ProviderCredentials> {
@@ -46,7 +46,7 @@ function loadFromDisk(): Record<string, ProviderCredentials> {
 
 function saveToDisk(): void {
   const path = filePath()
-  const dir = join(path, '..')
+  const dir = appDataPath()
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const obj: Record<string, ProviderCredentials> = {}
   for (const [k, v] of store) obj[k] = v

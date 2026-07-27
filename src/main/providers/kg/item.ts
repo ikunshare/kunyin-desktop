@@ -181,7 +181,7 @@ export function parseKgAuthorSong(o: any): KugouMusicItem | null {
     num(ai.filesize_high, 0)
   )
   if (!Object.keys(q).length) return null
-  const audioId = String(o.album_audio_id ?? o.audio_id ?? '')
+  const audioId = String(o.album_audio_id)
   const id = num(audioId, 0)
   let title = cleanText(o.audio_name ?? '')
   if (title.includes(' - ')) title = title.split(' - ').slice(1).join(' - ')

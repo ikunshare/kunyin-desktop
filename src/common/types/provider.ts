@@ -27,11 +27,17 @@ export interface MusicListResult {
 
 /**
  * 加密信息 —— 加密音源播放的核心载体。
- * ekey 非空且 isEncrypt 时，客户端需边下边解密（QQ mflac/mgg 等）。
+ * ekey 非空且 isEncrypt 时，客户端需边下边解密（QQ mflac/mgg、Spotify AES-128-CTR 等）。
  */
+
+/** 音频流加密算法（决定客户端用哪个解密器）：QQ mflac/mgg QMC2 / Spotify AES-128-CTR */
+export type AudioCipher = 'mflac' | 'aes-ctr'
+
 export interface EncryptionInfo {
   isEncrypt: boolean
   ekey?: string
+  /** 缺省视为 'mflac'（兼容既有 QQ 流） */
+  cipher?: AudioCipher
 }
 
 /** 播放地址解析结果（对应 MediaInfoResult） */

@@ -183,11 +183,26 @@ export function attachWordRomans(result: Lyric.Parsed.Info, romanLrc: string): b
     if (!groups.size) continue
 
     for (const [word, tokens] of groups) {
+      // 音译轨的时间戳与主词往往差几十毫秒，而 dom 引擎给逐字音译强制独立擦除时钟
+      // （word.ts 硬传 forceOwnWipe=true，config 无法关闭），时间窗一旦不同，
+      // 主词与它下方的拼音就各擦各的——即「主词播主词的、音译播音译的」。
+      // 一字对一音节时直接采用主词时间窗，两条时钟走同一区间，视觉上完全同步；
+      // 一字对多音节（连读）保留音译自身时间，逐音节擦除才是对的。
+      const wordTime = word.time
+      const words =
+        tokens.length === 1 && wordTime
+          ? [
+              Lyric.Common.makeWordAnnotationContent({
+                content: tokens[0].content,
+                time: Lyric.Common.makeTime({ start: wordTime.start, end: wordTime.end })
+              })
+            ]
+          : tokens
       const item = Lyric.Common.makeWordAnnotationRoman({
-        words: tokens,
+        words,
         time: Lyric.Common.makeTime({
-          start: tokens[0].time?.start ?? 0,
-          end: tokens[tokens.length - 1].time?.end ?? 0
+          start: words[0].time?.start ?? 0,
+          end: words[words.length - 1].time?.end ?? 0
         })
       })
       word.annotation ??= Lyric.Common.makeWordAnnotation()
@@ -212,28 +227,111 @@ export function attachWordRomans(result: Lyric.Parsed.Info, romanLrc: string): b
 }
 
 /**
+ * 时间标签 `mm:ss` / `mm:ss.xxx` → ms。
+ *
+ * 只认 `.` 作毫秒分隔：kit 把 `00:10:000` 解析为 mm:ss（10 分整），若这里按
+ * mm:ss:xxx 算成 10 秒，两边行起始时间对不上、索引整个失效。以 kit 的解释为准。
+ */
+function parseTimeTag(tag: string): number | null {
+  const m = /^(\d+):(\d+(?:\.\d+)?)$/.exec(tag.trim())
+  if (!m) return null
+  return Number(m[1]) * 60000 + Math.round(Number(m[2]) * 1000)
+}
+
+/**
+ * 从原始增强 LRC 取每行「行起始时间 → 行末时间标签」。
+ *
+ * kit 把行的 time.end 设为末词的 start（而非行尾标签），末字于是没有可用的结束时间。
+ * 而 `<00:12.800>` 这种收尾标签恰恰是末字唱完的时刻，只能从原文里捞。
+ */
+function collectLineEnds(lrc: string): Map<number, number> {
+  const out = new Map<number, number>()
+  for (const raw of lrc.split(/\r?\n/)) {
+    const head = /^\[(\d+:\d+(?:\.\d+)?)\]/.exec(raw)
+    if (!head) continue
+    const start = parseTimeTag(head[1])
+    if (start == null) continue
+    // 取该行最后一个 <...> 标签作为收尾
+    const tags = raw.match(/<([^>]+)>/g)
+    if (!tags?.length) continue
+    const last = parseTimeTag(tags[tags.length - 1].slice(1, -1))
+    if (last == null) continue
+    const prev = out.get(start)
+    if (prev == null || last > prev) out.set(start, last)
+  }
+  return out
+}
+
+/**
  * 补全绝对时间标签解析后 end==start 的词时长（下一词 start → 本词 end）。
  * kit 对 <mm:ss.xxx> 格式不写 duration，影响卡拉 OK 擦除与重音。
+ *
+ * @param sourceLrc 原始增强 LRC，用于取行末时间标签补末字时长（见 collectLineEnds）
  */
-export function reconstructWordDurations(result: Lyric.Parsed.Info): void {
+export function reconstructWordDurations(result: Lyric.Parsed.Info, sourceLrc = ''): void {
+  const lineEnds = sourceLrc ? collectLineEnds(sourceLrc) : null
   for (const line of result.lines) {
     if (!Lyric.Parsed.isParsedLineNormal(line)) continue
-    fixWords(line.body.value.words)
+    const time = line.body.value.time
+    // 行末标签优先；没有原文时退回 kit 的 time.end
+    const lineEnd = (time?.start != null ? lineEnds?.get(time.start) : undefined) ?? time?.end
+    fixWords(line.body.value.words, lineEnd)
     for (const bg of line.body.value.backgrounds ?? []) {
-      fixWords(bg.words)
+      fixWords(bg.words, lineEnd)
+      // 背景子行有独立 time（extract 时取自末词未补全的 end，偏早）；
+      // 引擎按它归一化整行擦除进度，不延长会让背景末词与前一词关键帧重合、动画跳变。
+      extendLineEnd(bg)
     }
+    extendLineEnd(line.body.value)
   }
 }
 
-function fixWords(words: Lyric.Common.Word[] | undefined): void {
+/**
+ * 把行 end 延长到末词 end。
+ *
+ * kit 把行 time.end 设成末词的 **start**，于是 lineDuration 短了末字一整拍。
+ * 引擎按 lineDuration 把每个字的擦除进度归一化到 [0,1]，末字算出的 offset 会 >1
+ * 被 clamp 成 1，与前一字的关键帧重合、零间距——就是「尾字直接跳过去、没有动画」。
+ */
+function extendLineEnd(value: LineBody): void {
+  const time = value.time
+  if (!time) return
+  let max = time.end
+  for (const w of value.words) {
+    if (!Lyric.Common.isWordNormal(w)) continue
+    const end = w.body.value.time?.end
+    if (end != null && end > max) max = end
+  }
+  for (const bg of value.backgrounds ?? []) {
+    for (const w of bg.words) {
+      if (!Lyric.Common.isWordNormal(w)) continue
+      const end = w.body.value.time?.end
+      if (end != null && end > max) max = end
+    }
+  }
+  if (max > time.end) time.end = max
+}
+
+/**
+ * @param lineEnd 行结束时间。末字没有「下一词」可依，只能估时长，估短了擦除动画
+ *   还没走完行就切走——即「最后一个字莫名闪过去、没有动画」。
+ */
+function fixWords(words: Lyric.Common.Word[] | undefined, lineEnd?: number): void {
   if (!words?.length) return
   const normals = words.filter(Lyric.Common.isWordNormal).map((w) => w.body.value)
   for (let i = 0; i < normals.length; i++) {
     const t = normals[i].time
     if (!t || t.end > t.start) continue
     const next = normals[i + 1]?.time?.start
-    if (next != null && next > t.start) t.end = next
-    else t.end = t.start + estimateDuration(normals[i].content)
+    if (next != null && next > t.start) {
+      t.end = next
+      continue
+    }
+    // 末字：行末标签优先，否则按字数估
+    t.end =
+      lineEnd != null && lineEnd > t.start
+        ? lineEnd
+        : t.start + estimateDuration(normals[i].content)
   }
 }
 

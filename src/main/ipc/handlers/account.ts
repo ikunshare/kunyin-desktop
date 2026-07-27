@@ -1,7 +1,7 @@
 /**
  * 平台登录 / 账号 IPC。
- * - wy：扫码（HTTP 轮询）+ WebView
- * - qq：扫码（MQTT over WS，状态经 ACCOUNT_QQ_QR_EVENT 推送）+ WebView
+ * - wy：扫码（HTTP 轮询）
+ * - qq：扫码（MQTT over WS，状态经 ACCOUNT_QQ_QR_EVENT 推送）
  * - kg：手动填凭据（桌面无 native 签名库 KgCrypto，故不做扫码，对齐 Android 的手填回退）
  * 凭据统一经 credentials.ts safeStorage 持久化并注入 provider。
  */
@@ -25,14 +25,12 @@ import {
 } from '../../auth/credentials'
 import { wyGetUnikey, wyBuildQRUrl, wyPollStatus } from '../../auth/login/wy'
 import { qqCreateQRCode, qqConnectAndListen } from '../../auth/login/qq'
-import { openWebViewLogin } from '../../auth/login/webview'
 
 const DISPLAY: Record<AccountProvider, string> = {
   qq: 'QQ音乐',
   wy: '网易云音乐',
   kg: '酷狗音乐'
 }
-const WEBVIEW: Record<AccountProvider, boolean> = { qq: true, wy: true, kg: false }
 
 // qq 扫码当前的停止函数（同一时刻仅一个二维码会话）
 let qqStop: (() => void) | null = null
@@ -42,8 +40,7 @@ async function buildStatus(provider: AccountProvider): Promise<AccountStatus> {
   const status: AccountStatus = {
     provider,
     displayName: DISPLAY[provider],
-    loggedIn,
-    supportsWebView: WEBVIEW[provider]
+    loggedIn
   }
   if (loggedIn) {
     const info = await getProvider(provider)
@@ -76,12 +73,6 @@ export function registerAccountHandlers(): void {
       token: creds.token,
       mid: creds.mid || undefined,
       dfid: creds.dfid || undefined
-    })
-  })
-
-  handle(IpcChannels.ACCOUNT_WEBVIEW_LOGIN, (provider: 'qq' | 'wy') => {
-    openWebViewLogin(provider, (creds) => {
-      if (creds) saveCredential(provider, creds)
     })
   })
 

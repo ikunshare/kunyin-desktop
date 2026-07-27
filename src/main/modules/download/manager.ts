@@ -33,8 +33,9 @@ import { QUALITY_IDS } from '@common'
 import { getSettings } from '../../store/settings'
 import { resolveMediaInfo } from '../../providers/getUrl'
 import { getProvider } from '../../providers'
-import { decryptFile } from '../../crypto/mflac'
+import { decryptAudioFile } from '../../crypto/decryptor'
 import { requestBuffer, requestRaw } from '../../net/request'
+import { appDataPath } from '../../core/paths'
 
 const MP3_QUALITY_IDS = new Set(['128', '320', '128k', '320k', 'mp3'])
 const PROGRESS_INTERVAL_MS = 500
@@ -59,7 +60,7 @@ function notify(): void {
 let saveTimer: NodeJS.Timeout | null = null
 
 function tasksFile(): string {
-  return join(app.getPath('userData'), 'download_tasks.json')
+  return appDataPath('download_tasks.json')
 }
 
 function defaultDownloadDir(): string {
@@ -158,11 +159,11 @@ export function listTasks(): DownloadTask[] {
   return [...tasks.values()]
 }
 
-/** 选音质：给定 qualityId 优先，否则按首选从高到低选可用的。 */
+/** 选音质：给定 qualityId 优先，否则按「优先下载音质」设置从高到低选可用的。 */
 function pickQuality(item: MusicItem, preferred?: string): string | undefined {
   if (preferred && item.qualities[preferred]) return preferred
   const ladder = [...QUALITY_IDS].reverse() // 高 → 低
-  const first = getSettings().player.preferredQuality
+  const first = getSettings().download.preferredQuality
   if (item.qualities[first]) return first
   for (const q of ladder) if (item.qualities[q]) return q
   const keys = Object.keys(item.qualities)
@@ -274,6 +275,7 @@ async function executeDownload(taskKey: string): Promise<void> {
     }
     const ekey =
       info.encryptionInfo?.isEncrypt && info.encryptionInfo.ekey ? info.encryptionInfo.ekey : null
+    const cipher = info.encryptionInfo?.cipher
 
     const s = getSettings().download
     const dir = task.subDir ? join(defaultDownloadDir(), task.subDir) : defaultDownloadDir()
@@ -307,7 +309,7 @@ async function executeDownload(taskKey: string): Promise<void> {
 
     // 加密流：原地解密 + 容器嗅探修正扩展名
     if (ekey) {
-      await decryptFile(finalPath, ekey)
+      await decryptAudioFile(finalPath, cipher, ekey)
       const actualExt = sniffAudioExtension(finalPath)
       if (actualExt && !finalPath.toLowerCase().endsWith(actualExt)) {
         const renamed = join(dir, `${baseName}${actualExt}`)

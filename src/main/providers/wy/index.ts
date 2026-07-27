@@ -21,7 +21,7 @@ import {
 import { BaseProvider } from '../base'
 import { requestJson } from '../../net/request'
 import { eapiPost, extractMusicU, weapiPost } from '../../crypto/netease'
-import { yrcToLrc } from '../../crypto/lyric'
+import { parseYrc } from '../../crypto/lyric'
 import { enrichFromQualityDetail, num, parseTrackInfo } from './item'
 
 /** 字节 → MB/GB 显示（MV 音质档用）。 */
@@ -329,12 +329,14 @@ export class WyProvider extends BaseProvider {
     if (!json || json.lrc == null) return { ...EMPTY_LYRIC }
     const yrc = json.yrc?.lyric ?? ''
     const hasYrc = yrc.length > 0
+    // 有 yrc 时（对齐安卓 parseWy 路径 1）：行级 lrc 与逐字 char 均由 yrc 网格产出，
+    // 保证主/逐字时间戳一致；翻译/音译取与网格对齐的 ytlrc/yromalrc。
+    const parsedYrc = hasYrc ? parseYrc(yrc) : null
     return {
-      lrc: json.lrc?.lyric ?? '',
-      // 有 yrc 时翻译/音译取与逐字网格对齐的 ytlrc/yromalrc，否则取行级 tlyric/romalrc
+      lrc: parsedYrc ? parsedYrc.lyric : (json.lrc?.lyric ?? ''),
       trans: (hasYrc ? json.ytlrc?.lyric : json.tlyric?.lyric) ?? '',
       roma: (hasYrc ? json.yromalrc?.lyric : json.romalrc?.lyric) ?? '',
-      char: yrc ? yrcToLrc(yrc) : '',
+      char: parsedYrc ? parsedYrc.chase : '',
       chroma: '',
       phonetic: ''
     }
@@ -402,6 +404,15 @@ export class WyProvider extends BaseProvider {
       }
     }
     return out
+  }
+
+  /** 按 id 查单曲（歌词重定向对话框用，移植 WyProvider.fromID：detail + 音质补全） */
+  async fromId(id: number): Promise<NeteaseMusicItem | null> {
+    const items = await this.fetchSongDetails([id])
+    const item = items[0]
+    if (!item) return null
+    const [enriched] = await this.enrichAll([item]).catch(() => [item])
+    return enriched ?? item
   }
 
   /** batch + "/" hack 批量补高级音质 */

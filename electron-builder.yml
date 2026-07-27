@@ -13,20 +13,21 @@ asarUnpack:
   - resources/**
 win:
   executableName: kunyin-desktop
-  icon: resources/icons/icon.png
+  icon: resources/icons/icon.ico
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
   installerIcon: resources/icons/icon.ico
+  uninstallerIcon: resources/icons/icon.ico
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
-  icon: resources/icons/icon.png
+  icon: resources/icons/icon.icns
 dmg:
   artifactName: ${name}-${version}.${ext}
 linux:
@@ -34,9 +35,9 @@ linux:
     - AppImage
     - snap
     - deb
-  maintainer: electronjs.org
-  category: Utility
-  icon: resources/icons/icon.png
+  maintainer: ikunshare
+  category: AudioVideo
+  icon: resources/icons
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false

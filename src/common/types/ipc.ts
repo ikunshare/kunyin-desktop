@@ -7,7 +7,7 @@
  *
  * 各域方法随分阶段实施逐步补齐；Phase 0 先立骨架（app/settings 真实实现，search/player 占位）。
  */
-import type { Lyric, MusicItem, MusicSource } from './music'
+import type { KgLyricCandidate, Lyric, MusicItem, MusicSource } from './music'
 import type {
   AlbumInfoResult,
   AlbumSearchResult,
@@ -21,7 +21,7 @@ import type {
   PlayListInfoResult,
   PlaylistSearchResult
 } from './provider'
-import type { AppSettings, AuthState } from './settings'
+import type { AppSettings, AuthState, CacheKind, CacheStats, ProxyStatus } from './settings'
 import type { LocalPlaylist } from './library'
 import type { AddDownloadInput, DownloadTask } from './download'
 
@@ -29,11 +29,24 @@ export const IpcChannels = {
   // 应用
   APP_VERSION: 'app:version',
   APP_PLATFORM: 'app:platform',
+  /** 返回应用数据目录 userData/data/（settings.json 等所在处，见 main/core/paths.ts） */
+  APP_USERDATA_PATH: 'app:userdata-path',
+
+  // 窗口控制（无边框主窗口）
+  WINDOW_MINIMIZE: 'window:minimize',
+  WINDOW_CLOSE: 'window:close',
+  WINDOW_SET_SIZE: 'window:setSize',
+  WINDOW_READY: 'window:ready', // 渲染 → 主：UI 首帧已绘制，可显示窗口
 
   // 设置
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
   SETTINGS_CHANGED: 'settings:changed', // 主 → 渲染 事件
+  SETTINGS_PROXY_STATUS: 'settings:proxyStatus', // 代理是否真正生效（探活结果）
+
+  // 缓存管理
+  CACHE_STATS: 'cache:stats',
+  CACHE_CLEAR: 'cache:clear',
 
   // 搜索
   SEARCH_SONGS: 'search:songs',
@@ -44,6 +57,7 @@ export const IpcChannels = {
   PLAYER_RESOLVE_URL: 'player:resolveUrl',
   PLAYER_STREAM: 'player:stream',
   PLAYER_LYRIC: 'player:lyric',
+  PLAYER_URL_INVALIDATE: 'player:urlInvalidate',
 
   // 卡密激活
   AUTH_GET: 'auth:get',
@@ -64,7 +78,17 @@ export const IpcChannels = {
   LIBRARY_TOGGLE_FAVORITE: 'library:toggleFavorite',
   LIBRARY_ADD_TO_TRIAL: 'library:addToTrial',
   LIBRARY_TRIAL_SONGS: 'library:trialSongs',
+  LIBRARY_SORT_SONGS: 'library:sortSongs',
+  LIBRARY_REPLACE_SONGS: 'library:replaceSongs',
+  LIBRARY_ADD_LOCAL_SONGS: 'library:addLocalSongs',
+  LIBRARY_GET_REDIRECT: 'library:getRedirect',
+  LIBRARY_SET_REDIRECT: 'library:setRedirect',
+  LIBRARY_CLEAR_REDIRECT: 'library:clearRedirect',
   LIBRARY_CHANGED: 'library:changed', // 主 → 渲染 事件
+
+  // 歌词/封面重定向查询（对话框用）
+  REDIRECT_LOOKUP: 'redirect:lookup',
+  REDIRECT_KG_SEARCH: 'redirect:kgSearch',
 
   // 发现（走 Provider：歌单/专辑/歌手 详情 + 搜索）
   DISCOVER_PLAYLIST_INFO: 'discover:playlistInfo',
@@ -103,7 +127,6 @@ export const IpcChannels = {
   ACCOUNT_LIST: 'account:list', // 各平台登录态
   ACCOUNT_LOGOUT: 'account:logout',
   ACCOUNT_KG_SAVE: 'account:kgSave', // 酷狗手动填凭据
-  ACCOUNT_WEBVIEW_LOGIN: 'account:webviewLogin', // wy/qq WebView 登录
   ACCOUNT_WY_QR_CREATE: 'account:wyQrCreate', // wy 扫码：申请二维码
   ACCOUNT_WY_QR_POLL: 'account:wyQrPoll', // wy 扫码：轮询状态
   ACCOUNT_QQ_QR_START: 'account:qqQrStart', // qq 扫码：申请二维码并起 WS 监听
@@ -145,6 +168,11 @@ export type Unsubscribe = () => void
 
 /** 系统媒体命令（全局媒体键 / 托盘 → 渲染层播放器） */
 export type MediaCommand = 'playpause' | 'next' | 'prev'
+
+/** 歌单内排序字段（LX 排序歌曲） */
+export type PlaylistSortField = 'title' | 'artist' | 'album' | 'duration' | 'source'
+/** 歌单内排序方向；random 为随机打乱 */
+export type PlaylistSortOrder = 'asc' | 'desc' | 'random'
 
 /** 桌面歌词状态（主窗口 → 歌词窗口，经主进程转发） */
 export interface DesktopLyricState {
@@ -222,8 +250,6 @@ export interface AccountStatus {
   displayName: string
   /** 是否已登录（本地有凭据） */
   loggedIn: boolean
-  /** 是否支持 WebView 登录（wy/qq 支持） */
-  supportsWebView: boolean
   /** 登录用户昵称（拿到用户信息时） */
   nickname?: string
   avatar?: string
@@ -272,12 +298,31 @@ export interface WindowApi {
     getPlatform(): Promise<NodeJS.Platform>
   }
 
+  /** 主窗口控制（无边框固定尺寸窗口的最小化/关闭） */
+  window: {
+    minimize(): Promise<void>
+    close(): Promise<void>
+    /** 按档位尺寸调整窗口（设置页窗口尺寸选择） */
+    setSize(width: number, height: number): Promise<void>
+    /** 通知主进程 UI 首帧已绘制完成，可以显示窗口（防启动闪裸背景图） */
+    ready(): void
+  }
+
   settings: {
     get(): Promise<AppSettings>
     /** 局部更新，返回合并后的完整设置 */
     set(patch: DeepPartial<AppSettings>): Promise<AppSettings>
     /** 订阅设置变更（由主进程广播），返回取消订阅函数 */
     onChange(cb: (settings: AppSettings) => void): Unsubscribe
+    /** 代理实际生效状态（配了但端口不可达时 active=false，附回落原因） */
+    proxyStatus(): Promise<ProxyStatus>
+  }
+
+  cache: {
+    /** 各类缓存用量 */
+    stats(): Promise<CacheStats>
+    /** 清理指定缓存，返回清理后的最新用量 */
+    clear(kind: CacheKind): Promise<CacheStats>
   }
 
   search: {
@@ -297,6 +342,8 @@ export interface WindowApi {
     /** 解析并注册到本地音频代理，返回可直接喂 <audio> 的 127.0.0.1 URL */
     stream(item: MusicItem, qualityId: string): Promise<AudioStreamResult>
     lyric(item: MusicItem): Promise<Lyric>
+    /** 播放失败时上报，使该曲该音质的 URL 缓存失效（下次重新解析） */
+    invalidateUrl(item: MusicItem, qualityId: string): Promise<void>
   }
 
   /** 卡密激活（authst） */
@@ -330,8 +377,27 @@ export interface WindowApi {
     /** 加入试听列表（点单曲时累积；atHead=true 头插，否则追加末尾） */
     addToTrial(item: MusicItem, atHead: boolean): Promise<void>
     trialSongs(): Promise<MusicItem[]>
+    /** 歌单内歌曲整体排序（LX 排序歌曲），按字段与方向重写 position */
+    sortSongs(playlistId: number, field: PlaylistSortField, order: PlaylistSortOrder): Promise<void>
+    /** 整体替换歌单曲目（远端歌单「更新」），按传入顺序写 position */
+    replaceSongs(playlistId: number, items: MusicItem[]): Promise<void>
+    /** 弹文件选择框导入本地歌曲到歌单；返回 null 表示取消 */
+    addLocalSongs(playlistId: number): Promise<{ added: number; skipped: number } | null>
+    /** 查询歌曲的歌词/封面重定向目标（无则 null） */
+    getRedirect(item: MusicItem): Promise<MusicItem | null>
+    /** 设置歌词/封面重定向：item 的歌词与封面改用 target 的 */
+    setRedirect(item: MusicItem, target: MusicItem): Promise<void>
+    clearRedirect(item: MusicItem): Promise<void>
     /** 订阅曲库变更（主进程广播），返回取消订阅 */
     onChange(cb: () => void): Unsubscribe
+  }
+
+  /** 歌词/封面重定向的查询（RedirectDialog 用，对应安卓 SongRedirectDialog 的 lookup/kgLyricSearch） */
+  redirect: {
+    /** 按 id/mid 查单曲（qq 支持 key='mid'，wy/kw 仅 'id'）；查不到返回 null */
+    lookup(source: 'qq' | 'wy' | 'kw', key: 'id' | 'mid', value: string): Promise<MusicItem | null>
+    /** 酷狗歌词候选搜索（关键词 + 源歌曲时长 ms），带内容类型徽标 */
+    kgSearch(keyword: string, durationMs: number): Promise<KgLyricCandidate[]>
   }
 
   /** 发现：走 Provider 的歌单/专辑/歌手 详情与搜索 */
@@ -421,8 +487,6 @@ export interface WindowApi {
     logout(provider: AccountProvider): Promise<void>
     /** 酷狗手动填凭据（桌面无 native 签名库，仅支持手填） */
     kgSave(creds: KgManualCreds): Promise<void>
-    /** 打开 wy/qq 的 WebView 登录窗口；成功保存后广播 account:changed */
-    webviewLogin(provider: 'qq' | 'wy'): Promise<void>
     /** wy 扫码：申请二维码 */
     wyQrCreate(): Promise<WyQRCode | null>
     /** wy 扫码：轮询状态（success 时凭据已保存） */

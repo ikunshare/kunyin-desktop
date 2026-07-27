@@ -16,7 +16,7 @@ import {
 } from '@common'
 import { BaseProvider } from '../base'
 import { requestText } from '../../net/request'
-import { num, parseMusicElements, parseSearchItem } from './item'
+import { num, parseMusicElements, parseMusicPayItem, parseSearchItem } from './item'
 import { getKwLyric } from './lyric'
 
 const UID = '794762570'
@@ -158,6 +158,18 @@ export class KwProvider extends BaseProvider {
       songCount: num(o.SONGNUM, 0),
       albumCount: num(o.ALBUMNUM, 0)
     }
+  }
+
+  /** 按 id 查单曲（歌词重定向对话框用，移植 KwProvider.fromID：musicpay query） */
+  async fromId(id: number): Promise<KuwoMusicItem | null> {
+    const url =
+      `https://musicpay.kuwo.cn/music.pay?ver=MUSIC_9.1.1.2_BCS2&src=mbox&op=query&signver=new` +
+      `&action=play&ids=${id}&accttype=1&appuid=38668888`
+    const json = this.parseJson(
+      await requestText(url, { headers: { 'User-Agent': 'okhttp/3.10.0' } }).catch(() => '')
+    )
+    const s = json?.songs?.[0]
+    return s ? parseMusicPayItem(s) : null
   }
 
   /** 搜索/专辑/歌手歌曲无封面，批量从 musicpay 补 500x500 */

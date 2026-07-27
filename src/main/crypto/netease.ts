@@ -3,11 +3,10 @@
  * 网易云加密核心（移植自 Android platform/wy/utils/NeteaseCrypto.kt）。
  * eapi：AES-128-ECB；weapi：两层 AES-128-CBC + 裸 RSA。数值 1:1 照源码。
  */
-import { app } from 'electron'
 import { createCipheriv, createHash, randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { requestJson, requestRaw } from '../net/request'
+import { appDataPath } from '../core/paths'
 
 const EAPI_KEY = 'e82ckenh8dichen8'
 const WEAPI_PRESET_KEY = '0CoJUm6Qyw8W8jud'
@@ -80,7 +79,7 @@ function randomSecKey(): string {
 let deviceIdCache: string | null = null
 function getDeviceId(): string {
   if (deviceIdCache) return deviceIdCache
-  const path = join(app.getPath('userData'), 'wy_device.txt')
+  const path = appDataPath('wy_device.txt')
   try {
     if (existsSync(path)) {
       const v = readFileSync(path, 'utf-8').trim()

@@ -26,9 +26,11 @@ const KEEP_ALIVE = ['SearchView', 'PlaylistsView', 'DownloadView', 'SettingsView
 
 <style scoped>
 /* 窄图标侧栏（透出浅色 app-background）| 白色主区（LX 布局） */
+/* 高度用 100%（跟随被 zoom 缩放的 #app），不能用 100vh——vh 是视口单位不随 zoom 缩放，
+   字体大小档位改变 zoom 后会与 #app 高度失配，导致底部露白。 */
 .shell {
   display: flex;
-  height: 100vh;
+  height: 100%;
   background-color: var(--color-app-background);
 }
 .area-aside {
@@ -41,6 +43,11 @@ const KEEP_ALIVE = ['SearchView', 'PlaylistsView', 'DownloadView', 'SettingsView
   display: flex;
   flex-direction: column;
   background-color: var(--color-main-background);
+  /* LX #right：与侧栏形成层叠分隔 */
+  border-top-left-radius: var(--radius-border);
+  border-bottom-left-radius: var(--radius-border);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
 }
 .view {
   flex: 1;

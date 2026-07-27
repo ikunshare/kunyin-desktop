@@ -5,7 +5,18 @@ import eslintPluginVue from 'eslint-plugin-vue'
 import vueParser from 'vue-eslint-parser'
 
 export default defineConfig(
-  { ignores: ['**/node_modules', '**/dist', '**/out', '**/reference', 'scripts'] },
+  {
+    ignores: [
+      '**/node_modules',
+      '**/dist',
+      '**/out',
+      '**/reference',
+      'scripts',
+      // vendored 歌词引擎（music-lyric-kit / -player 上游源码，见 tools/vendor-lyric.mjs）：
+      // 保持与上游逐字节可对照，不套本项目的 prettier/lint 规约，否则每次升级都是满屏格式 diff
+      'src/renderer/src/lyric/**'
+    ]
+  },
   tseslint.configs.recommended,
   eslintPluginVue.configs['flat/recommended'],
   {
@@ -38,6 +49,20 @@ export default defineConfig(
           }
         }
       ]
+    }
+  },
+  {
+    // vendored 第三方源码（AMLL bg-render）：保持上游原样，不套本项目显式返回类型规约
+    files: ['src/renderer/src/bg-render/**/*.ts'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off'
+    }
+  },
+  {
+    // 构建期一次性脚本（vendor / 校验），不进产物，无需显式返回类型
+    files: ['tools/**/*.{mjs,mts}'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off'
     }
   },
   eslintConfigPrettier

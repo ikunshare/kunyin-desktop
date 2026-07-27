@@ -8,13 +8,15 @@ import { KwProvider } from './kw'
 import { KgProvider } from './kg'
 import { QqProvider } from './qq'
 import { JooxProvider } from './joox'
+import { SpProvider } from './sp'
 
 const registry: Partial<Record<MusicSource, BaseProvider>> = {
   wy: new WyProvider(),
   kw: new KwProvider(),
   kg: new KgProvider(),
   qq: new QqProvider(),
-  joox: new JooxProvider()
+  joox: new JooxProvider(),
+  sp: new SpProvider()
 }
 
 export function getProvider(source: MusicSource): BaseProvider | undefined {

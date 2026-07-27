@@ -3,11 +3,11 @@
  * 卡密即 authst，经 c.wwwweb.top/app/checkAuth 校验；本地用 safeStorage 加密持久化到 auth.bin。
  * currentAuthst 直接注入自建后端 getUrl（解锁 kg/qq 及加密音质）。
  */
-import { app, safeStorage } from 'electron'
-import { join } from 'node:path'
+import { safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import type { AuthState } from '@common'
 import { requestJson } from '../net/request'
+import { appDataPath } from '../core/paths'
 
 const CHECK_AUTH_URL = 'https://c.wwwweb.top/app/checkAuth'
 
@@ -15,7 +15,7 @@ const state: AuthState = { authst: '', isValid: false, message: '' }
 let loaded = false
 
 function filePath(): string {
-  return join(app.getPath('userData'), 'auth.bin')
+  return appDataPath('auth.bin')
 }
 
 function loadFromDisk(): string {
@@ -31,7 +31,7 @@ function loadFromDisk(): string {
 
 function saveToDisk(authst: string): void {
   const path = filePath()
-  const dir = join(path, '..')
+  const dir = appDataPath()
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const data =
     authst && safeStorage.isEncryptionAvailable()

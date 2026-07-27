@@ -171,21 +171,9 @@ function close(): void {
 .dl-lyric :deep([data-role='line-normal']) {
   row-gap: 10px !important;
 }
-/* 汉字紧排：逐字音译 absolute，不按拼音宽度撑开每个字 */
-.dl-lyric :deep([data-role='line-normal-text-word']) {
-  --word-gap: 0px !important;
-  position: relative;
-  overflow: visible;
-}
+/* 溢出与行高已在引擎侧修掉（同 PlayerView，勿再压 line-height：会让 mask 切掉下降部） */
 .dl-lyric :deep([data-role='line-normal-text-word-roman']) {
-  position: absolute !important;
-  left: 50%;
-  top: 100%;
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: none;
   white-space: nowrap;
-  line-height: 1.15;
   pointer-events: none;
   font-weight: 400 !important;
 }

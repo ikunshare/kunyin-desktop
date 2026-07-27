@@ -45,60 +45,40 @@ function stripMetaLines(lrc: string): string {
 }
 
 /**
- * 背景人声折叠回主行。
- *
- * kit 的 background.extract 会把括号伴唱拆成独立 background 行；
- * DOM 播放器再用 scale(0.7)+极小间距叠在主词下方，
- * 像「情人 - 蔡徐坤(KUN)」会把「KUN」压到「蔡徐坤」上。
- * 识别对不对先不管，这里只修 UI：拼回主行，不再单独渲染背景行。
+ * 判断翻译/音译文本是否「实质为空」——所有行的正文剥字后都无字符。
+ * QQ QRC trans 常见空翻译轨（时间标签在但正文空/仅空白），传给 kit 会占一整行的高。
  */
-function foldBackgroundsIntoMain(result: Lyric.Parsed.Info): void {
-  for (const line of result.lines) {
-    if (!Lyric.Parsed.isParsedLineNormal(line)) continue
-    const body = line.body.value
-    const bgs = body.backgrounds
-    if (!bgs?.length) continue
-
-    const pending = bgs.slice()
-    bgs.length = 0
-
-    for (const bg of pending) {
-      if (bg.words.length) {
-        const last = body.words[body.words.length - 1]
-        // 主词与背景词之间补空格，避免「蔡徐坤KUN」粘连
-        if (last && !Lyric.Common.isWordSpace(last)) {
-          body.words.push(Lyric.Common.makeWordSpace({ count: 1 }))
-        }
-        for (const w of bg.words) body.words.push(w)
-      }
-
-      // 扩展主行时间，覆盖背景时段
-      if (bg.time) {
-        if (!body.time) {
-          body.time = Lyric.Common.makeTime({ start: bg.time.start, end: bg.time.end })
-        } else {
-          if (bg.time.start < body.time.start) body.time.start = bg.time.start
-          if (bg.time.end > body.time.end) body.time.end = bg.time.end
-        }
-      }
-
-      // 行级翻译/音译一并拼回主行（括号内伴唱的注解）
-      if (!bg.annotation) continue
-      const ann = body.annotation ?? (body.annotation = Lyric.Common.makeLineAnnotation())
-      for (const t of bg.annotation.translations ?? []) {
-        if (!t.content?.trim()) continue
-        const existing = ann.translations.find((x) => x.language === t.language)
-        if (existing) existing.content = `${existing.content} ${t.content}`.trim()
-        else ann.translations.push(t)
-      }
-      for (const r of bg.annotation.romans ?? []) {
-        if (!r.content?.trim()) continue
-        const existing = ann.romans.find((x) => x.language === r.language)
-        if (existing) existing.content = `${existing.content} ${r.content}`.trim()
-        else ann.romans.push(r)
-      }
-    }
+function isAnnotationEmpty(text: string): boolean {
+  if (!text?.trim()) return true
+  for (const raw of text.split(/\r?\n/)) {
+    const body = raw.replace(/^\[[^\]]+\]/, '')
+    if (plainLyricBody(body)) return false
   }
+  return true
+}
+
+/**
+ * 把「无翻译占位行」（QQ trans 用 `//` 表示该行没有翻译）正文置空，保留时间标签。
+ * 渲染层对空正文注解不建行（hasContent 检查），置空即隐藏；保留标签维持行数供索引对齐。
+ */
+function stripPlaceholderLines(text: string): string {
+  if (!text?.trim()) return text || ''
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      const m = line.match(/^(\[[^\]]+\])(.*)$/)
+      if (!m) return line
+      const body = plainLyricBody(m[2])
+      return body && /^[/\\]+$/.test(body) ? m[1] : line
+    })
+    .join('\n')
+}
+
+/** 翻译/音译轨统一清洗：剥元信息行 → 置空占位行 → 整轨实质为空则丢弃 */
+function cleanAnnotationTrack(text: string): string {
+  if (!text?.trim()) return ''
+  const cleaned = stripPlaceholderLines(stripMetaLines(text))
+  return isAnnotationEmpty(cleaned) ? '' : cleaned
 }
 
 /**
@@ -117,6 +97,7 @@ export function useLyricPlayer(): {
   pause: () => void
   seekMs: (ms: number) => void
   setColors: (normal: string, active: string) => void
+  setFontFamily: (font: string) => void
   setAnnotationVisible: (opts: { translation?: boolean; romanization?: boolean }) => void
   /** 宿主从 hidden→可见后调用，强制按真实尺寸重排（避免行高测成 0 叠在一起） */
   relayout: () => void
@@ -131,6 +112,11 @@ export function useLyricPlayer(): {
     layout: {
       gap: 36,
       align: 'left'
+    },
+    effect: {
+      // 引擎默认对非激活行做距离渐变高斯模糊（max 4.5px），
+      // 整页看起来虚焦、亮底下更糊；关掉，非激活行只做透明度分层
+      blur: { enabled: false }
     },
     line: {
       normal: {
@@ -165,11 +151,13 @@ export function useLyricPlayer(): {
               DomLyricPlayerConfig.Line.Normal.Syllable.WordSlot.AnnotationRuby
             ],
             annotation: {
-              // 不因注音额外加字间距（拼音过宽的撑开用 CSS absolute 消化）
-              gap: 0,
+              // 字与字之间留一点拼音间隙，避免相邻音节的音译撞成连体（"sisoengong"）
+              gap: 4,
               roman: {
+                // 逐字音译字号直接决定字距：cell 宽取 max(汉字, 拼音)，拼音一比汉字宽
+                // 就把汉字撑开。0.45em 时常见 3~4 字母音节恰好不超过一个汉字宽。
                 visible: true,
-                font: { size: '0.4em', weight: 400 }
+                font: { size: '0.45em', weight: 400 }
               }
             }
           }
@@ -211,6 +199,12 @@ export function useLyricPlayer(): {
   }
   // 默认 Apple Music 白色系（主窗口全屏播放器用）
   setColors('#ffffff', '#ffffff')
+
+  /** 设歌词字体（空=跟随软件/继承）。直接设 DOM 根元素 font-family，逐字/翻译/音译都继承。 */
+  function setFontFamily(font: string): void {
+    if (font) dom.element.style.fontFamily = `"${font}"`
+    else dom.element.style.removeProperty('font-family')
+  }
 
   function setAnnotationVisible(opts: { translation?: boolean; romanization?: boolean }): void {
     const patch: Record<string, unknown> = {}
@@ -269,12 +263,16 @@ export function useLyricPlayer(): {
     try {
       // 去掉 AI 音译声明等元信息行，避免当成唱词/翻译糊在标题上
       const cleanedOriginal = stripMetaLines(original)
-      const cleanedTranslate = stripMetaLines(translate)
-      const cleanedRoman = stripMetaLines(roman)
+      // 副轨清洗：元信息行 + `//` 占位行置空；「实质为空」的轨整体丢掉，
+      // 避免 kit 每行留出注解位撑高行。
+      const cleanedTranslate = cleanAnnotationTrack(translate)
+      const cleanedRoman = cleanAnnotationTrack(roman)
 
       // 翻译/音译按行索引重对齐到主轨时间戳，规避 kit 0 容差精确匹配导致的整行漏配
-      const alignedTranslate = realignByIndex(cleanedOriginal, cleanedTranslate)
-      const alignedRomanRaw = realignByIndex(cleanedOriginal, cleanedRoman)
+      const alignedTranslate = cleanedTranslate
+        ? realignByIndex(cleanedOriginal, cleanedTranslate)
+        : ''
+      const alignedRomanRaw = cleanedRoman ? realignByIndex(cleanedOriginal, cleanedRoman) : ''
       // kit LRC 对 roman 强制行级解析：必须先剥掉逐字时间标签，否则标签会原样进 content
       const syllableRoman = hasSyllableTags(alignedRomanRaw) ? alignedRomanRaw : ''
       const alignedRoman = stripSyllableTags(alignedRomanRaw)
@@ -300,10 +298,9 @@ export function useLyricPlayer(): {
       pipeline.language.calculatePercent()
 
       const result = pipeline.final().result
-      // 背景伴唱折回主行，避免 DOM 播放器把背景行叠在主词上
-      foldBackgroundsIntoMain(result)
-      // 绝对时间标签的词 end==start，补全时长供卡拉 OK / 重音
-      reconstructWordDurations(result)
+      // 绝对时间标签的词 end==start，补全时长供卡拉 OK / 重音；
+      // 传原文以取行末时间标签（kit 的行 time.end 是末词 start，补不了末字）
+      reconstructWordDurations(result, cleanedOriginal)
       // 逐字音译：用原轨音节对齐挂到 word.annotation.romans
       if (syllableRoman) {
         const ok = attachWordRomans(result, syllableRoman)
@@ -311,6 +308,8 @@ export function useLyricPlayer(): {
           console.warn('[lyric] 逐字音译无法被解析，已回退为行级音译')
         }
       }
+      // 背景人声留在 backgrounds 里交给引擎渲染行内子行（小字、按自身时间轴逐字擦除），
+      // 不要拼回主词——拼接会让和声词排进主词时间轴末尾，时序全错。
 
       base.updateLyric(result)
     } catch (e) {
@@ -342,6 +341,7 @@ export function useLyricPlayer(): {
     pause,
     seekMs,
     setColors,
+    setFontFamily,
     setAnnotationVisible,
     relayout
   }

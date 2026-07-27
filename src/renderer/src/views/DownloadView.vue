@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import AppIcon from '../components/AppIcon.vue'
 import { useDownloadStore } from '../stores/download'
+import { coverUrl } from '../utils/cover'
 import type { DownloadStatus } from '@common'
 
 defineOptions({ name: 'DownloadView' })
@@ -44,7 +45,7 @@ function statusText(s: DownloadStatus): string {
     <div class="list">
       <div v-for="t in tasks" :key="t.taskKey" class="task" :class="t.status">
         <div class="cover">
-          <img v-if="t.cover" :src="t.cover" alt="" />
+          <img v-if="t.cover" :src="coverUrl(t.cover)" alt="" />
           <AppIcon v-else name="download" :size="18" />
         </div>
         <div class="meta">

@@ -1,0 +1,7 @@
+@use '../../common.scss' as *;
+
+// TODO: plain currently borrows the main-syllable style vars; give it dedicated `main-plain` vars once `main.plain` config lands.
+.plain {
+  @include apply-line-font('main-syllable');
+  @include apply-line-style('main-syllable');
+}

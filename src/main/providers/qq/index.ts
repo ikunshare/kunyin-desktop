@@ -545,6 +545,28 @@ export class QqProvider extends BaseProvider {
     return { source: 'qq', playUrl: null, quality, rejectReason: '未找到清晰度' }
   }
 
+  // —— 按 id/mid 查单曲（歌词重定向对话框用，移植 QQProvider.fromID/fromMid）——
+  async fromId(songId: number): Promise<QQMusicItem | null> {
+    return this.fetchSongDetail(songId, '')
+  }
+  async fromMid(mid: string): Promise<QQMusicItem | null> {
+    return this.fetchSongDetail(0, mid)
+  }
+  private async fetchSongDetail(songId: number, songMid: string): Promise<QQMusicItem | null> {
+    const req = {
+      comm: { ct: '19', cv: '1859', uin: '0' },
+      req: {
+        module: 'music.pf_song_detail_svr',
+        method: 'get_song_detail_yqq',
+        param: { song_type: 0, song_id: songId, song_mid: songMid }
+      }
+    }
+    const json = await zzcRequest<any>(req).catch(() => null)
+    if (!json || json.code !== 0 || json.req?.code !== 0) return null
+    const trackInfo = json.req.data?.track_info
+    return trackInfo ? parseTrackInfo(trackInfo) : null
+  }
+
   async getLyric(item: MusicItem): Promise<Lyric> {
     if (item.type !== 'qq') return { ...EMPTY_LYRIC }
     // 1) 主路径：musichallSong.PlayLyricInfo（QRC 逐字 + 翻译 + 音译）

@@ -10,10 +10,17 @@
   "compilerOptions": {
     "composite": true,
     "baseUrl": ".",
+    // vendored 歌词引擎（src/renderer/src/lyric）不开这两项：上游按包分别编译、未启用它们，
+    // 而实现接口时保留未用形参是必要的（override check(ctx) 等）。TS 无法按目录设严格度，
+    // 故在此关闭；我们自己的代码仍由 eslint 的 no-unused-vars 覆盖（见 eslint.config.mjs）。
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "paths": {
       "@common": ["src/common"],
       "@common/*": ["src/common/*"],
-      "@renderer/*": ["src/renderer/src/*"]
+      "@renderer/*": ["src/renderer/src/*"],
+      "music-lyric-kit": ["src/renderer/src/lyric/kit/main"],
+      "music-lyric-player": ["src/renderer/src/lyric/player/main"]
     }
   }
 }

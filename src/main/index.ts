@@ -7,6 +7,7 @@ import { registerAudioScheme, installAudioProtocol } from './audio/protocol'
 import { checkOnStartup } from './auth/manager'
 import { initCredentials } from './auth/credentials'
 import { applyProxy } from './net/proxy'
+import { initAppDataDir } from './core/paths'
 import { appEvent } from './core/events'
 
 // 自定义音频协议 kunyin:// 必须在 app ready 前注册为特权 scheme
@@ -25,6 +26,10 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.whenReady().then(() => {
+    // 须在任何数据文件读写前（applyProxy 读 settings、preload 同步读 settings.json）：
+    // 建 userData/data/ 并把散落在根目录的旧数据一次性迁入，与 Chromium 数据分离
+    initAppDataDir()
+
     // Windows 任务栏/通知归属
     electronApp.setAppUserModelId('com.ikunshare.sound')
 

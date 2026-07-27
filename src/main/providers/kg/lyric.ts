@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** 酷狗歌词：搜索候选 → 下载 → KRC 解密 → 增强 LRC（移植自 KgProvider 歌词链） */
-import { EMPTY_LYRIC, type KugouMusicItem, type Lyric } from '@common'
+import { EMPTY_LYRIC, type KgLyricCandidate, type KugouMusicItem, type Lyric } from '@common'
 import { requestJson } from '../../net/request'
-import { decryptKrc, krcToLrc } from '../../crypto/lyric'
+import { decryptKrc, parseKrc } from '../../crypto/lyric'
 import { kgSign, nowSec } from './sign'
 
 const HOSTS = [
@@ -25,33 +25,77 @@ function signedLyricQuery(params: Record<string, string>): string {
   )
 }
 
-async function searchCandidates(kg: KugouMusicItem): Promise<Candidate[]> {
+/**
+ * 搜索酷狗歌词候选（对齐安卓 searchKgLyricCandidates）。
+ * hash/audioId 可空——为非酷狗源做歌词重定向时只用关键词 + 时长。
+ */
+export async function searchKgLyricCandidates(
+  keyword: string,
+  durationMs: number,
+  hash?: string,
+  audioId?: string,
+  man?: boolean
+): Promise<KgLyricCandidate[]> {
   const params: Record<string, string> = {
-    album_audio_id: kg.audioId || '0',
+    album_audio_id: audioId || '0',
     appid: '1005',
-    clientver: '20669',
-    duration: String(kg.duration),
-    keyword: `${kg.artist} - ${kg.title}`,
+    clientver: '20744',
+    duration: String(durationMs),
+    keyword,
     lrctxt: '1',
-    man: 'yes',
+    man: man ? 'yes' : 'no',
     query_copyright: '1',
     vocab: '0'
   }
-  if (kg.hash) params.hash = kg.hash.toLowerCase()
+  if (hash) params.hash = hash.toLowerCase()
   const query = signedLyricQuery(params)
   for (const host of HOSTS) {
     const json = await requestJson<any>(`${host}/v1/search?${query}`, {
       headers: { clienttime: nowSec(), mid: '-', dfid: '-' }
     }).catch(() => null)
     if (json && json.status === 200 && json.error_code !== 20006) {
-      return (json.candidates ?? []).map((c: any) => ({
-        accessKey: c.accesskey,
-        downloadId: String(c.id ?? c.download_id ?? ''),
-        contenttype: Number(c.contenttype) || 0
-      }))
+      return (json.candidates ?? [])
+        .map((c: any): KgLyricCandidate => ({
+          accessKey: String(c.accesskey ?? ''),
+          downloadId: String(c.id ?? c.download_id ?? ''),
+          contenttype: Number(c.contenttype) || 0,
+          song: String(c.song ?? ''),
+          singer: String(c.singer ?? ''),
+          language: String(c.language ?? ''),
+          durationMs: Number(c.duration) || 0,
+          score: Number(c.score) || 0,
+          typeBadges: []
+        }))
+        .filter((c: KgLyricCandidate) => c.accessKey && c.downloadId)
     }
   }
   return []
+}
+
+/**
+ * 探测一条候选的歌词内容类型（下载 + 解密后看各轨是否非空）。
+ * 对应安卓 probeKgLyricTypes；失败返回空数组（UI 不显示徽标即可）。
+ */
+export async function probeKgLyricTypes(c: {
+  accessKey: string
+  downloadId: string
+  contenttype: number
+}): Promise<string[]> {
+  const content = await download(c)
+  if (!content) return []
+  const r = parseKrc(decryptKrc(Buffer.from(content, 'base64')))
+  const badges: string[] = []
+  if (r.char) badges.push('逐字')
+  else if (r.lrc) badges.push('逐行')
+  if (r.trans) badges.push('翻译')
+  if (r.roma) badges.push('音译')
+  if (r.chroma) badges.push('逐字音译')
+  if (r.phonetic) badges.push('谐音')
+  return badges
+}
+
+async function searchCandidates(kg: KugouMusicItem): Promise<Candidate[]> {
+  return searchKgLyricCandidates(`${kg.artist} - ${kg.title}`, kg.duration, kg.hash, kg.audioId)
 }
 
 async function download(c: Candidate): Promise<string | null> {
@@ -72,9 +116,16 @@ async function download(c: Candidate): Promise<string | null> {
 }
 
 function decodeKrcContent(content: string): Lyric {
-  const lrc = krcToLrc(decryptKrc(Buffer.from(content, 'base64')))
-  if (!lrc) return { ...EMPTY_LYRIC }
-  return { lrc, trans: '', roma: '', char: lrc, chroma: '', phonetic: '' }
+  const r = parseKrc(decryptKrc(Buffer.from(content, 'base64')))
+  if (!r.lrc) return { ...EMPTY_LYRIC }
+  return {
+    lrc: r.lrc,
+    trans: r.trans,
+    roma: r.roma,
+    char: r.char,
+    chroma: r.chroma,
+    phonetic: r.phonetic
+  }
 }
 
 export async function getKgLyric(kg: KugouMusicItem): Promise<Lyric> {

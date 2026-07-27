@@ -4,10 +4,12 @@ import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import AppIcon from './AppIcon.vue'
 import { useSearchStore } from '../stores/search'
+import { useApi } from '../composables/useApi'
 
+const api = useApi()
 const router = useRouter()
 const searchStore = useSearchStore()
-const { keyword, history } = storeToRefs(searchStore)
+const { keyword } = storeToRefs(searchStore)
 const local = ref('')
 
 const focused = ref(false)
@@ -52,53 +54,42 @@ function clearInput(): void {
 </script>
 
 <template>
-  <header class="toolbar">
-    <div class="search-wrap">
+  <header class="toolbar drag">
+    <div class="search-wrap no-drag">
       <div class="search-box" :class="{ open: focused }">
-        <AppIcon name="search" :size="16" />
-        <input
-          v-model="local"
-          class="search-input"
-          type="text"
-          placeholder="搜索歌曲、歌手、专辑"
-          spellcheck="false"
-          @focus="focused = true"
-          @blur="onBlur"
-          @input="onInput"
-          @keyup.enter="submit"
-        />
-        <button v-if="local" class="clear" title="清空" @click="clearInput">
-          <AppIcon name="close" :size="13" />
-        </button>
+        <div class="form">
+          <AppIcon name="search" :size="15" />
+          <input
+            v-model="local"
+            class="search-input"
+            type="text"
+            placeholder="搜索歌曲、歌手、专辑"
+            spellcheck="false"
+            @focus="focused = true"
+            @blur="onBlur"
+            @input="onInput"
+            @keyup.enter="submit"
+          />
+          <button v-if="local" class="clear" title="清空" @click="clearInput">
+            <AppIcon name="close" :size="13" />
+          </button>
+        </div>
+        <!-- 搜索提示（LX SearchInput：与输入框同盒向下展开，无独立浮层） -->
+        <ul v-if="focused && local && tips.length" class="dropdown">
+          <li v-for="t in tips" :key="t" class="dd-item" @mousedown.prevent="go(t)">
+            <span class="ellipsis-2">{{ t }}</span>
+          </li>
+        </ul>
       </div>
+    </div>
 
-      <div v-if="focused && (tips.length || (!local && history.length))" class="dropdown">
-        <!-- 建议词 -->
-        <template v-if="local && tips.length">
-          <button v-for="t in tips" :key="t" class="dd-item" @mousedown.prevent="go(t)">
-            <AppIcon name="search" :size="13" />
-            <span class="dd-text ellipsis">{{ t }}</span>
-          </button>
-        </template>
-        <!-- 历史 -->
-        <template v-else-if="!local && history.length">
-          <div class="dd-head">
-            <span>搜索历史</span>
-            <button class="dd-clear" @mousedown.prevent="searchStore.clearHistory()">清空</button>
-          </div>
-          <button v-for="h in history" :key="h" class="dd-item" @mousedown.prevent="go(h)">
-            <AppIcon name="clock" :size="13" />
-            <span class="dd-text ellipsis">{{ h }}</span>
-            <button
-              class="dd-del"
-              title="删除"
-              @mousedown.prevent.stop="searchStore.removeHistory(h)"
-            >
-              <AppIcon name="close" :size="11" />
-            </button>
-          </button>
-        </template>
-      </div>
+    <div class="win-controls no-drag">
+      <button class="win-btn min" title="最小化" @click="api.window.minimize()">
+        <AppIcon name="minus" :size="16" />
+      </button>
+      <button class="win-btn close" title="关闭" @click="api.window.close()">
+        <AppIcon name="close" :size="16" />
+      </button>
     </div>
   </header>
 </template>
@@ -109,32 +100,51 @@ function clearInput(): void {
   height: var(--height-toolbar);
   display: flex;
   align-items: center;
-  padding: 0 15px;
+  justify-content: space-between;
+  padding: 0 0 0 15px;
 }
 .search-wrap {
   position: relative;
-  width: 300px;
+  width: 35%;
+  min-width: 240px;
+  height: 30px;
 }
+/* LX SearchInput：搜索盒 absolute 定位，展开提示时整盒向下撑高浮于内容之上；
+   低饱和主色底，聚焦/展开变浅 + 投影 */
 .search-box {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
   border-radius: var(--form-radius);
-  color: var(--color-font-label);
-  background-color: var(--color-primary-background);
-  transition: background-color 0.2s ease;
+  color: var(--color-button-font);
+  background-color: var(--color-primary-light-300-alpha-700);
+  transition:
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 .search-box:hover,
 .search-box.open {
-  background-color: var(--color-primary-background-hover);
+  background-color: var(--color-primary-light-600-alpha-100);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.2);
+}
+.form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
 }
 .search-input {
   flex: 1;
   min-width: 0;
-  font-size: 13.3px;
+  font-size: 13.5px;
   color: var(--color-font);
   background: none;
+}
+.search-input::placeholder {
+  color: var(--color-button-font);
 }
 .clear {
   flex: none;
@@ -145,67 +155,49 @@ function clearInput(): void {
   color: var(--color-font);
 }
 
+/* 提示列表：在搜索盒内（同背景同圆角），行 hover 用主题深色半透明（LX .select） */
 .dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  z-index: 50;
-  max-height: 360px;
+  max-height: 320px;
   overflow-y: auto;
-  padding: 6px;
-  border-radius: var(--radius-border);
-  background-color: var(--color-content-background);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
-}
-.dd-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px 6px;
-  font-size: 12px;
-  color: var(--color-font-label);
-}
-.dd-clear {
-  color: var(--color-font-label);
-  font-size: 12px;
-}
-.dd-clear:hover {
-  color: var(--color-primary);
-}
-.dd-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px;
-  border-radius: var(--form-radius);
-  text-align: left;
-  color: var(--color-font);
-  transition: background-color 0.12s ease;
-}
-.dd-item:hover {
-  background-color: var(--color-primary-background);
-}
-.dd-item :deep(svg) {
-  flex: none;
-  color: var(--color-font-label);
-}
-.dd-text {
-  flex: 1;
-  min-width: 0;
+  padding: 0 0 4px;
   font-size: 13px;
 }
-.dd-del {
+.dd-item {
+  cursor: pointer;
+  padding: 8px 10px;
+  line-height: 1.3;
+  color: var(--color-font);
+  transition: background-color 0.15s ease;
+}
+.dd-item:hover {
+  background-color: var(--color-primary-dark-100-alpha-700);
+}
+
+/* LX 窗口按钮：46x30，hover 主题色 */
+.win-controls {
   flex: none;
   display: flex;
+  align-items: center;
+  align-self: stretch;
+}
+.win-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 30px;
   color: var(--color-font-label);
-  opacity: 0;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
 }
-.dd-item:hover .dd-del {
-  opacity: 1;
+.win-btn:hover {
+  color: #fff;
 }
-.dd-del:hover {
-  color: var(--color-primary);
+.win-btn.min:hover {
+  background-color: var(--color-btn-min);
+}
+.win-btn.close:hover {
+  background-color: var(--color-btn-close);
 }
 </style>

@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import AppIcon from './AppIcon.vue'
+import { coverUrl } from '../utils/cover'
 
-defineProps<{
+const props = defineProps<{
   cover?: string
   title: string
   subtitle?: string
@@ -9,12 +11,15 @@ defineProps<{
   round?: boolean
 }>()
 const emit = defineEmits<{ playAll: [] }>()
+
+// 封面走主进程磁盘缓存协议
+const cachedCover = computed(() => coverUrl(props.cover))
 </script>
 
 <template>
   <div class="detail-header">
     <div class="dh-cover" :class="{ round }">
-      <img v-if="cover" :src="cover" alt="" />
+      <img v-if="cachedCover" :src="cachedCover" alt="" />
       <AppIcon v-else name="library" :size="40" />
     </div>
     <div class="dh-info">

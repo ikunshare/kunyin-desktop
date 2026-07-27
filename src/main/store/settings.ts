@@ -1,17 +1,16 @@
 /**
  * 应用设置的 JSON 存储（原子写：临时文件 + rename，参照 lx-music-desktop 的 Store）。
  *
- * 存于 `userData/settings.json`。敏感凭据不走这里，后续用 safeStorage 单独加密。
+ * 存于 `userData/data/settings.json`。敏感凭据不走这里，后续用 safeStorage 单独加密。
  */
-import { app } from 'electron'
-import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { DEFAULT_SETTINGS, type AppSettings, type DeepPartial } from '@common'
+import { appDataPath } from '../core/paths'
 
 let cache: AppSettings | null = null
 
 function filePath(): string {
-  return join(app.getPath('userData'), 'settings.json')
+  return appDataPath('settings.json')
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -41,7 +40,7 @@ function load(): AppSettings {
 
 function persist(settings: AppSettings): void {
   const path = filePath()
-  const dir = join(path, '..')
+  const dir = appDataPath()
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   const tmp = `${path}.tmp`
   writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf-8')

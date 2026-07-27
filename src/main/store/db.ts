@@ -10,9 +10,8 @@
  *
  * v7（桌面端新增，Android 无对应）：playlists 加 `sort_order` 列，支持「我的列表」左栏拖拽排序。
  */
-import { app } from 'electron'
-import { join } from 'node:path'
 import Database from 'better-sqlite3'
+import { appDataPath } from '../core/paths'
 
 // —— 表名 / 列名（对齐 Android MusicDatabase 常量）——
 export const TABLE_SONGS = 'songs'
@@ -108,7 +107,7 @@ function migrateV6ToV7(d: Database.Database): void {
 /** 打开（或复用）数据库单例。首次调用建表 + seed 系统歌单。 */
 export function getDb(): Database.Database {
   if (db) return db
-  const file = join(app.getPath('userData'), 'kunyin_music.db')
+  const file = appDataPath('kunyin_music.db')
   const d = new Database(file)
   d.pragma('journal_mode = WAL')
   d.pragma('foreign_keys = ON')

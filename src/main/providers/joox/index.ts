@@ -16,7 +16,7 @@ import {
 } from '@common'
 import { BaseProvider } from '../base'
 import { requestJson } from '../../net/request'
-import { decryptQrc, qrcToLrc } from '../../crypto/lyric'
+import { decryptQrc, parseTxQrc } from '../../crypto/lyric'
 import { jooxTrackUrl } from './sign'
 import { num, parseSongInfo } from './item'
 
@@ -108,9 +108,9 @@ export class JooxProvider extends BaseProvider {
       // base64 解出来的是十六进制文本
       const hex = Buffer.from(json.qrc_content, 'base64').toString('utf-8')
       if (hex) {
-        const enhanced = qrcToLrc(decryptQrc(hex))
-        if (enhanced) {
-          return { ...EMPTY_LYRIC, lrc: enhanced, char: enhanced }
+        const { lrc, char } = parseTxQrc(decryptQrc(hex))
+        if (lrc) {
+          return { ...EMPTY_LYRIC, lrc, char }
         }
         // 兜底：qrc_content 实为明文 LRC 的 base64
         if (/^\[\d{1,2}:\d{1,2}[.:]\d{1,3}\]/m.test(hex)) {
