@@ -50,6 +50,9 @@ function onBlur(): void {
 function clearInput(): void {
   local.value = ''
   tips.value = []
+  // 彻底清除当前搜索:关键词 + 结果一并清空,搜索页回到历史/热搜
+  keyword.value = ''
+  searchStore.clearResults()
 }
 </script>
 

@@ -10,6 +10,15 @@ import { applyProxy } from './net/proxy'
 import { initAppDataDir } from './core/paths'
 import { appEvent } from './core/events'
 
+// Chromium 启动参数必须在 app ready 前设置，否则不会生效
+app.commandLine.appendSwitch('ignore-certificate-errors')
+
+// 对 Chromium 页面与 Electron net 请求统一放行无效证书
+app.on('certificate-error', (event, _webContents, _url, _error, _certificate, callback) => {
+  event.preventDefault()
+  callback(true)
+})
+
 // 自定义音频协议 kunyin:// 必须在 app ready 前注册为特权 scheme
 registerAudioScheme()
 

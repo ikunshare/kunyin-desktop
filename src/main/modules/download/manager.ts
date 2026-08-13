@@ -6,10 +6,9 @@
  * - 并发上限用信号量（settings.download.maxConcurrent）；进度节流 500ms。
  * - 加密流（QQ ekey）：先下原始密文到 .tmp，完成后用 crypto/mflac 原地解密，再嗅探真实容器修正扩展名。
  * - 命名规则、采样率标记、整专封面 first-write-wins 对齐 Android。
+ * - 完成后用 tag/（自 Android utils/tag 移植）内嵌写 title/artist/album/cover/lyric 标签，
+ *   仅补齐缺失字段：文件自带标签（如 QQ 解密文件的原容器标签）优先保留。
  * - 任务持久化到 userData/download_tasks.json（含整条 MusicItem 以便重启恢复）。
- *
- * 注：音频标签写入（title/artist/album/cover 内嵌）Android 用 audiotagger，桌面端暂缺等价原生库，
- * 先保存 .lrc 与整专封面文件（可覆盖多数需求），内嵌标签作为后续增量（见 TODO）。
  */
 import { app } from 'electron'
 import { join } from 'node:path'
@@ -28,12 +27,13 @@ import {
 } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
-import type { AddDownloadInput, DownloadTask, MusicItem } from '@common'
-import { QUALITY_IDS } from '@common'
+import type { AddDownloadInput, DownloadTask, MediaInfoResult, MusicItem } from '@common'
+import { QUALITY_IDS, qualityFallbackOrder } from '@common'
 import { getSettings } from '../../store/settings'
 import { resolveMediaInfo } from '../../providers/getUrl'
 import { getProvider } from '../../providers'
 import { decryptAudioFile } from '../../crypto/decryptor'
+import { fillAudioTags, sniffImageMime } from '../../tag'
 import { requestBuffer, requestRaw } from '../../net/request'
 import { appDataPath } from '../../core/paths'
 
@@ -170,6 +170,34 @@ function pickQuality(item: MusicItem, preferred?: string): string | undefined {
   return keys.length ? keys[0] : undefined
 }
 
+/**
+ * 解析下载地址并自动降级：优先给定档，失败按档位从高到低逐级回退到更低可用档。
+ * 返回实际命中档与解析结果；全部失败时返回 rejectReason 汇总的失败结果。
+ */
+async function resolveWithFallback(
+  song: MusicItem,
+  qualityId: string
+): Promise<{ qualityId: string; info: MediaInfoResult }> {
+  const order = qualityFallbackOrder(qualityId, song.qualities)
+  let lastReason = '获取播放链接失败'
+  for (const q of order) {
+    const info = await resolveMediaInfo(song, q)
+    if (info.isSuccess && info.playUrl) return { qualityId: q, info }
+    lastReason = info.rejectReason ?? lastReason
+  }
+  return {
+    qualityId,
+    info: {
+      source: song.type,
+      playUrl: '',
+      expire: 0,
+      isSuccess: false,
+      quality: qualityId,
+      rejectReason: lastReason
+    }
+  }
+}
+
 export function addTask(input: AddDownloadInput): void {
   const { item, subDir = '', trackNumber = 0 } = input
   const isMv = !!input.mvQuality
@@ -269,20 +297,27 @@ async function executeDownload(taskKey: string): Promise<void> {
   }
 
   try {
-    const info = await resolveMediaInfo(song, task.qualityId)
+    const { qualityId: actualQuality, info } = await resolveWithFallback(song, task.qualityId)
     if (!info.isSuccess || !info.playUrl) {
       throw new Error(info.rejectReason ?? '获取播放链接失败')
     }
+    // 自动降级成功：把展示档位与预估大小切到实际下载档。
+    // task.qualityId 保留用户原始选择（taskKey 稳定），重试时仍从原档重新降级。
+    let totalBytes = task.totalBytes
+    if (actualQuality !== task.qualityId) {
+      const q = song.qualities[actualQuality]
+      totalBytes = q?.filesize ?? 0
+      patchTask(taskKey, { qualityName: q?.name ?? actualQuality, totalBytes })
+    }
     const ekey =
       info.encryptionInfo?.isEncrypt && info.encryptionInfo.ekey ? info.encryptionInfo.ekey : null
-    const cipher = info.encryptionInfo?.cipher
 
     const s = getSettings().download
     const dir = task.subDir ? join(defaultDownloadDir(), task.subDir) : defaultDownloadDir()
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
     let baseName = buildFileName(task)
-    const ext = extFor(task.qualityId)
+    const ext = extFor(actualQuality)
     let fileName = `${baseName}${ext}`
     let finalPath = join(dir, fileName)
     const tmpPath = `${finalPath}.tmp`
@@ -299,8 +334,8 @@ async function executeDownload(taskKey: string): Promise<void> {
     if (existsSync(tmpPath)) unlinkSync(tmpPath)
 
     // 流式下载到 .tmp（支持刷新一次播放链接重试）
-    await downloadToFile(taskKey, info.playUrl, tmpPath, task.totalBytes, controller.signal, () =>
-      resolveMediaInfo(song, task.qualityId)
+    await downloadToFile(taskKey, info.playUrl, tmpPath, totalBytes, controller.signal, () =>
+      resolveMediaInfo(song, actualQuality)
     )
 
     // .tmp → 最终文件
@@ -309,7 +344,7 @@ async function executeDownload(taskKey: string): Promise<void> {
 
     // 加密流：原地解密 + 容器嗅探修正扩展名
     if (ekey) {
-      await decryptAudioFile(finalPath, cipher, ekey)
+      await decryptAudioFile(finalPath, ekey)
       const actualExt = sniffAudioExtension(finalPath)
       if (actualExt && !finalPath.toLowerCase().endsWith(actualExt)) {
         const renamed = join(dir, `${baseName}${actualExt}`)
@@ -333,30 +368,65 @@ async function executeDownload(taskKey: string): Promise<void> {
       }
     }
 
-    // 保存 .lrc 歌词文件
-    if (s.saveLrcFile) {
+    // 歌词（写入内嵌标签或保存 .lrc 时获取；失败非致命）
+    const needLyricMeta = s.writeLyricMeta
+    const needLrcFile = s.saveLrcFile
+    let lyricsContent: string | null = null
+    if (needLyricMeta || needLrcFile) {
       try {
-        const lyric = await getSongLyric(song)
-        if (lyric) writeFileSync(join(dir, `${baseName}.lrc`), lyric, 'utf-8')
+        lyricsContent = await getSongLyric(song)
       } catch {
         /* 歌词失败不影响下载 */
       }
     }
 
-    // 整专封面 first-write-wins
-    if (s.saveAlbumCover && task.subDir && task.cover) {
+    // 封面字节（内嵌标签与整专封面文件复用，避免重复下载；失败非致命）
+    let coverBytes: Buffer | null = null
+    if (task.cover) {
+      try {
+        const bytes = await requestBuffer(task.cover)
+        if (bytes.length) coverBytes = bytes
+      } catch {
+        coverBytes = null
+      }
+    }
+
+    // 内嵌标签写入：文件自带标签优先（QQ 解密文件的原容器标签更准），仅补齐缺失字段
+    try {
+      await fillAudioTags(finalPath, {
+        title: task.title,
+        artist: task.artist,
+        album: task.album,
+        ...(task.trackNumber > 0 ? { trackNumber: task.trackNumber } : {}),
+        ...(coverBytes
+          ? { pictureData: coverBytes, pictureMimeType: sniffImageMime(coverBytes) }
+          : {}),
+        ...(needLyricMeta && lyricsContent ? { lyrics: lyricsContent } : {})
+      })
+    } catch (e) {
+      console.warn(`[download] 标签写入失败（非致命）: ${finalPath}`, e)
+    }
+
+    // 保存 .lrc 歌词文件
+    if (needLrcFile && lyricsContent) {
+      try {
+        writeFileSync(join(dir, `${baseName}.lrc`), lyricsContent, 'utf-8')
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // 整专封面 first-write-wins（复用已取回的封面字节）
+    if (s.saveAlbumCover && task.subDir && coverBytes) {
       if (!albumCoverDirs.has(task.subDir)) {
         albumCoverDirs.add(task.subDir)
         try {
-          const bytes = await requestBuffer(task.cover)
-          if (bytes.length) writeFileSync(join(dir, `cover${sniffImageExt(bytes)}`), bytes)
+          writeFileSync(join(dir, `cover${sniffImageExt(coverBytes)}`), coverBytes)
         } catch {
           albumCoverDirs.delete(task.subDir)
         }
       }
     }
-
-    // TODO(增量): 内嵌音频标签写入（title/artist/album/cover/lyric），需 Node 标签库
 
     patchTask(taskKey, {
       status: 'completed',

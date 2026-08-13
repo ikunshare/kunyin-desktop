@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import DetailHeader from '../components/DetailHeader.vue'
 import SongRow from '../components/SongRow.vue'
-import { usePlayerStore } from '../stores/player'
+import { usePlayerStore, type QueueSource } from '../stores/player'
 import { useLibraryStore } from '../stores/library'
 import { getMusicItemKey, type MusicItem } from '@common'
 
@@ -34,8 +34,19 @@ watch(() => library.playlists, reload, { deep: true })
 function isActive(item: MusicItem): boolean {
   return !!player.current && getMusicItemKey(player.current) === getMusicItemKey(item)
 }
+/** 收藏/试听列表作为播放队列来源（trial 单独标识，左栏也能匹配到试听列表） */
+function playSource(): QueueSource | undefined {
+  const id = playlistId.value
+  if (id == null) return undefined
+  return kind.value === 'trial'
+    ? { kind: 'trial', id: String(id), name: '试听列表' }
+    : { kind: 'local', id: String(id), name: '我的收藏' }
+}
+function play(item: MusicItem): void {
+  player.playItem(item, tracks.value, { source: playSource() })
+}
 function playAll(): void {
-  if (tracks.value.length) player.playItem(tracks.value[0], tracks.value)
+  if (tracks.value.length) play(tracks.value[0])
 }
 </script>
 
@@ -49,7 +60,7 @@ function playAll(): void {
         :item="t"
         :index="i"
         :active="isActive(t)"
-        @play="player.playItem(t, tracks)"
+        @play="play(t)"
       />
     </div>
     <div v-else class="empty">{{ kind === 'trial' ? '还没有播放记录' : '还没有收藏的歌曲' }}</div>

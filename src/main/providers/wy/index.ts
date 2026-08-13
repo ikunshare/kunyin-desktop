@@ -8,6 +8,8 @@ import {
   type AlbumInfoResult,
   type AlbumSearchResult,
   type ArtistInfoResult,
+  type ArtistMvItem,
+  type ArtistMvResult,
   type ArtistSearchResult,
   type Lyric,
   type MusicItem,
@@ -204,6 +206,7 @@ export class WyProvider extends BaseProvider {
     if (!head || head.code !== 200) return null
     const a = head.data?.artist
     if (!a?.name) return null
+    const follow = json['/api/artist/follow/count/get']
     return {
       source: 'wy',
       id: artistId,
@@ -211,7 +214,8 @@ export class WyProvider extends BaseProvider {
       cover: a.avatar ?? a.cover,
       description: a.briefDesc,
       songCount: num(a.musicSize, 0),
-      albumCount: num(a.albumSize, 0)
+      albumCount: num(a.albumSize, 0),
+      fansCount: num(follow?.data?.fansCnt, 0)
     }
   }
 
@@ -229,6 +233,78 @@ export class WyProvider extends BaseProvider {
       .filter((x: any): x is NeteaseMusicItem => !!x)
     const result = await this.enrichAll(items)
     return { source: 'wy', hasNext: !!json.more, page, size, result }
+  }
+
+  supportsArtistAlbums(): boolean {
+    return true
+  }
+  supportsArtistMvs(): boolean {
+    return true
+  }
+
+  async getArtistAlbums(artistId: string, page = 0, size = 30): Promise<AlbumSearchResult> {
+    const id = Number(artistId)
+    if (!Number.isFinite(id)) return this.emptyPage(page, size)
+    const json = await eapiPost(`/api/artist/albums/${id}`, {
+      id,
+      offset: page * size,
+      limit: size,
+      total: true
+    }).catch(() => null)
+    if (!json || json.code !== 200) return this.emptyPage(page, size)
+    const total = num(json.artist?.albumSize, 0)
+    const result = (json.hotAlbums ?? [])
+      .map((a: any) => this.parseAlbumEntry(a))
+      .filter((x: any): x is AlbumInfoResult => !!x)
+    return { source: 'wy', hasNext: (page + 1) * size < total, page, size, result }
+  }
+
+  async getArtistMvs(artistId: string, page = 0, size = 40): Promise<ArtistMvResult> {
+    const empty: ArtistMvResult = { source: 'wy', hasNext: false, page, size, total: 0, result: [] }
+    const id = Number(artistId)
+    if (!Number.isFinite(id)) return empty
+    const json = await eapiPost('/api/artist/mvs', {
+      artistId: id,
+      offset: page * size,
+      limit: size,
+      total: true
+    }).catch(() => null)
+    if (!json || json.code !== 200) return empty
+    const result: ArtistMvItem[] = []
+    for (const o of json.mvs ?? []) {
+      if (o?.id == null) continue
+      result.push({
+        source: 'wy',
+        vid: String(o.id),
+        title: o.name ?? '',
+        cover: o.imgurl16v9 ?? o.imgurl ?? '',
+        duration: Math.round(num(o.duration, 0) / 1000),
+        playCount: num(o.playCount, 0),
+        pubTime: Date.parse(o.publishTime ?? '') || 0
+      })
+    }
+    return {
+      source: 'wy',
+      hasNext: !!json.hasMore,
+      page,
+      size,
+      total: num(json.total, 0),
+      result
+    }
+  }
+
+  createMvItem(vid: string, title: string, cover: string): MusicItem {
+    return {
+      type: 'wy',
+      id: 0,
+      title,
+      artist: '',
+      album: '',
+      cover,
+      duration: 0,
+      qualities: { standard: { id: 'standard', name: '标准', filesize: 0, bitrate: 128 } },
+      mvid: vid
+    }
   }
 
   // —— 用户 ——

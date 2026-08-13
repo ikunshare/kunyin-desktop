@@ -6,7 +6,7 @@ import ContextMenu, { type MenuItem } from './ContextMenu.vue'
 import ListAddDialog from './ListAddDialog.vue'
 import QualityDialog from './QualityDialog.vue'
 import RedirectDialog from './RedirectDialog.vue'
-import { PLATFORM_SHORT_TAGS, type MusicItem } from '@common'
+import { PLATFORM_SHORT_TAGS, getSingerRouteId, type MusicItem, type Singer } from '@common'
 import { useLibraryStore } from '../stores/library'
 import { usePlayerStore } from '../stores/player'
 import { useMvStore } from '../stores/mv'
@@ -57,6 +57,20 @@ const redirectDialog = ref(false)
 const menu = ref<{ x: number; y: number } | null>(null)
 const menuItems = ref<MenuItem[]>([])
 
+/** 能跳歌手页的歌手（接口未给 id 的会被过滤掉） */
+function routableSingers(it: MusicItem): Singer[] {
+  return (it.singers ?? []).filter((s) => getSingerRouteId(s, it.type))
+}
+
+/**
+ * 专辑页要用的 id：QQ 的专辑接口只认 albumMid，而 albumId 在 album.id 非 0 时是数字 id，
+ * 直接拿去查会空；其余源用 albumId。
+ */
+function albumRouteId(it: MusicItem): string | undefined {
+  if (it.type === 'qq') return it.albumMid || undefined
+  return it.albumId || undefined
+}
+
 function buildMenu(): MenuItem[] {
   const it = props.item
   const fav = library.isFavorite(it)
@@ -68,8 +82,19 @@ function buildMenu(): MenuItem[] {
   if (props.removableFrom != null)
     items.push({ key: 'remove', label: '从此列表移除', icon: 'trash', divider: true })
   const nav: MenuItem[] = []
-  if (it.albumId) nav.push({ key: 'album', label: '查看专辑', icon: 'library' })
-  if (it.singers?.length) nav.push({ key: 'artist', label: '查看歌手', icon: 'search' })
+  if (albumRouteId(it)) nav.push({ key: 'album', label: '查看专辑', icon: 'library' })
+  // 歌手 id 缺失（部分源接口不给）时不放入口，避免点进空白页；多歌手展开子菜单逐个选
+  const routable = routableSingers(it)
+  if (routable.length === 1) {
+    nav.push({ key: 'artist:0', label: '查看歌手', icon: 'search' })
+  } else if (routable.length > 1) {
+    nav.push({
+      key: 'artist',
+      label: '查看歌手',
+      icon: 'search',
+      children: routable.map((s, i) => ({ key: `artist:${i}`, label: s.name }))
+    })
+  }
   if (it.mvid) nav.push({ key: 'mv', label: '观看 MV', icon: 'video' })
   if (nav.length) {
     nav[0].divider = true
@@ -95,6 +120,20 @@ function openMenu(e: MouseEvent): void {
 
 function onSelect(key: string): void {
   const it = props.item
+  // 「查看歌手」按 artist:<singers 下标> 回传（多歌手子菜单共用一条分支）
+  if (key.startsWith('artist:')) {
+    const list = routableSingers(it)
+    const picked = list[Number(key.slice(7))] ?? list[0]
+    const sid = picked && getSingerRouteId(picked, it.type)
+    if (sid) {
+      void router.push({
+        name: 'artist',
+        params: { artistKey: sid },
+        query: { source: it.type }
+      })
+    }
+    return
+  }
   switch (key) {
     case 'play':
       emit('play')
@@ -108,20 +147,12 @@ function onSelect(key: string): void {
     case 'remove':
       if (props.removableFrom != null) void library.removeFromPlaylist(props.removableFrom, it)
       break
-    case 'album':
-      if (it.albumId)
+    case 'album': {
+      const aid = albumRouteId(it)
+      if (aid)
         void router.push({
           name: 'album',
-          params: { albumKey: it.albumId },
-          query: { source: it.type }
-        })
-      break
-    case 'artist': {
-      const sid = it.singers?.[0]?.singerId
-      if (sid != null)
-        void router.push({
-          name: 'artist',
-          params: { artistKey: String(sid) },
+          params: { albumKey: aid },
           query: { source: it.type }
         })
       break

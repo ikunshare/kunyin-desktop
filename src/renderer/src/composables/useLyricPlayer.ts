@@ -15,7 +15,15 @@ import {
  * 匹配前先剥掉逐字 <...> 标签，否则增强 LRC 会漏过滤。
  */
 const META_CONTENT_RE =
-  /音译标注|音譯標註|由\s*AI\s*工具|AI\s*工具生产|AI\s*工具生產|AI\s*生成|以下.+AI|作[词詞曲]\s*[:：]|作曲\s*[:：]|编曲\s*[:：]|編曲\s*[:：]|填[词詞]\s*[:：]|谱曲\s*[:：]|譜曲\s*[:：]|演唱\s*[:：]|制作人?\s*[:：]|製作人?\s*[:：]|监制\s*[:：]|監制\s*[:：]|词曲\s*[:：]|詞曲\s*[:：]|lyricist\s*[:：]|composer\s*[:：]|arranger\s*[:：]/i
+  /音译标注|音譯標註|由\s*AI\s*工具|AI\s*工具生产|AI\s*工具生產|AI\s*生成|以下.+AI|作[词詞曲]\s*[:：]|作曲\s*[:：]|编曲\s*[:：]|編曲\s*[:：]|填[词詞]\s*[:：]|谱曲\s*[:：]|譜曲\s*[:：]|演唱\s*[:：]|制作人?\s*[:：]|製作人?\s*[:：]|监制\s*[:：]|監制\s*[:：]|词曲\s*[:：]|詞曲\s*[:：]|lyricist\s*[:：]|composer\s*[:：]|arranger\s*[:：]|additional\s+vocal[s]?\s+by\s*[:：]|repertoire\s+owner\s*[:：]/i
+
+/** 中文职务后直接拼英文职务是 QQ/酷狗歌词常见格式，例如「和声Backing Vocals：…」。 */
+const META_CREDIT_PREFIX_RE =
+  /^(?:作[词詞曲]|曲|词|詞|编曲|編曲|填[词詞]|谱曲|譜曲|演唱|制作人?|製作人?|监制|監制|词曲|詞曲|吉他|混音师|混音師|母带后期混音师|母帶後期混音師|和声编写|和聲編寫|和声|和聲|配唱制作人|配唱製作人|录音师|錄音師|人声编辑|人聲編輯|视觉设计|視覺設計|艺人统筹|藝人統籌|推广策划|推廣策劃|特别合作|特別合作|混音棚|录音棚|錄音棚|企划营销|企劃營銷|制作公司|製作公司|蒙古长调|蒙古長調|OP|SP)(?:\s*[A-Za-z][A-Za-z0-9 .&/'’()_-]*)?\s*[:：]/i
+
+function isMetaContent(text: string): boolean {
+  return META_CONTENT_RE.test(text) || META_CREDIT_PREFIX_RE.test(text)
+}
 
 function plainLyricBody(text: string): string {
   return text
@@ -32,13 +40,13 @@ function stripMetaLines(lrc: string): string {
       const m = line.match(/^(\[[^\]]+\])(.*)$/)
       if (!m) {
         const content = plainLyricBody(line)
-        if (content && META_CONTENT_RE.test(content)) return ''
+        if (content && isMetaContent(content)) return ''
         return line
       }
       const [, tag, content] = m
       const text = plainLyricBody(content)
       // 保留时间标签，正文置空，避免 realignByIndex 行数错位
-      if (text && META_CONTENT_RE.test(text)) return tag
+      if (text && isMetaContent(text)) return tag
       return line
     })
     .join('\n')
@@ -91,16 +99,31 @@ function cleanAnnotationTrack(text: string): string {
  */
 export function useLyricPlayer(): {
   element: ShallowRef<HTMLElement>
-  loadLyric: (original: string, translate?: string, roman?: string) => void
+  loadLyric: (
+    original: string,
+    translate?: string,
+    roman?: string,
+    musicInfo?: { name?: string; singer?: string[] }
+  ) => void
   clear: () => void
   play: (ms?: number) => void
   pause: () => void
   seekMs: (ms: number) => void
   setColors: (normal: string, active: string) => void
   setFontFamily: (font: string) => void
+  setPresentation: (opts: {
+    fontSize: number
+    gap: number
+    align: 'left' | 'center' | 'right'
+    scrollAlign: 'top' | 'center'
+    delayScroll: boolean
+    zoomActive: boolean
+  }) => void
   setAnnotationVisible: (opts: { translation?: boolean; romanization?: boolean }) => void
   /** 宿主从 hidden→可见后调用，强制按真实尺寸重排（避免行高测成 0 叠在一起） */
   relayout: () => void
+  /** 歌词引擎当前是否在推进播放（与宿主音频播放状态解耦；桌面歌词据此判断是否需重新 play） */
+  playing: ShallowRef<boolean>
 } {
   const base = new BaseLyricPlayer()
   const dom = new DomLyricPlayer(base)
@@ -206,6 +229,46 @@ export function useLyricPlayer(): {
     else dom.element.style.removeProperty('font-family')
   }
 
+  /** 桌面歌词等紧凑宿主可动态覆盖排版，但不替换逐字动画驱动。 */
+  function setPresentation(opts: {
+    fontSize: number
+    gap: number
+    align: 'left' | 'center' | 'right'
+    scrollAlign: 'top' | 'center'
+    delayScroll: boolean
+    zoomActive: boolean
+  }): void {
+    dom.config.merge({
+      layout: {
+        align: opts.align,
+        gap: Math.max(0, opts.gap)
+      },
+      effect: {
+        scale: {
+          enabled: opts.zoomActive,
+          min: 0.92,
+          max: 1.08
+        }
+      },
+      scroll: {
+        anchor: opts.scrollAlign === 'top' ? 24 : 50,
+        animation: {
+          mode: DomLyricPlayerConfig.Scroll.Animation.Mode.Smooth,
+          duration: opts.delayScroll ? 620 : 360,
+          easing: opts.delayScroll ? 'cubic-bezier(0.22, 1, 0.36, 1)' : 'ease',
+          smooth: { delay: opts.delayScroll ? 100 : 0 }
+        }
+      },
+      line: {
+        normal: {
+          base: {
+            font: { size: Math.max(10, Math.min(80, Math.round(opts.fontSize))) }
+          }
+        }
+      }
+    })
+  }
+
   function setAnnotationVisible(opts: { translation?: boolean; romanization?: boolean }): void {
     const patch: Record<string, unknown> = {}
     if (opts.translation !== undefined) {
@@ -234,6 +297,22 @@ export function useLyricPlayer(): {
 
   const element = shallowRef<HTMLElement>(dom.element)
 
+  /**
+   * 歌词引擎真实播放状态，而非宿主音频状态。
+   * 引擎 `updateLyric()` 内部会 `pause()`、`seekMs` = play+pause，最终都回到暂停；
+   * 只有 `play()` 会推进。桌面歌词用它判断「歌词是否真的在走」——比依赖宿主推送的
+   * playing 可靠：歌词异步拉取期间的中间态（hasLyric=false 但 playing=true）不会误判。
+   */
+  const playing = shallowRef(false)
+  const onEnginePlay = (): void => {
+    playing.value = true
+  }
+  const onEnginePause = (): void => {
+    playing.value = false
+  }
+  base.event.add('play', onEnginePlay)
+  base.event.add('pause', onEnginePause)
+
   function clear(): void {
     base.updateLyric(Lyric.Parsed.makeParsedInfo())
   }
@@ -255,7 +334,12 @@ export function useLyricPlayer(): {
    * 喂增强 LRC（主 + 翻译 + 音译），跑完整 transform 管线后渲染。
    * @param roman 行级或逐字音译；若含时间标签会自动拆成行级 + 逐字挂接
    */
-  function loadLyric(original: string, translate = '', roman = ''): void {
+  function loadLyric(
+    original: string,
+    translate = '',
+    roman = '',
+    musicInfo?: { name?: string; singer?: string[] }
+  ): void {
     if (!original.trim()) {
       clear()
       return
@@ -283,6 +367,7 @@ export function useLyricPlayer(): {
           translate: alignedTranslate,
           roman: alignedRoman
         },
+        musicInfo,
         format: 'lrc'
       }).parse()
       // transform 链（顺序对齐上游 playground buildPipeline）
@@ -330,6 +415,8 @@ export function useLyricPlayer(): {
   }
 
   onUnmounted(() => {
+    base.event.remove('play', onEnginePlay)
+    base.event.remove('pause', onEnginePause)
     dom.destroy()
   })
 
@@ -342,7 +429,9 @@ export function useLyricPlayer(): {
     seekMs,
     setColors,
     setFontFamily,
+    setPresentation,
     setAnnotationVisible,
-    relayout
+    relayout,
+    playing
   }
 }

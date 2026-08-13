@@ -120,6 +120,13 @@ const api: WindowApi = {
     artistInfo: (source, id) => ipcRenderer.invoke(IpcChannels.DISCOVER_ARTIST_INFO, source, id),
     artistSongs: (source, id, page, size) =>
       ipcRenderer.invoke(IpcChannels.DISCOVER_ARTIST_SONGS, source, id, page, size),
+    artistAlbums: (source, id, page, size) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_ARTIST_ALBUMS, source, id, page, size),
+    artistMvs: (source, id, page, size) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_ARTIST_MVS, source, id, page, size),
+    artistCaps: (source) => ipcRenderer.invoke(IpcChannels.DISCOVER_ARTIST_CAPS, source),
+    artistMvItem: (source, vid, title, cover) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_ARTIST_MV_ITEM, source, vid, title, cover),
     searchAlbum: (source, keyword, page, size) =>
       ipcRenderer.invoke(IpcChannels.DISCOVER_SEARCH_ALBUM, source, keyword, page, size),
     searchArtist: (source, keyword, page, size) =>

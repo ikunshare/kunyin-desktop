@@ -4,7 +4,14 @@ import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { useSearchStore, supportedSearchTypes, SEARCH_TYPES } from '../stores/search'
 import { usePlayerStore } from '../stores/player'
-import { PLATFORMS, PLATFORM_NAMES, getMusicItemKey, type MusicSource } from '@common'
+import { useArtistStore } from '../stores/artist'
+import {
+  PLATFORMS,
+  PLATFORM_NAMES,
+  getMusicItemKey,
+  type ArtistInfoResult,
+  type MusicSource
+} from '@common'
 import SongRow from '../components/SongRow.vue'
 import AppTabs from '../components/AppTabs.vue'
 import AppIcon from '../components/AppIcon.vue'
@@ -15,6 +22,7 @@ defineOptions({ name: 'SearchView' })
 const router = useRouter()
 const searchStore = useSearchStore()
 const player = usePlayerStore()
+const artistStore = useArtistStore()
 const {
   source,
   keyword,
@@ -51,8 +59,10 @@ function isActive(item: (typeof results.value)[number]): boolean {
 function openAlbum(id: string): void {
   void router.push({ name: 'album', params: { albumKey: `${source.value}:${id}` } })
 }
-function openArtist(id: string): void {
-  void router.push({ name: 'artist', params: { artistKey: `${source.value}:${id}` } })
+/** 先缓存搜索结果里的歌手信息，详情页进入即可渲染头像/名称，不必空等接口 */
+function openArtist(a: ArtistInfoResult): void {
+  artistStore.cachePreview(a)
+  void router.push({ name: 'artist', params: { artistKey: `${source.value}:${a.id}` } })
 }
 
 const showBlank = computed(
@@ -92,13 +102,14 @@ watch(source, () => {
       <!-- 单曲结果 -->
       <template v-else-if="searchType === 'song'">
         <div v-if="results.length" class="list">
+          <!-- 试听模型：该曲进试听列表，队列 = 整个试听列表（不变成搜索结果，也不单曲循环） -->
           <SongRow
             v-for="(item, i) in results"
             :key="getMusicItemKey(item)"
             :item="item"
             :index="i"
             :active="isActive(item)"
-            @play="player.playItem(item, results, { trackTrial: true })"
+            @play="player.playInTrial(item)"
           />
         </div>
         <div v-else-if="keyword" class="empty">未找到「{{ keyword }}」相关歌曲</div>
@@ -128,7 +139,7 @@ watch(source, () => {
       <!-- 歌手结果（Android ArtistSearchResultsList：圆形头像 + 名称 + N张专辑 · M首） -->
       <template v-else>
         <div v-if="artistResults.length" class="card-list">
-          <button v-for="a in artistResults" :key="a.id" class="card-row" @click="openArtist(a.id)">
+          <button v-for="a in artistResults" :key="a.id" class="card-row" @click="openArtist(a)">
             <img
               v-if="a.cover"
               class="cover round"
@@ -179,10 +190,12 @@ watch(source, () => {
         </dl>
         <dl v-if="history.length" class="group">
           <dt class="group-title">
-            <span>搜索历史</span>
-            <button class="clear" title="清空历史" @click="searchStore.clearHistory()">
-              <AppIcon name="eraser" :size="15" />
-            </button>
+            <span class="title">
+              搜索历史
+              <button class="clear" title="清空搜索历史" @click="searchStore.clearHistory()">
+                <AppIcon name="trash" :size="15" />
+              </button>
+            </span>
           </dt>
           <dd class="group-body">
             <button
@@ -315,14 +328,20 @@ watch(source, () => {
   font-weight: 600;
   color: var(--color-font);
 }
+.title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .clear {
   display: flex;
   color: var(--color-font-label);
-  opacity: 0.3;
+  opacity: 0.45;
   transition: opacity 0.2s ease;
 }
 .clear:hover {
-  opacity: 0.8;
+  opacity: 1;
+  color: var(--color-font);
 }
 .group-body {
   margin: 0;

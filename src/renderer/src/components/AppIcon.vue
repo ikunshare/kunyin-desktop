@@ -106,7 +106,10 @@ const ICONS: Record<string, IconDef> = {
     inner: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'
   },
   // 刷新/更新：环形箭头
-  refresh: { inner: '<path d="M20 5v5h-5"/><path d="M19.4 13.5A7.5 7.5 0 1 1 18 7.2l2 2.8"/>' }
+  refresh: {
+    inner: '<path d="M20 5v5h-5"/><path d="M19.4 13.5A7.5 7.5 0 1 1 18 7.2l2 2.8"/>'
+  },
+  info: { inner: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7h.01"/>' }
 }
 
 const props = withDefaults(defineProps<{ name: string; size?: number }>(), { size: 20 })

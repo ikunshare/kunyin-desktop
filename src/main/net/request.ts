@@ -1,3 +1,5 @@
+import { net } from 'electron'
+
 /**
  * 主进程 HTTP 请求封装（音源用）。
  *
@@ -47,7 +49,7 @@ export async function requestRaw(url: string, options: RequestOptions = {}): Pro
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), options.timeout ?? 15000)
   try {
-    return await fetch(buildUrl(url, options.query), {
+    return await net.fetch(buildUrl(url, options.query), {
       method: options.method ?? 'GET',
       headers,
       body,
@@ -56,6 +58,66 @@ export async function requestRaw(url: string, options: RequestOptions = {}): Pro
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** net.request 的原始响应（能读到 set-cookie；net.fetch 的 Response 会把它当作 forbidden 头过滤掉） */
+export interface RawNodeResponse {
+  status: number
+  headers: Record<string, string | string[]>
+  body: Buffer
+}
+
+/**
+ * 用 net.request（Node 风格）发请求并读回响应头与完整 body。
+ * 与 requestRaw 不同：走 Electron net.request，`set-cookie` 以数组形式保留在 headers 里
+ * （Electron 文档明确 set-cookie 恒为数组），供需要登录 cookie 的接口用。同样遵循 session 代理。
+ */
+export async function requestRawWithHeaders(
+  url: string,
+  options: RequestOptions = {}
+): Promise<RawNodeResponse> {
+  const headers: Record<string, string> = { 'User-Agent': DEFAULT_UA, ...options.headers }
+  if (options.cookie) headers['Cookie'] = options.cookie
+
+  let body: string | undefined
+  if (options.body != null) {
+    if (typeof options.body === 'string') {
+      body = options.body
+    } else if (options.body instanceof URLSearchParams) {
+      body = options.body.toString()
+    } else {
+      body = JSON.stringify(options.body)
+      headers['Content-Type'] ??= 'application/json'
+    }
+  }
+
+  return await new Promise<RawNodeResponse>((resolve, reject) => {
+    const req = net.request({
+      method: options.method ?? 'GET',
+      url: buildUrl(url, options.query)
+    })
+    for (const [k, v] of Object.entries(headers)) req.setHeader(k, v)
+
+    const timer = setTimeout(() => req.abort(), options.timeout ?? 15000)
+    req.on('response', (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (c: Buffer) => chunks.push(c))
+      res.on('end', () => {
+        clearTimeout(timer)
+        resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) })
+      })
+      res.on('error', (e: Error) => {
+        clearTimeout(timer)
+        reject(e)
+      })
+    })
+    req.on('error', (e: Error) => {
+      clearTimeout(timer)
+      reject(e)
+    })
+    if (body != null) req.write(body)
+    req.end()
+  })
 }
 
 export async function requestJson<T>(url: string, options: RequestOptions = {}): Promise<T> {

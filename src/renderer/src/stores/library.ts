@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { LocalPlaylist, MusicItem } from '@common'
+import { usePlayerStore } from './player'
 
 /**
  * 本地曲库状态（收藏 / 试听「最近播放」/ 自建歌单）。
@@ -82,6 +83,8 @@ export const useLibraryStore = defineStore('library', () => {
 
   async function removeFromPlaylist(playlistId: number, item: MusicItem): Promise<void> {
     await window.api.library.removeFromPlaylist(playlistId, plain(item))
+    // 从列表删除的歌同步移出播放队列（含正在播放的这首），避免还能切回已删歌曲
+    usePlayerStore().removeFromQueue(plain(item))
   }
 
   async function playlistSongs(playlistId: number): Promise<MusicItem[]> {

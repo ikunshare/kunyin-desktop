@@ -10,13 +10,12 @@
  * - app ready 后调 installAudioProtocol()（挂 handler）；
  * - 业务侧 registerAudioStream(spec) 拿 `kunyin://stream/<token>` 喂 <audio>。
  */
-import { protocol, net, session } from 'electron'
+import { protocol, net } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { createReadStream, statSync } from 'node:fs'
 import { extname } from 'node:path'
 import { Readable } from 'node:stream'
-import type { AudioCipher } from '@common'
-import { cipherHeaderSize, createAudioDecryptor, type AudioDecryptor } from '../crypto/decryptor'
+import { createAudioDecryptor, type AudioDecryptor } from '../crypto/decryptor'
 
 export interface AudioStreamSpec {
   /** 远程直链；与 filePath 二选一 */
@@ -25,9 +24,8 @@ export interface AudioStreamSpec {
   filePath?: string
   /** 上游请求头（Referer/UA/Cookie 等） */
   headers?: Record<string, string>
-  /** 加密流的 ekey，非空时边下边解密（算法由 cipher 指定，缺省 QQ mflac） */
+  /** 加密流的 ekey，非空时边下边解密（QQ mflac/mgg QMC2） */
   ekey?: string
-  cipher?: AudioCipher
   contentType?: string
 }
 
@@ -57,6 +55,7 @@ function serveLocalFile(filePath: string, range: string | null): Response {
   let end = size - 1
   let status = 200
   const headers = new Headers({
+    'Access-Control-Allow-Origin': '*',
     'Accept-Ranges': 'bytes',
     'Content-Type': mime
   })
@@ -89,7 +88,7 @@ const registry = new Map<string, AudioStreamSpec>()
  * 没有它的话：上游 CDN 挂住连接却不响应时 net.fetch 的 await 永不落地，
  * handler 永不返回，DevTools 里那条请求就永远停在「待处理」，播放彻底卡死。
  */
-const UPSTREAM_HEADER_TIMEOUT = 15_000
+const UPSTREAM_HEADER_TIMEOUT = 20_000
 
 /**
  * 快速失败且值得重试的网络错误：多见于 VPN/代理切换节点、Wi-Fi 切换的瞬间，
@@ -113,26 +112,28 @@ class HeaderTimeoutError extends Error {
   }
 }
 
-/**
- * 清空 session 连接池——等价于「重启应用」对网络栈的那部分效果。
- * 网络切换（VPN 换节点/切 Wi-Fi）后，池里残留的半死连接会占满对同一 CDN 域名的并发额度，
- * 新请求排队等不到 socket，表现为清一色的响应头超时，且不重启不会自愈。
- * 多路流同时超时会并发触发清池，这里合并成一次——否则 A 的清池会把 B 刚发出的重试也杀掉。
- */
-let flushPromise: Promise<void> | null = null
-let lastFlushAt = 0
-function flushConnectionPool(): Promise<void> {
-  const now = Date.now()
-  if (flushPromise && now - lastFlushAt < 5_000) return flushPromise
-  lastFlushAt = now
-  flushPromise = session.defaultSession.closeAllConnections()
-  return flushPromise
-}
-
 function isRetryable(e: unknown): boolean {
   if (e instanceof HeaderTimeoutError) return true
   const msg = e instanceof Error ? e.message : String(e)
   return RETRYABLE_NET_ERRORS.some((code) => msg.includes(code))
+}
+
+/**
+ * QQ 下发的加密音频地址仍常是 http://music.tc.qq.com。
+ * 该域名的 HTTP 路由可能优先命中不可用的 IPv6 CDN 节点，表现为连接建立后长期收不到响应头；
+ * 同一资源走 HTTPS 会重新选路且 QQ CDN 原生支持 Range，因此在进入解密代理前统一升级。
+ */
+function normalizeUpstreamUrl(raw: string): string {
+  try {
+    const url = new URL(raw)
+    if (url.protocol === 'http:' && /(^|\.)music\.tc\.qq\.com$/i.test(url.hostname)) {
+      url.protocol = 'https:'
+      return url.toString()
+    }
+  } catch {
+    // 非法 URL 交给 net.fetch 按原错误处理
+  }
+  return raw
 }
 
 /**
@@ -189,25 +190,6 @@ function decryptStream(
   return src.pipeThrough(transform)
 }
 
-/** 丢弃流的前 n 字节（上游无视 Range 回全量 200 时，用来手工剥伪造头） */
-function dropBytesStream(src: ReadableStream<Uint8Array>, n: number): ReadableStream<Uint8Array> {
-  let remaining = n
-  const transform = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      if (remaining > 0) {
-        if (chunk.length <= remaining) {
-          remaining -= chunk.length
-          return
-        }
-        chunk = chunk.subarray(remaining)
-        remaining = 0
-      }
-      controller.enqueue(chunk)
-    }
-  })
-  return src.pipeThrough(transform)
-}
-
 /** 必须在 app ready 前调用：把 scheme 注册为特权（支持流 + fetch + 视为安全上下文）。 */
 export function registerAudioScheme(): void {
   protocol.registerSchemesAsPrivileged([
@@ -247,16 +229,8 @@ export function installAudioProtocol(): void {
     if (!spec.url) return new Response(null, { status: 404 })
 
     const headers: Record<string, string> = { 'User-Agent': 'Mozilla/5.0', ...(spec.headers ?? {}) }
-    // 加密流可能带伪造头（Spotify 0xa7，见 crypto/aesctr.ts）：上游 Range 与解密偏移整体
-    // 平移 skip 字节，呈现给渲染层的始终是剥头后的真实音频坐标
-    const skip = spec.ekey ? cipherHeaderSize(spec.cipher) : 0
     let upstreamStart = 0
-    if (skip > 0) {
-      const m = range ? /bytes=(\d+)-(\d*)/.exec(range) : null
-      upstreamStart = (m ? parseInt(m[1], 10) : 0) + skip
-      const end = m && m[2] ? String(parseInt(m[2], 10) + skip) : ''
-      headers['Range'] = `bytes=${upstreamStart}-${end}`
-    } else if (range) {
+    if (range) {
       upstreamStart = parseRangeStart(range)
       headers['Range'] = range
     }
@@ -274,11 +248,10 @@ export function installAudioProtocol(): void {
         console.error('[audio] 上游取流失败', spec.url, e)
         return new Response(null, { status: 502 })
       }
-      // 网络切换/半死连接：清掉连接池（等价重启对网络栈的效果）后原地重试一次。
-      // 以前这里直接报 504/502，用户只能靠重启调试自救。
-      console.warn('[audio] 网络抖动，清连接池后重试', (e as Error)?.message ?? e)
+      // 仅重试当前请求。不能 closeAllConnections()：它会把正在播放或刚切换的其他歌曲
+      // 一并中止，制造与真实网络故障无关的 net::ERR_ABORTED。
+      console.warn('[audio] 上游取流失败，等待后重试', (e as Error)?.message ?? e)
       try {
-        await flushConnectionPool()
         await sleep(NET_RETRY_DELAY)
         upstream = await fetchUpstreamOnce(spec.url, headers, request.signal)
       } catch (e2) {
@@ -298,6 +271,7 @@ export function installAudioProtocol(): void {
     }
 
     const out = new Headers()
+    out.set('Access-Control-Allow-Origin', '*')
     out.set('Accept-Ranges', 'bytes')
     out.set(
       'Content-Type',
@@ -305,39 +279,15 @@ export function installAudioProtocol(): void {
     )
     const cl = upstream.headers.get('content-length')
     const cr = upstream.headers.get('content-range')
-    let status = upstream.status
-    if (skip > 0) {
-      // 坐标平移回「剥头后」：206 的区间与总量都减 skip；200（Range 被无视）减手工剥掉的字节
-      if (cl) {
-        const n = Number(cl) - (upstream.status === 200 ? upstreamStart : 0)
-        if (n > 0) out.set('Content-Length', String(n))
-      }
-      if (upstream.status === 206 && cr) {
-        const m = /bytes (\d+)-(\d+)\/(\d+|\*)/.exec(cr)
-        if (m) {
-          const total = m[3] === '*' ? '*' : String(Number(m[3]) - skip)
-          out.set('Content-Range', `bytes ${Number(m[1]) - skip}-${Number(m[2]) - skip}/${total}`)
-        }
-        if (!range) {
-          // 渲染层没发 Range（要整文件）：我们的剥头 Range 是内部细节，对外回落为 200
-          out.delete('Content-Range')
-          status = 200
-        }
-      }
-    } else {
-      if (cl) out.set('Content-Length', cl)
-      if (cr) out.set('Content-Range', cr)
-    }
+    const status = upstream.status
+    if (cl) out.set('Content-Length', cl)
+    if (cr) out.set('Content-Range', cr)
 
-    const decryptor = spec.ekey ? createAudioDecryptor(spec.cipher, spec.ekey) : null
+    const decryptor = spec.ekey ? createAudioDecryptor(spec.ekey) : null
     if (spec.ekey && !decryptor) {
       console.warn('[audio] ekey 流暂无解密器，透传（播放将异常）')
     }
     let body: ReadableStream<Uint8Array> = upstream.body
-    // 上游无视 Range 回了全量 200：手工剥掉 upstreamStart 之前的密文（解密偏移相应对齐）
-    if (skip > 0 && upstream.status === 200 && upstreamStart > 0) {
-      body = dropBytesStream(body, upstreamStart)
-    }
     if (decryptor) body = decryptStream(body, decryptor, upstreamStart)
 
     return new Response(body as BodyInit, { status, headers: out })
@@ -355,6 +305,6 @@ export function registerAudioStream(spec: AudioStreamSpec): string {
     registry.delete(oldest)
   }
   const token = randomBytes(8).toString('hex')
-  registry.set(token, spec)
+  registry.set(token, spec.url ? { ...spec, url: normalizeUpstreamUrl(spec.url) } : spec)
   return `${SCHEME}://stream/${token}`
 }

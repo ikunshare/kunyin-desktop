@@ -25,6 +25,17 @@
   // Cancel the inner word's emphasize padding at the line footprint (keeps layout put), then add the per-word gap when annotation rows are present.
   margin: calc(-1 * var(--emphasize-padding-vertical))
     calc(var(--word-gap) - var(--emphasize-padding-horizontal));
+
+  // [vendor patch] 首尾词去掉外侧 gap margin：`--word-gap` 是给相邻词之间留拼音间隙的，
+  // 首尾词的外侧本没有邻居，却在每个 cell 左右各加了 gap/2，把主行整体往右推
+  // （gap=4 时第一个字比翻译行右移 2px），翻译行显得偏左。去掉后主行/逐字音译/翻译
+  // 共享同一左边缘。相邻词之间的间距（两侧 margin 之和 = gap）不受影响。
+  &:first-child {
+    margin-left: 0;
+  }
+  &:last-child {
+    margin-right: 0;
+  }
 }
 
 .annotation-row {

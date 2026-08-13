@@ -27,17 +27,12 @@ export interface MusicListResult {
 
 /**
  * 加密信息 —— 加密音源播放的核心载体。
- * ekey 非空且 isEncrypt 时，客户端需边下边解密（QQ mflac/mgg、Spotify AES-128-CTR 等）。
+ * ekey 非空且 isEncrypt 时，客户端需边下边解密（QQ mflac/mgg QMC2）。
+ * 算法固定为 mflac（Spotify 及其 AES-128-CTR 已移除）。
  */
-
-/** 音频流加密算法（决定客户端用哪个解密器）：QQ mflac/mgg QMC2 / Spotify AES-128-CTR */
-export type AudioCipher = 'mflac' | 'aes-ctr'
-
 export interface EncryptionInfo {
   isEncrypt: boolean
   ekey?: string
-  /** 缺省视为 'mflac'（兼容既有 QQ 流） */
-  cipher?: AudioCipher
 }
 
 /** 播放地址解析结果（对应 MediaInfoResult） */
@@ -87,8 +82,14 @@ export interface AlbumInfoResult {
   name: string
   cover?: string
   artist?: string
+  /** 归属歌手 id（歌手页专辑列表可回跳） */
+  artistId?: string
   publishTime?: string
   description?: string
+  /** 唱片公司 */
+  company?: string
+  /** 专辑类型（EP/单曲/录音室专辑等，歌手页专辑列表副标题用） */
+  subType?: string
   total?: number
 }
 
@@ -101,6 +102,8 @@ export interface ArtistInfoResult {
   description?: string
   songCount?: number
   albumCount?: number
+  /** 粉丝数；0 或缺省时头部不显示粉丝行（仅 wy 有真实值） */
+  fansCount?: number
 }
 
 /** 分页搜索结果（歌单 / 专辑 / 歌手） */
@@ -126,6 +129,34 @@ export interface ArtistSearchResult {
   page: number
   size: number
   result: ArtistInfoResult[]
+}
+
+/** 歌手 MV 列表条目（对应 Android ArtistMvItem）。vid 用于复用 MvUrlResult 取流播放。 */
+export interface ArtistMvItem {
+  source: MusicSource
+  vid: string
+  title: string
+  cover: string
+  /** 时长（秒，与安卓一致；0 表示未知） */
+  duration?: number
+  playCount?: number
+  /** 发布时间戳（毫秒，0 表示未知） */
+  pubTime?: number
+}
+
+export interface ArtistMvResult {
+  source: MusicSource
+  hasNext: boolean
+  page: number
+  size: number
+  total: number
+  result: ArtistMvItem[]
+}
+
+/** 歌手页 Tab 可用性（对应 Android supportsArtistAlbums/supportsArtistMvs） */
+export interface ArtistCapabilities {
+  albums: boolean
+  mvs: boolean
 }
 
 /** MV 音质档（对应 Android MvQuality） */

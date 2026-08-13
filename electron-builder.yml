@@ -2,6 +2,11 @@ appId: com.ikunshare.sound
 productName: 坤音
 directories:
   buildResources: build
+# 只保留中英文 locale，其余 53 个 Chromium 语言包(~42M)不打包
+electronLanguages:
+  - zh-CN
+  - en-US
+afterPack: scripts/afterPack.js
 files:
   - '!**/.vscode/*'
   - '!src/*'
@@ -9,6 +14,12 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!dist/**'
+  # better-sqlite3 瘦身：运行时只加载 prebuilds/win32-x64.node
+  - '!node_modules/better-sqlite3/deps/**'
+  - '!node_modules/better-sqlite3/src/**'
+  - '!node_modules/better-sqlite3/build/**'
+  - '!node_modules/better-sqlite3/prebuilds/{darwin-arm64,darwin-x64,linux-arm64,linux-x64,linuxmusl-arm64,linuxmusl-x64,win32-arm64}.node'
 asarUnpack:
   - resources/**
 win:
@@ -19,8 +30,17 @@ nsis:
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+  createStartMenuShortcut: true
+  # 向导式安装：允许用户选择安装目录（非一键安装）
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # 按用户安装，免管理员权限（默认 false，显式声明）
+  perMachine: false
   installerIcon: resources/icons/icon.ico
   uninstallerIcon: resources/icons/icon.ico
+  installerLanguages:
+    - zh_CN
+    - en_US
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:

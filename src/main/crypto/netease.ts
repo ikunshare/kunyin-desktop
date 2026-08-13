@@ -5,7 +5,7 @@
  */
 import { createCipheriv, createHash, randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { requestJson, requestRaw } from '../net/request'
+import { requestJson, requestRawWithHeaders } from '../net/request'
 import { appDataPath } from '../core/paths'
 
 const EAPI_KEY = 'e82ckenh8dichen8'
@@ -126,29 +126,31 @@ export function extractMusicU(cookie: string): string | null {
   return m ? m[1] : null
 }
 
-/** eapi 请求（返回 body JSON + 原始 Response，供需要读 Set-Cookie 的登录轮询用）。 */
+/** eapi 请求（返回 body JSON + 响应 Set-Cookie，供需要读登录 cookie 的轮询用）。 */
 export async function eapiPostRaw<T = any>(
   path: string,
   data: unknown,
   musicU?: string
-): Promise<{ json: T; resp: Response }> {
+): Promise<{ json: T; setCookie: string[] }> {
   const header = buildEapiHeader(musicU)
   const base = typeof data === 'string' ? JSON.parse(data) : { ...(data as object) }
   const params = JSON.stringify({ ...base, header })
   const digest = md5Hex(`nobody${path}use${params}md5forencrypt`)
   const payload = `${path}-36cd479b6b5-${params}-36cd479b6b5-${digest}`
   const enc = aesEcb(payload, EAPI_KEY).toString('hex').toUpperCase()
-  const url = `https://interface.music.163.com/eapi${path.replace(/^\/api/, '')}`
+  const url = `https://interface3.music.163.com/eapi${path.replace(/^\/api/, '')}`
   const cookie = Object.entries(header)
     .map(([k, v]) => `${k}=${v}`)
     .join('; ')
-  const resp = await requestRaw(url, {
+  const resp = await requestRawWithHeaders(url, {
     method: 'POST',
     headers: { ...EAPI_HEADERS, 'Content-Type': FORM, Cookie: cookie },
     body: `params=${enc}`
   })
-  const json = (await resp.json()) as T
-  return { json, resp }
+  const json = JSON.parse(resp.body.toString('utf-8')) as T
+  const sc = resp.headers['set-cookie']
+  const setCookie = Array.isArray(sc) ? sc : sc ? [sc] : []
+  return { json, setCookie }
 }
 
 /** eapi 请求。path 为带 /api 的完整内部路径。 */

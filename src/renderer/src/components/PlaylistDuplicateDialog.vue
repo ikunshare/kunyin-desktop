@@ -61,7 +61,8 @@ function fmt(ms: number): string {
 }
 
 function play(item: MusicItem): void {
-  player.playItem(item, [item])
+  // 队列压缩成单曲，标记为临时单曲队列（不属于任何列表，列表页不显示「正在播放」标记）
+  player.playItem(item, [item], { source: { kind: 'single' } })
 }
 
 const busyKey = ref('')

@@ -37,6 +37,7 @@ if (initialAppearance) {
 }
 
 const app = createApp(App).use(createPinia()).use(router)
+
 // 恢复上次停留的页面（在挂载前排队导航，router.isReady 会以它为准）
 const lastRoute = getLastRoute()
 if (lastRoute) void router.replace(lastRoute)

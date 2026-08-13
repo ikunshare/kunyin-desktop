@@ -7,7 +7,7 @@
 
 /** 音源标识（反序列化分发用）。注意：与后端 getUrl 的 platform 名不同，映射见 crypto/请求层。
  * `local` 为本地文件（不走任何 Provider / 后端），仅出现在歌单里。 */
-export type MusicSource = 'wy' | 'qq' | 'kg' | 'kw' | 'joox' | 'sp' | 'local'
+export type MusicSource = 'wy' | 'qq' | 'kg' | 'kw' | 'joox' | 'local'
 
 /** 跨平台统一的音质键 */
 export type QualityId = '128k' | '320k' | 'flac' | 'hires' | 'master' | 'atmos' | 'atmos_plus'
@@ -29,8 +29,18 @@ export interface Quality {
 export interface Singer {
   name: string
   headimg?: string
+  /** 数值歌手 id；0 表示接口未给（此时无法跳歌手页） */
   singerId: number
   extra?: string
+}
+
+/**
+ * 取跳歌手页要用的 id：QQ 的歌手接口只认 singerMid（存在 extra），其余源用数值 id。
+ * 返回 null 表示该歌手无法定位（菜单里就不该给入口）。
+ */
+export function getSingerRouteId(singer: Singer, source: MusicSource): string | null {
+  if (source === 'qq') return singer.extra || null
+  return singer.singerId > 0 ? String(singer.singerId) : null
 }
 
 /** 各平台歌曲的公共字段（对应 MusicItem 抽象基类） */
@@ -94,30 +104,22 @@ export interface LocalMusicItem extends BaseMusicItem {
 }
 
 /**
- * Spotify（自建后端 /music/* 中转）。sid 为真实曲目 id（base62 字符串），
- * id 仅为凑 BaseMusicItem 数值身份的 sid 哈希——唯一性以 sid 为准（见 getMusicItemKey）。
+ * 本地文件（「添加本地歌曲」导入）。id 为文件路径哈希（确定性，重复导入自动去重）。
  */
-export interface SpotifyMusicItem extends BaseMusicItem {
-  type: 'sp'
-  sid: string
+export interface LocalMusicItem extends BaseMusicItem {
+  type: 'local'
+  filePath: string
 }
 
 export type MusicItem =
-  | NeteaseMusicItem
-  | QQMusicItem
-  | KugouMusicItem
-  | KuwoMusicItem
-  | JooxMusicItem
-  | SpotifyMusicItem
-  | LocalMusicItem
+  NeteaseMusicItem | QQMusicItem | KugouMusicItem | KuwoMusicItem | JooxMusicItem | LocalMusicItem
 
-/** 唯一键：一般为 `type_id`，酷狗优先 `kg_hash`，Spotify 用 `sp_sid`（id 只是 sid 的哈希）。 */
+/** 唯一键：一般为 `type_id`，酷狗优先 `kg_hash`。 */
 export function getMusicItemKey(item: MusicItem): string {
   if (item.type === 'kg' && item.hash) return `kg_${item.hash}`
   // 酷狗歌词直链重定向目标（RedirectDialog buildKgTarget）没有 hash 且 id 恒为 0，
   // 不区分会让所有此类目标共享 `kg_0` 一个键（歌词缓存互相串）；用 downloadId 区分
   if (item.type === 'kg' && item.lyricDownloadId) return `kg_lyric_${item.lyricDownloadId}`
-  if (item.type === 'sp') return `sp_${item.sid}`
   return `${item.type}_${item.id}`
 }
 

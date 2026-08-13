@@ -4,21 +4,47 @@
  * 公开接口用 kgSign 签名；search 无签名。播放走后端 getUrl（platform=kugou, musicId=hash 小写）。
  * 登录链（歌单/用户）依赖 native KgCrypto，暂缓。歌词见 lyric.ts（Task 19）。
  */
+import { createHash } from 'node:crypto'
 import {
   type AlbumInfoResult,
   type AlbumSearchResult,
   type ArtistInfoResult,
+  type ArtistMvItem,
+  type ArtistMvResult,
   type ArtistSearchResult,
   type KugouMusicItem,
   type Lyric,
   type MusicItem,
-  type MusicListResult
+  type MusicListResult,
+  type MvQuality,
+  type MvUrlResult
 } from '@common'
 import { BaseProvider } from '../base'
 import { requestJson } from '../../net/request'
-import { nowSec, signedQuery } from './sign'
+import { kgSign, nowSec, signedQuery } from './sign'
 import { cleanText, num, parseKgAlbumSong, parseKgAuthorSong, parseSearchItem } from './item'
 import { getKgLyric } from './lyric'
+
+/** MV 接口的固定设备指纹（移植自 KgProvider，仅上报用） */
+const KG_MV_MID = '77752093425314814852697061885572080940'
+const KG_MV_DFID = '08TyVG0PFspm0LUMKk2uOiI1'
+const KG_MV_UUID = '6d107aa2f28fa7dbef52d223156d79a1'
+
+function md5Hex(text: string): string {
+  return createHash('md5').update(text, 'utf-8').digest('hex')
+}
+
+/** 字节 → MB/GB 显示（MV 音质档用）。 */
+function kgFormatSize(bytes: number): string {
+  const mb = bytes / 1024 / 1024
+  return mb >= 1024 ? `${(mb / 1024).toFixed(2)}GB` : `${mb.toFixed(1)}MB`
+}
+
+/** 清洗发行日期：`0000-…` 占位与空值归一为 undefined。 */
+function kgDate(raw: unknown): string | undefined {
+  const s = typeof raw === 'string' ? raw.trim().slice(0, 10) : ''
+  return s && !s.startsWith('0000') ? s : undefined
+}
 
 export class KgProvider extends BaseProvider {
   readonly source = 'kg' as const
@@ -188,6 +214,193 @@ export class KgProvider extends BaseProvider {
       songCount: num(info.singer_info?.songcount ?? data.total, 0),
       albumCount: num(info.singer_info?.albumcount, 0)
     }
+  }
+
+  supportsArtistAlbums(): boolean {
+    return true
+  }
+  supportsArtistMvs(): boolean {
+    return true
+  }
+
+  async getArtistAlbums(artistId: string, page = 0, size = 30): Promise<AlbumSearchResult> {
+    const params = {
+      appid: '1005',
+      area_code: '1',
+      category: '1',
+      clienttime: nowSec(),
+      clientver: '20669',
+      dfid: '-',
+      mid: '-',
+      page: String(page + 1),
+      pagesize: String(size),
+      plat: '1',
+      show_album_tag: '0',
+      singerid: String(artistId),
+      token: '',
+      userid: '0',
+      uuid: '-',
+      version: '20669'
+    }
+    const json = await requestJson<any>(
+      `https://gateway.kugou.com/ocean/v6/singer/album?${signedQuery(params)}`
+    ).catch(() => null)
+    if (!json || json.status !== 1) return this.emptyPage(page, size)
+    const total = num(json.data?.total, 0)
+    const result: AlbumInfoResult[] = []
+    for (const o of json.data?.info ?? []) {
+      const albumId = num(o?.albumid, 0)
+      if (!albumId || !o?.albumname) continue
+      result.push({
+        source: 'kg',
+        id: String(albumId),
+        name: cleanText(o.albumname),
+        cover: o.imgurl ? String(o.imgurl).replace('{size}', '480') : undefined,
+        artist: o.singername ? cleanText(o.singername) : undefined,
+        artistId: o.singerid != null ? String(o.singerid) : undefined,
+        publishTime: kgDate(o.publishtime),
+        total: num(o.songcount, 0)
+      })
+    }
+    return { source: 'kg', hasNext: (page + 1) * size < total, page, size, result }
+  }
+
+  async getArtistMvs(artistId: string, page = 0, size = 40): Promise<ArtistMvResult> {
+    const params = {
+      appid: '1005',
+      author_id: String(artistId),
+      clienttime: nowSec(),
+      clientver: '20669',
+      dfid: '-',
+      mid: '-',
+      page: String(page + 1),
+      pagesize: String(size),
+      tag_idx: '',
+      uuid: '-'
+    }
+    const json = await requestJson<any>(
+      `https://openapicdnretry.kugou.com/kmr/v1/author/videos?${signedQuery(params)}`
+    ).catch(() => null)
+    if (!json || json.status !== 1) {
+      return { source: 'kg', hasNext: false, page, size, total: 0, result: [] }
+    }
+    const total = num(json.total, 0)
+    const result: ArtistMvItem[] = []
+    for (const o of json.data ?? []) {
+      const vid = o?.video_id != null ? String(o.video_id).trim() : ''
+      if (!vid || vid === '0') continue
+      result.push({
+        source: 'kg',
+        vid,
+        title: o.video_name ?? '',
+        cover: o.hdpic ? String(o.hdpic).replace('{size}', '480') : '',
+        duration: num(o.timelength, 0),
+        playCount: num(o.history_heat, 0),
+        pubTime: Date.parse(String(o.publish_date ?? '').slice(0, 10)) || 0
+      })
+    }
+    return { source: 'kg', hasNext: (page + 1) * size < total, page, size, total, result }
+  }
+
+  createMvItem(vid: string, title: string, cover: string): MusicItem {
+    return {
+      type: 'kg',
+      id: 0,
+      title,
+      artist: '',
+      album: '',
+      cover,
+      duration: 0,
+      qualities: { '128k': { id: '128k', name: '普通音质 128K', filesize: 0, bitrate: 128 } },
+      hash: '',
+      mvid: vid
+    }
+  }
+
+  // —— MV ——（移植 KgProvider.getMvQualities/getMvUrl：union_mv_play 取 h265 各档 hash）
+  /** 拉 MV 各清晰度的 hash/filesize（h265 节点）；失败返回 null。 */
+  private async fetchMvInfo(videoId: string): Promise<any | null> {
+    const time = nowSec()
+    const body = `{"data":[{"video_id":${JSON.stringify(videoId)}}]}`
+    const params = {
+      appid: '1005',
+      clienttime: time,
+      clientver: '20609',
+      dfid: KG_MV_DFID,
+      mid: KG_MV_MID,
+      token: '',
+      userid: '0',
+      uuid: KG_MV_UUID
+    }
+    // 该接口的 signature 把 POST body 也计入摘要，故不能走 signedQuery
+    const signature = kgSign(params, body)
+    const url =
+      `https://gateway.kugou.com/openapi/v1/unique/union_mv_play?` +
+      `clientver=20609&userid=0&mid=${KG_MV_MID}&dfid=${KG_MV_DFID}&uuid=${KG_MV_UUID}` +
+      `&appid=1005&token=&signature=${signature}&clienttime=${time}`
+    const json = await requestJson<any>(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body
+    }).catch(() => null)
+    return json?.data?.[0]?.mv_info?.h265 ?? null
+  }
+
+  async getMvQualities(item: MusicItem): Promise<MvQuality[]> {
+    const videoId = item.mvid?.trim()
+    if (!videoId) return []
+    const info = await this.fetchMvInfo(videoId)
+    if (!info) return []
+    // quality 直接用该档的 hash（getMvUrl 据此取流）
+    const tiers: [string, string][] = [
+      ['fhd', '蓝光画质'],
+      ['hd', '超清画质'],
+      ['qhd', '高清画质'],
+      ['sd', '标清画质']
+    ]
+    const out: MvQuality[] = []
+    for (const [prefix, displayName] of tiers) {
+      const hash = typeof info[`${prefix}_hash`] === 'string' ? info[`${prefix}_hash`].trim() : ''
+      const size = num(info[`${prefix}_filesize`], 0)
+      if (!hash || size <= 0) continue
+      out.push({ quality: hash, displayName, displaySize: kgFormatSize(size) })
+    }
+    return out
+  }
+
+  async getMvUrl(item: MusicItem, quality: string): Promise<MvUrlResult> {
+    const videoId = item.mvid?.trim()
+    if (!videoId) return { source: 'kg', playUrl: null, quality, rejectReason: '无 mvid' }
+    const hash = quality.toLowerCase()
+    const key = md5Hex(`${hash}kugoumvcloud`)
+    const time = nowSec()
+    const params = {
+      appid: '1005',
+      backupdomain: '1',
+      clienttime: time,
+      clientver: '20609',
+      cmd: '123',
+      dfid: KG_MV_DFID,
+      ext: 'mp4',
+      hash,
+      key,
+      mid: KG_MV_MID,
+      pid: '2',
+      token: '',
+      userid: '0',
+      uuid: '-',
+      video_id: videoId
+    }
+    const signature = kgSign(params)
+    const url =
+      `https://trackermv.kugou.com/interface/index?clientver=20609&userid=0&cmd=123&ext=mp4` +
+      `&key=${key}&mid=${KG_MV_MID}&pid=2&dfid=${KG_MV_DFID}&hash=${hash}&uuid=-` +
+      `&appid=1005&token=&backupdomain=1&signature=${signature}&clienttime=${time}` +
+      `&video_id=${videoId}`
+    const json = await requestJson<any>(url).catch(() => null)
+    const downUrl = json?.data?.[hash]?.downurl
+    if (typeof downUrl === 'string' && downUrl) return { source: 'kg', playUrl: downUrl, quality }
+    return { source: 'kg', playUrl: null, quality, rejectReason: '无下载链接' }
   }
 
   // —— 私有 ——

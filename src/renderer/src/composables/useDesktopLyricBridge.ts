@@ -1,4 +1,4 @@
-import { watch } from 'vue'
+import { onUnmounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { usePlayerStore } from '../stores/player'
 import { useSettingsStore } from '../stores/settings'
@@ -33,7 +33,10 @@ export function useDesktopLyricBridge(): void {
       roman: (cached?.chroma || cached?.roma) ?? '',
       currentTime: currentTime.value,
       playing: playing.value,
-      title: c ? `${c.title} - ${c.artist}` : ''
+      spectrum: settings.settings.lyrics.desktopAudioVisualization ? player.getSpectrumData() : [],
+      title: c ? `${c.title} - ${c.artist}` : '',
+      musicName: c?.title,
+      musicSinger: c?.artist ? [c.artist] : []
     }
     window.api.desktopLyric.push(state)
   }
@@ -56,15 +59,37 @@ export function useDesktopLyricBridge(): void {
     push()
   }
 
+  let spectrumTimer: ReturnType<typeof setInterval> | null = null
+  function syncSpectrumTimer(): void {
+    if (spectrumTimer) clearInterval(spectrumTimer)
+    spectrumTimer = null
+    if (
+      settings.settings.lyrics.desktopEnabled &&
+      settings.settings.lyrics.desktopAudioVisualization
+    ) {
+      // 约 12.5 fps：频谱足够顺滑，同时避免跨窗口 IPC 占用过高。
+      spectrumTimer = setInterval(push, 80)
+    }
+  }
+
   watch(current, () => void loadLyric())
   watch(playing, push)
-  // 进度：节流由歌词引擎侧的 400ms 阈值处理，这里每次 timeupdate 都推（频率约 4/s，可接受）
-  watch(currentTime, push)
-  // 开关打开时立即拉一次
+  // 频谱开启时由 80ms 定时器连同进度一起推；关闭时沿用 <audio> timeupdate（约 4/s）。
+  watch(currentTime, () => {
+    if (!settings.settings.lyrics.desktopAudioVisualization) push()
+  })
+  // 开关打开时立即拉一次；频谱开关变化时启动/停止采样推送。
   watch(
     () => settings.settings.lyrics.desktopEnabled,
     (on) => {
       if (on) void loadLyric()
+      syncSpectrumTimer()
     }
   )
+  watch(() => settings.settings.lyrics.desktopAudioVisualization, syncSpectrumTimer)
+  syncSpectrumTimer()
+
+  onUnmounted(() => {
+    if (spectrumTimer) clearInterval(spectrumTimer)
+  })
 }

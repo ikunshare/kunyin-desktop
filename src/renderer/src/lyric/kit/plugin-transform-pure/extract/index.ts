@@ -4,7 +4,7 @@ import type { ExtractCreatorConfig } from './config'
 import { DEFAULT_CREATOR_CONFIG } from './config'
 import { DEFAULT_CREATOR_RULES } from './constants'
 
-import { ConfigManager, removeTextSpaceAll } from '../../utils'
+import { ConfigManager } from '../../utils'
 import { Matcher } from '../utils/match'
 
 import { ParserPlugin, ParserContext, PluginStage } from '../../core'
@@ -64,7 +64,9 @@ export class ExtractCreator extends ParserPlugin {
       }
 
       const [role, name] = target
-      const result = this.matcher.match(removeTextSpaceAll(role))
+      // 保留英文职务中的空格，才能命中 `Mixing Engineer` 等短语；
+      // 无空格写法仍由规则中的兼容分支处理。
+      const result = this.matcher.match(role)
 
       if (!result) {
         newLines.push(line)

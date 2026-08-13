@@ -45,6 +45,21 @@ function toSingers(artist: string): Singer[] {
     .filter((s) => s.name)
 }
 
+/**
+ * 带歌手 id 的 singers。酷狗各接口都给了歌手 id，只是字段位置不同：
+ * 搜索用 `Singers[{name,id}]`（或 `SingerId[]`），专辑/歌手歌曲用 `authors[{author_name,author_id}]`。
+ * 拿不到时回退按「、」拆名字（id=0，前端据此隐藏「查看歌手」入口）。
+ */
+function toSingersWithId(artist: string, raw: any[] | undefined): Singer[] {
+  const list = (raw ?? [])
+    .map((s) => ({
+      name: cleanText(String(s?.name ?? s?.author_name ?? s?.base?.author_name ?? '')).trim(),
+      singerId: num(s?.id ?? s?.author_id ?? s?.base?.author_id, 0)
+    }))
+    .filter((s) => s.name)
+  return list.length ? list : toSingers(artist)
+}
+
 /** song_search_v2 结果项 */
 export function parseSearchItem(info: any): KugouMusicItem | null {
   const hash = info.FileHash
@@ -63,7 +78,7 @@ export function parseSearchItem(info: any): KugouMusicItem | null {
   }
   if (info.ResFileHash) {
     if (num(info.ResFileSize, 0) > 0)
-      addQ(q, 'hires', '无损音质 Hi-Res', 4000, num(info.ResFileSize, 0))
+      addQ(q, 'hires', '无损音质 HiRes', 4000, num(info.ResFileSize, 0))
     allHash.push(info.ResFileHash)
   }
   if (!Object.keys(q).length) return null
@@ -91,7 +106,18 @@ export function parseSearchItem(info: any): KugouMusicItem | null {
     allHash,
     audioId,
     mixsongmid: id,
-    singers: toSingers(artist),
+    singers: toSingersWithId(
+      artist,
+      // 无 Singers 数组时用 SingerId[] 与 SingerName 同序对齐兜底
+      Array.isArray(info.Singers) && info.Singers.length
+        ? info.Singers
+        : Array.isArray(info.SingerId)
+          ? info.SingerId.map((sid: any, i: number) => ({
+              name: artist.split('、')[i],
+              id: sid
+            }))
+          : undefined
+    ),
     mvid: info.mvdata?.[0]?.id ? String(info.mvdata[0].id) : undefined
   }
 }
@@ -119,7 +145,7 @@ function buildFromHashes(
     allHash.push(hashFlac)
   }
   if (hashHigh) {
-    if (sizeHigh > 0) addQ(q, 'hires', '无损音质 Hi-Res', 4000, sizeHigh)
+    if (sizeHigh > 0) addQ(q, 'hires', '无损音质 HiRes', 4000, sizeHigh)
     allHash.push(hashHigh)
   }
   return { q, allHash }
@@ -160,7 +186,7 @@ export function parseKgAlbumSong(o: any): KugouMusicItem | null {
     allHash,
     audioId,
     mixsongmid: id,
-    singers: toSingers(artist),
+    singers: toSingersWithId(artist, o.authors),
     mvid: o.mvdata?.[0]?.id ? String(o.mvdata[0].id) : undefined
   }
 }
@@ -201,7 +227,7 @@ export function parseKgAuthorSong(o: any): KugouMusicItem | null {
     allHash,
     audioId,
     mixsongmid: id,
-    singers: toSingers(artist),
+    singers: toSingersWithId(artist, o.authors),
     mvid:
       o.mv_id && o.mv_id !== '0'
         ? String(o.mv_id)

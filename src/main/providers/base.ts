@@ -7,6 +7,7 @@ import {
   type AlbumInfoResult,
   type AlbumSearchResult,
   type ArtistInfoResult,
+  type ArtistMvResult,
   type ArtistSearchResult,
   type Lyric,
   type MediaInfoResult,
@@ -85,6 +86,27 @@ export abstract class BaseProvider {
   }
   async getArtistSongs(_id: string, page = 0, size = 30): Promise<MusicListResult> {
     return this.emptyList(page, size)
+  }
+  /** 是否有「专辑」Tab（歌手页据此隐藏该 Tab） */
+  supportsArtistAlbums(): boolean {
+    return false
+  }
+  /** 是否有「MV」Tab */
+  supportsArtistMvs(): boolean {
+    return false
+  }
+  async getArtistAlbums(_id: string, page = 0, size = 30): Promise<AlbumSearchResult> {
+    return this.emptyPage(page, size)
+  }
+  async getArtistMvs(_id: string, page = 0, size = 40): Promise<ArtistMvResult> {
+    return { source: this.source, hasNext: false, page, size, total: 0, result: [] }
+  }
+  /**
+   * 由 MV 列表条目造一个仅够取流播放的占位 MusicItem（mvid 为核心字段）。
+   * 歌手页 MV Tab 点击后交给 MvPlayer 复用 getMvQualities/getMvUrl。
+   */
+  createMvItem(_vid: string, _title: string, _cover: string): MusicItem | null {
+    return null
   }
 
   // —— MV ——

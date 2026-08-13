@@ -14,10 +14,10 @@ const KW_QUALITY: Record<string, [string, string, number]> = {
   '128': ['128k', '普通音质 128K', 128],
   '320': ['320k', '高品音质 320K', 320],
   '2000': ['flac', '无损音质 FLAC', 2000],
-  '4000': ['hires', '无损音质 Hi-Res', 4000],
-  '20201': ['atmos', '至臻全景声', 20201],
-  '20501': ['atmos_plus', '至臻音质2.0', 20501],
-  '20900': ['master', '至臻母带', 20900]
+  '4000': ['hires', '无损音质 HiRes', 4000],
+  '20201': ['atmos', '臻品全景声', 20201],
+  '20501': ['atmos_plus', '臻品全景声 2.0', 20501],
+  '20900': ['master', '臻品母带', 20900]
 }
 
 export function parseMinfo(minfo: string): Record<string, Quality> {
@@ -33,10 +33,16 @@ export function parseMinfo(minfo: string): Record<string, Quality> {
   return q
 }
 
-function splitSingers(artist: string): Singer[] {
+/**
+ * 拆歌手。酷我用 `&` 分隔歌手名，歌手 id 在 `allartistid`（或 XML 的 artistid）里**按同序**
+ * 用 `&` 分隔，例：ARTIST="蔡依林&周杰伦" ↔ allartistid="978&336"。
+ * 缺 id 的位置给 0，前端据此隐藏「查看歌手」入口。
+ */
+function splitSingers(artist: string, artistIds?: string): Singer[] {
+  const ids = (artistIds ?? '').split('&').map((s) => num(s.trim(), 0))
   return artist
     .split('&')
-    .map((s) => ({ name: s.trim(), singerId: 0 }))
+    .map((s, i) => ({ name: s.trim(), singerId: ids[i] ?? 0 }))
     .filter((s) => s.name)
 }
 
@@ -49,7 +55,10 @@ export function parseSearchItem(info: any): KuwoMusicItem | null {
   const minfo = info.N_MINFO
   if (!minfo) return null
   const artist = info.ARTIST ?? ''
-  const singers = splitSingers(artist)
+  const singers = splitSingers(
+    artist,
+    info.allartistid != null ? String(info.allartistid) : info.ARTISTID
+  )
   return {
     type: 'kw',
     id,
@@ -69,7 +78,7 @@ function attr(el: string, name: string): string | undefined {
   const m = new RegExp(`\\b${name}="([^"]*)"`).exec(el)
   return m ? m[1] : undefined
 }
-function unescapeXml(s: string): string {
+export function unescapeXml(s: string): string {
   return s
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
@@ -89,7 +98,7 @@ export function parseMusicElement(el: string): KuwoMusicItem | null {
   if (!Object.keys(qualities).length) return null
   const artist = unescapeXml(attr(el, 'artist') ?? '')
   const vid = attr(el, 'vid')
-  const singers = splitSingers(artist)
+  const singers = splitSingers(artist, attr(el, 'allartistid') ?? attr(el, 'artistid'))
   return {
     type: 'kw',
     id,
@@ -137,6 +146,9 @@ export function parseMusicPayItem(s: any): KuwoMusicItem | null {
     cover: s.albumPic ? String(s.albumPic).replace('albumcover/120', 'albumcover/500') : '',
     duration: num(s.duration, 0) * 1000,
     qualities,
-    singers: splitSingers(String(artist))
+    singers: splitSingers(
+      String(artist),
+      s.allartistid != null ? String(s.allartistid) : s.artistid
+    )
   }
 }

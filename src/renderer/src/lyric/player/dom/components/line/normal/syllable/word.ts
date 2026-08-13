@@ -189,20 +189,35 @@ export class WordElement {
     const order = resolveWordSort(this.context.config.line.normal.main.syllable.sort)
     const wordIndex = order.indexOf(WordSlot.Word)
 
-    // Annotation rows own their wipes and remain direct cell children so timeline differences cannot alter their configured order.
-    const wipeNodes: HTMLElement[] = []
+    // [vendor patch] 跟随主词 mask 擦除的注解行（单 token 且时间窗与词一致，即 ownsWipe=false）
+    // 必须放进 wipe 容器，才会被主词的擦除 mask 一并覆盖 —— 否则它们只是对齐在词上方的
+    // 静态文本块，播放时毫无动画。独立 wipe 的行（多 token 连读等）仍是 cell 直接子元素，
+    // 保持各自时间轴。
+    const wipeAbove: HTMLElement[] = []
+    const wipeBelow: HTMLElement[] = []
     const above: HTMLElement[] = []
     const below: HTMLElement[] = []
     const upper: HTMLElement[] = []
 
     order.forEach((slot, index) => {
       if (slot === WordSlot.Word) {
-        wipeNodes.push(this.word)
         return
       }
 
       const row = this.annotationRows.get(slot)
       if (!row) {
+        return
+      }
+
+      // 占位空行（alignAnnotationRows 补建）没有对应 element，按 cell 布局走。
+      const element = this.annotations.get(slot)
+      if (element && !element.independent) {
+        if (index < wordIndex) {
+          wipeAbove.push(row)
+          upper.push(row)
+        } else {
+          wipeBelow.push(row)
+        }
         return
       }
 
@@ -214,7 +229,7 @@ export class WordElement {
       }
     })
 
-    this.wipe.replaceChildren(...wipeNodes)
+    this.wipe.replaceChildren(...wipeAbove, this.word, ...wipeBelow)
     this.cell.replaceChildren(...above, this.wipe, ...below)
     this.upperRows = upper
   }

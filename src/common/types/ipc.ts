@@ -11,7 +11,9 @@ import type { KgLyricCandidate, Lyric, MusicItem, MusicSource } from './music'
 import type {
   AlbumInfoResult,
   AlbumSearchResult,
+  ArtistCapabilities,
   ArtistInfoResult,
+  ArtistMvResult,
   ArtistSearchResult,
   AudioStreamResult,
   MediaInfoResult,
@@ -97,6 +99,10 @@ export const IpcChannels = {
   DISCOVER_ALBUM_SONGS: 'discover:albumSongs',
   DISCOVER_ARTIST_INFO: 'discover:artistInfo',
   DISCOVER_ARTIST_SONGS: 'discover:artistSongs',
+  DISCOVER_ARTIST_ALBUMS: 'discover:artistAlbums',
+  DISCOVER_ARTIST_MVS: 'discover:artistMvs',
+  DISCOVER_ARTIST_CAPS: 'discover:artistCaps',
+  DISCOVER_ARTIST_MV_ITEM: 'discover:artistMvItem',
   DISCOVER_SEARCH_ALBUM: 'discover:searchAlbum',
   DISCOVER_SEARCH_ARTIST: 'discover:searchArtist',
   DISCOVER_SEARCH_PLAYLIST: 'discover:searchPlaylist',
@@ -185,8 +191,13 @@ export interface DesktopLyricState {
   /** 当前播放时间（毫秒） */
   currentTime: number
   playing: boolean
+  /** Web Audio AnalyserNode 采样的实时频谱，值域 0..1 */
+  spectrum: number[]
   /** 当前曲目标题（无歌词时展示） */
   title: string
+  /** 供歌词净化识别首行「歌名 - 歌手」元信息 */
+  musicName?: string
+  musicSinger?: string[]
 }
 
 /** LX 同步状态（主 → 渲染） */
@@ -423,6 +434,29 @@ export interface WindowApi {
       page?: number,
       size?: number
     ): Promise<MusicListResult>
+    /** 歌手的专辑列表（仅 supportsArtistAlbums 的音源有数据） */
+    artistAlbums(
+      source: MusicSource,
+      id: string,
+      page?: number,
+      size?: number
+    ): Promise<AlbumSearchResult>
+    /** 歌手的 MV 列表（仅 supportsArtistMvs 的音源有数据） */
+    artistMvs(
+      source: MusicSource,
+      id: string,
+      page?: number,
+      size?: number
+    ): Promise<ArtistMvResult>
+    /** 歌手页 Tab 可用性（决定是否显示专辑/MV Tab） */
+    artistCaps(source: MusicSource): Promise<ArtistCapabilities>
+    /** 由 MV 列表条目造可播放的占位 item（交给 MvPlayer 取流） */
+    artistMvItem(
+      source: MusicSource,
+      vid: string,
+      title: string,
+      cover: string
+    ): Promise<MusicItem | null>
     searchAlbum(
       source: MusicSource,
       keyword: string,

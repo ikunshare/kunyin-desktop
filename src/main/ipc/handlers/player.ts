@@ -14,6 +14,7 @@ import { resolveMediaInfo as resolveMedia, invalidateMediaUrl } from '../../prov
 import { registerAudioStream } from '../../audio/protocol'
 import { getCachedLyric, setCachedLyric } from '../../cache/lyricCache'
 import { getRedirect } from '../../store/library'
+import { getKgFallbackLyric } from '../../providers/kg/lyric'
 
 /**
  * 播放/歌词相关 IPC。
@@ -36,6 +37,16 @@ function readSidecarLrc(filePath?: string): string {
   } catch {
     return ''
   }
+}
+
+function hasMainLyric(lyric: Lyric): boolean {
+  return !!(lyric.char.trim() || lyric.lrc.trim())
+}
+
+async function loadKgFallback(item: MusicItem): Promise<Lyric> {
+  return getKgFallbackLyric(item.title, item.artist, item.duration).catch(() => ({
+    ...EMPTY_LYRIC
+  }))
 }
 
 export function registerPlayerHandlers(): void {
@@ -65,14 +76,12 @@ export function registerPlayerHandlers(): void {
           reason: info.rejectReason ?? '解析播放地址失败'
         }
       }
-      // 一律走 kunyin:// 协议，不只为解密：协议侧带「等响应头超时 + 网络抖动清连接池重试」
-      // 的自愈逻辑。此前非加密流让 <audio> 直连 CDN，没有任何超时/自愈——连接池被半死
-      // 连接占满（VPN/代理切换后常见）时直连请求永远挂起且不触发 error 事件，表现为
-      // 「莫名其妙播不了、只能杀进程重启」；统一走协议后由主进程兜底自愈。
+      // 一律走 kunyin:// 协议：加密格式（QQ .mflac/.mgg 等）必须边下边解密；
+      // 普通格式也由协议层统一提供响应头超时和局部重试。重试不得清空全局连接池，
+      // 否则切歌时会误杀另一首正在建立的连接并制造 ERR_ABORTED。
       const url = registerAudioStream({
         url: info.playUrl,
-        ekey: info.encryptionInfo?.ekey,
-        cipher: info.encryptionInfo?.cipher
+        ekey: info.encryptionInfo?.ekey
       })
       return { ok: true, url, expire: info.expire ?? 0, quality: info.quality || qualityId }
     }
@@ -82,14 +91,32 @@ export function registerPlayerHandlers(): void {
     // 歌词重定向：改用目标歌曲取词；缓存键随目标走（对齐安卓 MusicRepository.getLyric），
     // 设置/清除重定向后键自然切换，无需失效旧缓存
     const target = getRedirect(item) ?? item
-    // 本地歌曲：读同目录同名 .lrc 边车（不缓存，文件可随时被用户替换）
+
+    // 本地同名歌词优先且不缓存，文件被替换后可立即生效；没有边车时也进入酷狗回退。
     if (target.type === 'local') {
-      return { ...EMPTY_LYRIC, lrc: readSidecarLrc(target.filePath) }
+      const sidecar = readSidecarLrc(target.filePath)
+      if (sidecar.trim()) return { ...EMPTY_LYRIC, lrc: sidecar }
     }
+
     const cached = getCachedLyric(target)
-    if (cached) return cached
-    const lyric = (await getProvider(target.type)?.getLyric(target)) ?? { ...EMPTY_LYRIC }
-    setCachedLyric(target, lyric) // 空歌词也缓存（负缓存），避免每次播放重复拉
+    if (cached) {
+      if (hasMainLyric(cached.lyric) || cached.fallbackChecked) return cached.lyric
+      // 旧版空缓存没有跑过全平台回退，只补搜酷狗，不重复请求原平台。
+      const fallback = await loadKgFallback(target)
+      setCachedLyric(target, fallback)
+      return fallback
+    }
+
+    let lyric =
+      target.type === 'local'
+        ? { ...EMPTY_LYRIC }
+        : ((await getProvider(target.type)
+            ?.getLyric(target)
+            .catch(() => ({ ...EMPTY_LYRIC }))) ?? { ...EMPTY_LYRIC })
+    if (!hasMainLyric(lyric)) lyric = await loadKgFallback(target)
+
+    // 空歌词也缓存（负缓存）；fallbackVersion 防止旧负缓存挡住新回退，同时避免反复搜词。
+    setCachedLyric(target, lyric)
     return lyric
   })
   // 播放失败（直链过期/403）：渲染层上报，使 URL 缓存失效后重新解析

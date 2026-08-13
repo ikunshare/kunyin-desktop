@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import DetailHeader from '../components/DetailHeader.vue'
 import SongRow from '../components/SongRow.vue'
-import { usePlayerStore } from '../stores/player'
+import { usePlayerStore, type QueueSource } from '../stores/player'
 import { useLibraryStore } from '../stores/library'
 import { getMusicItemKey, type MusicItem, type MusicSource } from '@common'
 
@@ -46,10 +46,16 @@ watch(() => [route.params.playlistId, route.query.source], load, { immediate: tr
 function isActive(item: MusicItem): boolean {
   return !!player.current && getMusicItemKey(player.current) === getMusicItemKey(item)
 }
-// 在线歌单播放累积进试听列表；本地歌单不动试听列表
-const isOnline = computed(() => !!route.query.source)
+// 歌单播放队列 = 整个歌单（上一首/下一首在单内导航）；在线/本地歌单均不累积进试听列表
+function playSource(): QueueSource | undefined {
+  const id = String(route.params.playlistId)
+  const source = route.query.source as MusicSource | undefined
+  return source
+    ? { kind: 'platform', id: `${source}:${id}`, name: info.value.name }
+    : { kind: 'local', id, name: info.value.name }
+}
 function play(item: MusicItem): void {
-  player.playItem(item, tracks.value, { trackTrial: isOnline.value })
+  player.playItem(item, tracks.value, { source: playSource() })
 }
 function playAll(): void {
   if (tracks.value.length) play(tracks.value[0])

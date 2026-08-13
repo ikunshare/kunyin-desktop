@@ -101,12 +101,13 @@ function onInput(e: Event): void {
 .content {
   display: flex;
   align-items: center;
+  min-height: 26px;
 }
 .container {
   flex: none;
   position: relative;
-  width: 1em;
-  height: 1em;
+  width: 17px;
+  height: 17px;
   cursor: pointer;
   display: flex;
   color: var(--color-primary);
@@ -118,21 +119,28 @@ function onInput(e: Event): void {
   bottom: 0;
   left: 0;
   right: 0;
-  border: 1px solid var(--color-font-label);
+  border: 1px solid var(--color-primary-alpha-700);
   transition: border-color 0.2s ease;
-  border-radius: 2px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-main-background) 92%, transparent);
 }
 .icon {
   width: 100%;
   height: 100%;
   transition: transform 0.3s ease;
   transform: scale(0);
-  border-radius: 2px;
+  padding: 2px;
+  border-radius: 5px;
+  background: var(--color-primary);
+  color: white;
+  position: relative;
+  z-index: 1;
 }
 .label {
   flex: auto;
-  margin-left: 5px;
+  margin-left: 8px;
   line-height: 1.5;
+  font-size: 12px;
   cursor: pointer;
 }
 </style>

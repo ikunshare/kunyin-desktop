@@ -117,6 +117,9 @@ body {
   background: var(--background-image) var(--background-image-position) no-repeat;
   background-size: var(--background-image-size);
   background-color: var(--color-content-background);
+  /* 主窗口使用透明 BrowserWindow：圆角在内容层裁切，保留圆角但不带 Windows DWM 蓝边/阴影。 */
+  border-radius: 10px;
+  overflow: hidden;
   transition: background-color var(--transition-normal);
 }
 

@@ -7,16 +7,26 @@ import { LruJsonStore } from './lruStore'
 
 interface LyricEntry {
   lyric: Lyric
+  /** 已运行到当前版本的全平台酷狗回退；旧缓存没有该字段，需要补跑一次。 */
+  fallbackVersion?: number
 }
 
+export interface CachedLyric {
+  lyric: Lyric
+  fallbackChecked: boolean
+}
+
+const FALLBACK_VERSION = 1
 const store = new LruJsonStore<LyricEntry>('lyric-cache.json', 500)
 
-export function getCachedLyric(item: MusicItem): Lyric | null {
-  return store.get(getMusicItemKey(item))?.lyric ?? null
+export function getCachedLyric(item: MusicItem): CachedLyric | null {
+  const entry = store.get(getMusicItemKey(item))
+  if (!entry) return null
+  return { lyric: entry.lyric, fallbackChecked: entry.fallbackVersion === FALLBACK_VERSION }
 }
 
 export function setCachedLyric(item: MusicItem, lyric: Lyric): void {
-  store.set(getMusicItemKey(item), { lyric })
+  store.set(getMusicItemKey(item), { lyric, fallbackVersion: FALLBACK_VERSION })
 }
 
 /** 缓存条目数（设置页展示） */

@@ -251,7 +251,7 @@ export const THEMES: ThemeDef[] = [
     ext: lightBgExt(
       bgJqbg,
       'rgba(255, 255, 255, 0)',
-      'rgba(255, 255, 255, 0.9)',
+      'rgba(255, 255, 255, 0.76)',
       '#af9479',
       '#af9479',
       { '--color-nav-font': 'var(--color-primary-light-600)' }
@@ -266,8 +266,8 @@ export const THEMES: ThemeDef[] = [
     font: 'rgb(33, 33, 33)',
     ext: lightBgExt(
       bgMyzc,
-      'rgba(255, 255, 255, 0.15)',
-      'rgba(255, 255, 255, 0.8)',
+      'rgba(255, 255, 255, 0.08)',
+      'rgba(255, 255, 255, 0.7)',
       'var(--color-primary-light-100)',
       'var(--color-primary-light-100)'
     )
@@ -345,11 +345,20 @@ export function customToThemeDef(config: CustomThemeConfig): ThemeDef {
           : {}),
         '--background-image': bgImage
       }
+  if (config.appBackground) ext['--color-app-background'] = config.appBackground
+  if (config.contentBackground) ext['--color-main-background'] = config.contentBackground
+  if (config.sidebarButton) ext['--color-nav-font'] = config.sidebarButton
+  if (config.badgePrimary) ext['--color-badge-primary'] = config.badgePrimary
+  if (config.badgeSecondary) ext['--color-badge-secondary'] = config.badgeSecondary
+  if (config.badgeTertiary) ext['--color-badge-tertiary'] = config.badgeTertiary
+  if (config.buttonClose) ext['--color-btn-close'] = config.buttonClose
+  if (config.buttonMin) ext['--color-btn-min'] = config.buttonMin
+  if (config.buttonHide) ext['--color-btn-hide'] = config.buttonHide
   return {
     id: config.id,
     name: config.name,
     isDark: config.isDark,
-    isDarkFont: false,
+    isDarkFont: config.isDarkFont ?? false,
     isCustom: true,
     primary: config.primary,
     font: config.font,

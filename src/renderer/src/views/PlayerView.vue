@@ -164,7 +164,10 @@ async function loadLyric(): Promise<void> {
       await nextTick()
       if (token !== loadToken) return
       const roman = ly.chroma || ly.roma
-      lyric.loadLyric(original, ly.trans, roman)
+      lyric.loadLyric(original, ly.trans, roman, {
+        name: plain.title,
+        singer: plain.artist ? [plain.artist] : []
+      })
       await nextTick()
       if (token !== loadToken) return
       requestAnimationFrame(() => lyric.relayout())
@@ -383,6 +386,7 @@ watch(currentTime, (t) => {
   inset: 0;
   z-index: 2000;
   overflow: hidden;
+  border-radius: 10px;
   color: #fff;
   /* 网格渐变画布按音量留出 ~5% 透明度，给个深色底，
      免得主题背景图从缝隙里透出来；渲染失败时也退化成深色而非主题图 */

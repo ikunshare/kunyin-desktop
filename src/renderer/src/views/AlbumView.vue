@@ -3,7 +3,7 @@ import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import DetailHeader from '../components/DetailHeader.vue'
 import SongRow from '../components/SongRow.vue'
-import { usePlayerStore } from '../stores/player'
+import { usePlayerStore, type QueueSource } from '../stores/player'
 import { getMusicItemKey, type MusicItem, type MusicSource } from '@common'
 
 const route = useRoute()
@@ -45,8 +45,17 @@ watch(() => [route.params.albumKey, route.query.source], load, { immediate: true
 function isActive(item: MusicItem): boolean {
   return !!player.current && getMusicItemKey(player.current) === getMusicItemKey(item)
 }
+/** 专辑作为播放队列来源（id 与「我的列表」在线歌单同构：source:id） */
+function playSource(): QueueSource | undefined {
+  const key = parseKey()
+  if (!key) return undefined
+  return { kind: 'platform', id: `${key.source}:${key.id}`, name: album.value.name }
+}
+function play(item: MusicItem): void {
+  player.playItem(item, tracks.value, { trackTrial: true, source: playSource() })
+}
 function playAll(): void {
-  if (tracks.value.length) player.playItem(tracks.value[0], tracks.value, { trackTrial: true })
+  if (tracks.value.length) play(tracks.value[0])
 }
 </script>
 
@@ -67,7 +76,7 @@ function playAll(): void {
         :item="t"
         :index="i"
         :active="isActive(t)"
-        @play="player.playItem(t, tracks, { trackTrial: true })"
+        @play="play(t)"
       />
     </div>
   </div>

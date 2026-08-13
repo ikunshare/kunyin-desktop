@@ -570,16 +570,12 @@ class BHPMesh extends Mesh {
    */
   updateMesh() {
     const subDivM1 = this._subDivisions - 1
-    const tW = subDivM1 * (this._controlPoints.height - 1)
-    const tH = subDivM1 * (this._controlPoints.width - 1)
     const controlPointsWidth = this._controlPoints.width
     const controlPointsHeight = this._controlPoints.height
     const subDivisions = this._subDivisions
 
     // 预计算常用值
     const invSubDivM1 = 1 / subDivM1
-    const invTH = 1 / tH
-    const invTW = 1 / tW
 
     // 预计算 u 和 v 的幂次
     const normPowers = new Float32Array(subDivisions * 4)
@@ -613,8 +609,6 @@ class BHPMesh extends Mesh {
         this.precomputeMatrix(this.tempG, this.tempGAcc)
         this.precomputeMatrix(this.tempB, this.tempBAcc)
 
-        const sX = x / (controlPointsWidth - 1)
-        const sY = y / (controlPointsHeight - 1)
         const baseVx = y * subDivisions
         const baseVy = x * subDivisions
 
@@ -672,8 +666,12 @@ class BHPMesh extends Mesh {
             const pb =
               v0 * this.tempUb[0] + v1 * this.tempUb[1] + v2 * this.tempUb[2] + v3 * this.tempUb[3]
 
-            const uvX = sX + v * invTH
-            const uvY = 1 - sY - u * invTW
+            // UV 随网格几何线性映射(而非 per-patch 参数均匀展开)。
+            // per-patch 参数化使 UV 梯度在 patch 边界跳变 → 纹理采样密度突变,
+            // 强色差封面(经高对比/饱和处理)旋转流动时在边界露出"杂线/接缝";
+            // 线性映射梯度连续,纹理铺展更均匀,流动由 fragment 的 UV 旋转完成,不受影响。
+            const uvX = (px + 1) / 2
+            const uvY = (py + 1) / 2
 
             // 使用批量设置方法减少数组访问次数
             this.setVertexData(vxOffset, vy, px, py, pr, pg, pb, uvX, uvY)

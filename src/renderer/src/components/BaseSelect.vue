@@ -21,15 +21,28 @@ function onChange(e: Event): void {
 
 <style scoped>
 .selection {
-  padding: 6px 10px;
-  border-radius: var(--form-radius);
-  background-color: var(--color-primary-background);
+  min-width: 180px;
+  height: 36px;
+  padding: 0 34px 0 12px;
+  border: 1px solid var(--color-primary-alpha-900);
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--color-main-background) 88%, var(--color-primary) 12%);
   color: var(--color-font);
+  font-size: 12px;
   cursor: pointer;
-  transition: background-color 0.2s ease;
+  outline: none;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease;
 }
 .selection:hover {
   background-color: var(--color-primary-background-hover);
+  border-color: var(--color-primary-alpha-700);
+}
+.selection:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-alpha-800);
 }
 .selection:disabled {
   opacity: 0.5;

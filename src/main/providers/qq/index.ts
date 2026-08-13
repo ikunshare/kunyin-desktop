@@ -11,6 +11,8 @@ import {
   type AlbumInfoResult,
   type AlbumSearchResult,
   type ArtistInfoResult,
+  type ArtistMvItem,
+  type ArtistMvResult,
   type ArtistSearchResult,
   type Lyric,
   type MusicItem,
@@ -40,11 +42,17 @@ function qqFormatSize(bytes: number): string {
   return mb >= 1024 ? `${(mb / 1024).toFixed(2)}GB` : `${mb.toFixed(1)}MB`
 }
 
+/** 清洗发行日期：`0000-…`（QQ 的未知日期占位）与空值归一为 undefined，年份由渲染层截取。 */
+function qqDate(raw: unknown): string | undefined {
+  const s = typeof raw === 'string' ? raw.trim() : ''
+  return s && !s.startsWith('0000') ? s : undefined
+}
+
 async function zzcRequest<T = any>(reqData: Record<string, unknown>): Promise<T> {
   // 签名走 musics.fcg：sign 对实际发送的 body 字节计算，故先 stringify 一次
   const text = JSON.stringify(reqData)
   const sign = zzcSign(text)
-  return requestJson<T>(`https://u.y.qq.com/cgi-bin/musics.fcg?sign=${sign}`, {
+  return requestJson<T>(`https://u6.y.qq.com/cgi-bin/musics.fcg?sign=${sign}`, {
     method: 'POST',
     headers: {
       'User-Agent': 'QQMusic/2104583050',
@@ -357,15 +365,114 @@ export class QqProvider extends BaseProvider {
     const singer = json?.req_0?.data?.singer_list?.[0]
     const basic = singer?.basic_info
     if (!basic?.name) return null
+    const mid = basic.singer_mid ?? singerMid
     return {
       source: 'qq',
-      id: basic.singer_mid ?? singerMid,
+      id: mid,
       name: basic.name,
       cover:
         singer.pic?.pic ?? `https://y.gtimg.cn/music/photo_new/T001R300x300M000${singerMid}.jpg`,
       description: singer.ex_info?.desc,
       songCount: num(json.req_1?.data?.totalNum, 0),
-      albumCount: num(json.req_2?.data?.total, 0)
+      albumCount: num(json.req_2?.data?.total, 0),
+      fansCount: await this.fetchFansCount(mid)
+    }
+  }
+
+  /** 匿名拉粉丝数（移植 fetchQqSingerFansCount）；失败给 0，头部不显示粉丝行。 */
+  private async fetchFansCount(singerMid: string): Promise<number> {
+    const url =
+      `https://c6.y.qq.com/rsc/fcgi-bin/fcg_order_singer_getnum.fcg` +
+      `?g_tk=5381&uin=0&format=json&inCharset=utf-8&outCharset=utf-8` +
+      `&notice=0&platform=wk_v17&needNewCode=0&utf8=1&singermid=${singerMid}`
+    const json = await requestJson<any>(url, {
+      headers: { Referer: 'https://y.qq.com/wk_v17/', Accept: 'application/json' }
+    }).catch(() => null)
+    return num(json?.num, 0)
+  }
+
+  supportsArtistAlbums(): boolean {
+    return true
+  }
+  supportsArtistMvs(): boolean {
+    return true
+  }
+
+  async getArtistAlbums(singerMid: string, page = 0, size = 30): Promise<AlbumSearchResult> {
+    const req = {
+      comm: this.wkComm(),
+      req_0: {
+        module: 'music.musichallAlbum.AlbumListServer',
+        method: 'GetAlbumList',
+        param: { singerMid, order: 0, num: size, begin: page * size }
+      }
+    }
+    const json = await zzcRequest<any>(req).catch(() => null)
+    const data = json?.req_0?.data
+    if (!data) return this.emptyPage(page, size)
+    const total = num(data.total, 0)
+    // GetAlbumList 的条目字段（albumMid/publishDate/albumType）与搜索结果不同，单独解析
+    const result: AlbumInfoResult[] = []
+    for (const o of data.albumList ?? []) {
+      const albumMid = typeof o?.albumMid === 'string' ? o.albumMid.trim() : ''
+      if (!albumMid || !o?.albumName) continue
+      result.push({
+        source: 'qq',
+        id: albumMid,
+        name: o.albumName,
+        cover: `https://y.gtimg.cn/music/photo_new/T002R800x800M000${albumMid}.jpg`,
+        artist: o.singerName,
+        publishTime: qqDate(o.publishDate),
+        subType: o.albumType || undefined
+      })
+    }
+    return { source: 'qq', hasNext: (page + 1) * size < total, page, size, result }
+  }
+
+  async getArtistMvs(singerMid: string, page = 0, size = 40): Promise<ArtistMvResult> {
+    const req = {
+      comm: this.wkComm(),
+      req_1: {
+        module: 'MvService.MvInfoProServer',
+        method: 'GetSingerMvList',
+        param: { singermid: singerMid, tagid: 0, start: page * size, count: size, order: 0 }
+      }
+    }
+    const json = await zzcRequest<any>(req).catch(() => null)
+    const data = json?.req_1?.data
+    if (!data) return { source: 'qq', hasNext: false, page, size, total: 0, result: [] }
+    const total = num(data.total, 0)
+    const result: ArtistMvItem[] = []
+    for (const o of data.list ?? []) {
+      const vid = typeof o?.vid === 'string' ? o.vid.trim() : ''
+      if (!vid) continue
+      result.push({
+        source: 'qq',
+        vid,
+        title: o.title ?? '',
+        cover: o.picurl ?? '',
+        duration: num(o.duration, 0),
+        playCount: num(o.playcnt, 0),
+        pubTime: num(o.pubdate, 0) * 1000
+      })
+    }
+    return { source: 'qq', hasNext: (page + 1) * size < total, page, size, total, result }
+  }
+
+  createMvItem(vid: string, title: string, cover: string): MusicItem {
+    return {
+      type: 'qq',
+      id: 0,
+      title,
+      artist: '',
+      album: '',
+      cover,
+      duration: 0,
+      qualities: {},
+      mid: '',
+      albumMid: '',
+      mediaMid: '',
+      mvid: vid
     }
   }
 

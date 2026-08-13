@@ -322,8 +322,20 @@ function fixWords(words: Lyric.Common.Word[] | undefined, lineEnd?: number): voi
   for (let i = 0; i < normals.length; i++) {
     const t = normals[i].time
     if (!t || t.end > t.start) continue
-    const next = normals[i + 1]?.time?.start
-    if (next != null && next > t.start) {
+    // 取下一词 start 作本词 end。但 kit 的 normalizeBoundaryPunct 会把边界标点
+    // 拆成独立词并复制前词时间（good- → good + "-"，两词 start 相同），
+    // 此时 next > t.start 不成立，若直接兜底行末，本词会吞掉整行剩余时长
+    // （QQ 316639030 "Wave good-bye"：good 被补成 6478ms，其后所有词的擦除
+    // 关键帧全堆到行尾 → 整行看似没有高亮）。故向后跳过同刻词，取第一个更晚的。
+    let next: number | undefined
+    for (let j = i + 1; j < normals.length; j++) {
+      const s = normals[j].time?.start
+      if (s != null && s > t.start) {
+        next = s
+        break
+      }
+    }
+    if (next != null) {
       t.end = next
       continue
     }

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** 酷狗歌词：搜索候选 → 下载 → KRC 解密 → 增强 LRC（移植自 KgProvider 歌词链） */
+import OpenCC from 'opencc-js'
 import { EMPTY_LYRIC, type KgLyricCandidate, type KugouMusicItem, type Lyric } from '@common'
 import { requestJson } from '../../net/request'
 import { decryptKrc, parseKrc } from '../../crypto/lyric'
@@ -10,6 +11,9 @@ const HOSTS = [
   'https://lyrics.kugou.com',
   'https://krcsretry.kugou.com'
 ]
+
+// 酷狗搜索对简体关键词命中更稳定；使用 OpenCC 通用繁体 → 大陆简体词典。
+const toSimplified = OpenCC.Converter({ from: 'tw', to: 'cn' })
 
 interface Candidate {
   accessKey: string
@@ -94,8 +98,23 @@ export async function probeKgLyricTypes(c: {
   return badges
 }
 
-async function searchCandidates(kg: KugouMusicItem): Promise<Candidate[]> {
-  return searchKgLyricCandidates(`${kg.artist} - ${kg.title}`, kg.duration, kg.hash, kg.audioId)
+function buildSimplifiedKeyword(title: string, artist: string): string {
+  const simplifiedTitle = toSimplified(title).trim()
+  const simplifiedArtist = toSimplified(artist).trim()
+  if (!simplifiedTitle) return ''
+  return simplifiedArtist ? `${simplifiedArtist} - ${simplifiedTitle}` : simplifiedTitle
+}
+
+async function searchCandidates(
+  title: string,
+  artist: string,
+  durationMs: number,
+  hash?: string,
+  audioId?: string
+): Promise<Candidate[]> {
+  const keyword = buildSimplifiedKeyword(title, artist)
+  if (!keyword) return []
+  return searchKgLyricCandidates(keyword, durationMs, hash, audioId)
 }
 
 async function download(c: Candidate): Promise<string | null> {
@@ -128,6 +147,29 @@ function decodeKrcContent(content: string): Lyric {
   }
 }
 
+/** 按酷狗候选顺序尝试下载，首条失效时继续尝试后两条。 */
+async function downloadFirstAvailable(candidates: Candidate[]): Promise<Lyric> {
+  for (const candidate of candidates.slice(0, 3)) {
+    const content = await download(candidate)
+    if (!content) continue
+    const lyric = decodeKrcContent(content)
+    if (lyric.char.trim() || lyric.lrc.trim()) return lyric
+  }
+  return { ...EMPTY_LYRIC }
+}
+
+/**
+ * 所有音源共用的酷狗歌词回退：歌名、歌手先繁转简，再按「歌手 - 歌名 + 时长」自动搜词。
+ */
+export async function getKgFallbackLyric(
+  title: string,
+  artist: string,
+  durationMs: number
+): Promise<Lyric> {
+  const candidates = await searchCandidates(title, artist, durationMs)
+  return downloadFirstAvailable(candidates)
+}
+
 export async function getKgLyric(kg: KugouMusicItem): Promise<Lyric> {
   // 直链重定向：已带 accesskey + downloadId 时跳过搜索直接下载（对齐 KgProvider.getLyric）
   if (kg.lyricAccessKey && kg.lyricDownloadId) {
@@ -142,9 +184,6 @@ export async function getKgLyric(kg: KugouMusicItem): Promise<Lyric> {
     }
     // 直链失败则回退常规搜索流程
   }
-  const candidates = await searchCandidates(kg)
-  if (!candidates.length) return { ...EMPTY_LYRIC }
-  const content = await download(candidates[0])
-  if (!content) return { ...EMPTY_LYRIC }
-  return decodeKrcContent(content)
+  const candidates = await searchCandidates(kg.title, kg.artist, kg.duration, kg.hash, kg.audioId)
+  return downloadFirstAvailable(candidates)
 }

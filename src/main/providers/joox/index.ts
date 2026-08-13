@@ -21,7 +21,12 @@ import { jooxTrackUrl } from './sign'
 import { num, parseSongInfo } from './item'
 
 const SEARCH_URL = 'http://avatar.api.joox.com/commonCgi/search/get'
-const SEARCH_REFERER = 'https://wesing.joox.com?hippy=joox-search&_wv=1&currentTime=46602900'
+
+/**
+ * 注意：不能手动带 Referer——Electron 网络栈（Chromium）按 referrer policy 校验
+ * 手动设置的 Referer，此接口为 http:// 目标（https Referer 属降级）会被拒为
+ * net::ERR_BLOCKED_BY_CLIENT。实测 JOOX 该接口不校验 Referer，不带即可正常返回。
+ */
 
 /** 搜索固定 header 块（逐字对应 JooxProvider.kt:62-86，注意字符串/数字类型区分） */
 function searchHeader(): Record<string, unknown> {
@@ -72,7 +77,7 @@ export class JooxProvider extends BaseProvider {
     }
     const json = await requestJson<any>(SEARCH_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Referer: SEARCH_REFERER },
+      headers: { 'Content-Type': 'application/json' },
       body
     }).catch(() => null)
 

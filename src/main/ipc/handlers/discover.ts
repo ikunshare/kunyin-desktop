@@ -6,7 +6,9 @@ import {
   IpcChannels,
   type AlbumInfoResult,
   type AlbumSearchResult,
+  type ArtistCapabilities,
   type ArtistInfoResult,
+  type ArtistMvResult,
   type ArtistSearchResult,
   type MusicItem,
   type MusicListResult,
@@ -78,6 +80,37 @@ export function registerDiscoverHandlers(): void {
     ): Promise<MusicListResult> =>
       getProvider(source)?.getArtistSongs(id, page, size) ??
       Promise.resolve(emptyList(source, page, size))
+  )
+  handle(
+    IpcChannels.DISCOVER_ARTIST_ALBUMS,
+    (
+      source: MusicSource,
+      id: string,
+      page: number = 0,
+      size: number = 30
+    ): Promise<AlbumSearchResult> =>
+      getProvider(source)?.getArtistAlbums(id, page, size) ??
+      Promise.resolve(emptyPage<AlbumInfoResult>(source, page, size))
+  )
+  handle(
+    IpcChannels.DISCOVER_ARTIST_MVS,
+    (
+      source: MusicSource,
+      id: string,
+      page: number = 0,
+      size: number = 40
+    ): Promise<ArtistMvResult> =>
+      getProvider(source)?.getArtistMvs(id, page, size) ??
+      Promise.resolve({ source, hasNext: false, page, size, total: 0, result: [] })
+  )
+  handle(IpcChannels.DISCOVER_ARTIST_CAPS, (source: MusicSource): ArtistCapabilities => {
+    const p = getProvider(source)
+    return { albums: p?.supportsArtistAlbums() ?? false, mvs: p?.supportsArtistMvs() ?? false }
+  })
+  handle(
+    IpcChannels.DISCOVER_ARTIST_MV_ITEM,
+    (source: MusicSource, vid: string, title: string, cover: string): MusicItem | null =>
+      getProvider(source)?.createMvItem(vid, title, cover) ?? null
   )
   handle(
     IpcChannels.DISCOVER_SEARCH_ALBUM,

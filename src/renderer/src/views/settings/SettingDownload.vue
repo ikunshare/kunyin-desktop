@@ -94,6 +94,14 @@ function setQuality(id: string): void {
           @update:model-value="store.update({ download: { saveLrcFile: $event as boolean } })"
         />
       </div>
+      <div class="gap-top">
+        <BaseCheckbox
+          id="setting_dl_lyric_meta"
+          :model-value="settings.download.writeLyricMeta"
+          label="歌词写入音频标签"
+          @update:model-value="store.update({ download: { writeLyricMeta: $event as boolean } })"
+        />
+      </div>
     </div>
   </dd>
 </template>

@@ -54,9 +54,9 @@ export function enrichFromQualityDetail(item: NeteaseMusicItem, response: any): 
   const data = response?.data
   if (!data) return item
   const q: Record<string, Quality> = { ...item.qualities }
-  addQuality(q, 'master', '鲸云母带', data.jm)
-  addQuality(q, 'atmos_plus', '沉浸环绕声', data.je)
-  addQuality(q, 'atmos', '高清臻音', data.sk)
+  addQuality(q, 'master', '臻品母带', data.jm)
+  addQuality(q, 'atmos_plus', '臻品全景声 2.0', data.je)
+  addQuality(q, 'atmos', '臻品全景声', data.sk)
   if (Object.keys(q).length === Object.keys(item.qualities).length) return item
   return { ...item, qualities: q }
 }

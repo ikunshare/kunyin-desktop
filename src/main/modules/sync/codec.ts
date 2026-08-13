@@ -192,8 +192,15 @@ function parseKgQualities(qs: Json | undefined): Record<string, Quality> {
       case 'flac':
         mk('flac', '无损音质 FLAC', 2000)
         break
+      case 'hires':
+      case 'flac24bit':
+        mk('hires', '无损音质 HiRes', 4000)
+        break
       case 'atmos':
-        mk('atmos', '全景声音质')
+        mk('atmos', '臻品全景声')
+        break
+      case 'atmos_plus':
+        mk('atmos_plus', '臻品全景声 2.0')
         break
       case 'master':
         mk('master', '臻品母带', 20900)
@@ -230,6 +237,12 @@ function parseStdQualities(qs: Json | undefined): Record<string, Quality> {
         break
       case 'master':
         mk('master', '臻品母带')
+        break
+      case 'atmos':
+        mk('atmos', '臻品全景声')
+        break
+      case 'atmos_plus':
+        mk('atmos_plus', '臻品全景声 2.0')
         break
     }
   }

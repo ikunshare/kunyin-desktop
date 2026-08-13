@@ -18,8 +18,26 @@ export interface CustomThemeConfig {
   primary: string
   /** 字色 rgb(...) */
   font: string
+  /** 深色字体梯度（用于浅色底上的低对比辅助文字） */
+  isDarkFont?: boolean
   /** 背景图绝对路径；空串表示无背景图 */
   bgImage: string
+  /** 应用/侧栏背景色 */
+  appBackground?: string
+  /** 侧栏按钮颜色 */
+  sidebarButton?: string
+  /** 内容区域背景色 */
+  contentBackground?: string
+  /** 音质标签主色 */
+  badgePrimary?: string
+  /** 音质标签次要色 */
+  badgeSecondary?: string
+  /** 音质标签第三色 */
+  badgeTertiary?: string
+  /** 窗口控制按钮颜色 */
+  buttonClose?: string
+  buttonMin?: string
+  buttonHide?: string
 }
 
 export interface AppSettings {
@@ -50,6 +68,8 @@ export interface AppSettings {
   list: {
     /** 显示列表操作按钮（歌曲行 hover 的试听/添加/下载） */
     showOperationButtons: boolean
+    /** 歌手页专辑用列表视图（false=网格；对应 Android albumListMode） */
+    albumListMode: boolean
   }
 
   player: {
@@ -70,16 +90,61 @@ export interface AppSettings {
     font: string
     /** 桌面歌词窗口开关 */
     desktopEnabled: boolean
-    /** 桌面歌词窗口位置（-1 表示未设置，用默认居中底部） */
-    desktopX: number
-    desktopY: number
+    /** 锁定后窗口点击穿透 */
+    desktopLocked: boolean
+    /** 窗口置顶 */
+    desktopAlwaysOnTop: boolean
+    /** 定时刷新置顶状态，避免被部分全屏程序覆盖 */
+    desktopAlwaysOnTopLoop: boolean
+    /** 在系统任务栏显示桌面歌词窗口 */
+    desktopShowTaskbar: boolean
+    /** 主窗口全屏时隐藏桌面歌词 */
+    desktopFullscreenHide: boolean
+    /** 暂停播放时淡出桌面歌词 */
+    desktopPauseHide: boolean
+    /** 显示音频可视化装饰 */
+    desktopAudioVisualization: boolean
+    /** 桌面歌词窗口位置（null 表示未设置，用默认居中底部） */
+    desktopX: number | null
+    desktopY: number | null
+    /** 桌面歌词窗口尺寸 */
+    desktopWidth: number
+    desktopHeight: number
+    /** 限制窗口留在当前屏幕工作区内 */
+    desktopLockScreen: boolean
+    /** 使用更舒缓的延迟滚动 */
+    desktopDelayScroll: boolean
+    /** 当前歌词在窗口中的滚动锚点 */
+    desktopScrollAlign: 'top' | 'center'
+    /** 鼠标划过窗口时降低歌词透明度 */
+    desktopHoverHide: boolean
+    /** 歌词排版方向 */
+    desktopDirection: 'horizontal' | 'vertical'
+    /** 歌词水平对齐 */
+    desktopAlign: 'left' | 'center' | 'right'
+    /** 桌面歌词字体（空=跟随歌词字体） */
+    desktopFont: string
     /** 桌面歌词字号 */
     desktopFontSize: number
+    /** 歌词行间距 */
+    desktopLineGap: number
     /** 桌面歌词已播放（高亮）文字颜色 */
     desktopColorActive: string
     /** 桌面歌词未播放文字颜色 */
     desktopColorNormal: string
-    /** 桌面歌词背景不透明度 0..1（0=全透明，仅描边阴影） */
+    /** 歌词整体不透明度 6..100 */
+    desktopOpacity: number
+    /** 长歌词单行省略，不自动换行 */
+    desktopEllipsis: boolean
+    /** 放大当前播放行 */
+    desktopZoomActive: boolean
+    /** 加粗逐字歌词 */
+    desktopBoldSyllable: boolean
+    /** 加粗逐行歌词 */
+    desktopBoldLine: boolean
+    /** 加粗翻译和音译 */
+    desktopBoldExtended: boolean
+    /** 桌面歌词背景不透明度 0..1（0=全透明） */
     desktopBgOpacity: number
   }
 
@@ -145,7 +210,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     fontSize: 16
   },
   list: {
-    showOperationButtons: true
+    showOperationButtons: true,
+    albumListMode: false
   },
   player: {
     volume: 1,
@@ -159,11 +225,34 @@ export const DEFAULT_SETTINGS: AppSettings = {
     fontSize: 22,
     font: '',
     desktopEnabled: false,
-    desktopX: -1,
-    desktopY: -1,
+    desktopLocked: false,
+    desktopAlwaysOnTop: true,
+    desktopAlwaysOnTopLoop: false,
+    desktopShowTaskbar: false,
+    desktopFullscreenHide: true,
+    desktopPauseHide: false,
+    desktopAudioVisualization: false,
+    desktopX: null,
+    desktopY: null,
+    desktopWidth: 640,
+    desktopHeight: 180,
+    desktopLockScreen: true,
+    desktopDelayScroll: true,
+    desktopScrollAlign: 'center',
+    desktopHoverHide: false,
+    desktopDirection: 'horizontal',
+    desktopAlign: 'left',
+    desktopFont: '',
     desktopFontSize: 28,
+    desktopLineGap: 36,
     desktopColorActive: '#4daf7c',
     desktopColorNormal: '#ffffff',
+    desktopOpacity: 100,
+    desktopEllipsis: false,
+    desktopZoomActive: false,
+    desktopBoldSyllable: true,
+    desktopBoldLine: true,
+    desktopBoldExtended: false,
     desktopBgOpacity: 0.28
   },
   network: {

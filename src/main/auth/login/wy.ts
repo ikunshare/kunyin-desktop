@@ -33,18 +33,20 @@ export function wyBuildQRUrl(unikey: string): string {
 /** 轮询二维码状态。 */
 export async function wyPollStatus(unikey: string): Promise<WyPollResult> {
   try {
-    const { json, resp } = await eapiPostRaw<{ code?: number }>('/api/login/qrcode/client/login', {
-      type: 3,
-      key: unikey
-    })
+    const { json, setCookie } = await eapiPostRaw<{ code?: number }>(
+      '/api/login/qrcode/client/login',
+      {
+        type: 3,
+        key: unikey
+      }
+    )
     switch (json?.code) {
       case 801:
         return { status: 'waiting' }
       case 802:
         return { status: 'scanned' }
       case 803: {
-        const setCookie = resp.headers.get('set-cookie') ?? ''
-        const musicU = extractMusicU(setCookie)
+        const musicU = extractMusicU(setCookie.join('; '))
         if (musicU) return { status: 'success', cookie: `MUSIC_U=${musicU}` }
         return { status: 'error' }
       }

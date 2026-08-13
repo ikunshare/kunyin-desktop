@@ -12,9 +12,6 @@ import {
 import AutoThemeDialog from './AutoThemeDialog.vue'
 import ThemeEditDialog from './ThemeEditDialog.vue'
 
-// 主题网格选择器。交互移植自 lx-music-desktop SettingBasic.vue 的主题区块：
-// 方块预览（主色/背景图）+ 名称，active 描边；'auto' 双色斜切项跟随系统深浅；
-// 自定义主题右键编辑，"+" 新建。
 const store = useSettingsStore()
 const { settings } = storeToRefs(store)
 
@@ -27,10 +24,10 @@ const customDefs = computed<ThemeDef[]>(() =>
   settings.value.appearance.customThemes.map(customToThemeDef)
 )
 
-function themePreviewStyles(t: ThemeDef): Record<string, string> {
+function themePreviewStyles(theme: ThemeDef): Record<string, string> {
   return {
-    '--color-primary-theme': buildThemeColors(t)['--color-theme'] ?? t.primary,
-    '--background-image-theme': t.ext['--background-image'] ?? 'none'
+    '--color-primary-theme': buildThemeColors(theme)['--color-theme'] ?? theme.primary,
+    '--background-image-theme': theme.ext['--background-image'] ?? 'none'
   }
 }
 
@@ -38,7 +35,6 @@ const themeItems = computed<ThemeItem[]>(() =>
   [...THEMES, ...customDefs.value].map((def) => ({ def, styles: themePreviewStyles(def) }))
 )
 
-// 'auto' 项的双色斜切预览
 const autoStyles = computed<Record<string, string>>(() => {
   const light =
     findTheme(settings.value.appearance.lightThemeId, customDefs.value) ??
@@ -63,12 +59,15 @@ function toggleTheme(id: string): void {
   void store.update({ appearance: { themeId: id } })
 }
 
-// 右键'跟随系统'弹出亮/暗主题预选框（对应 LX 的跟随系统主题设置弹窗）
-const showAutoDialog = ref(false)
+function themeKind(theme: ThemeDef): string {
+  if (theme.isDark) return '深色'
+  return theme.ext['--background-image'] !== 'none' ? '插画' : '浅色'
+}
 
-// 自定义主题编辑
+const showAutoDialog = ref(false)
 const showEdit = ref(false)
 const editThemeId = ref('')
+
 function handleEditTheme(theme?: ThemeDef): void {
   if (theme && !theme.isCustom) return
   editThemeId.value = theme?.id ?? ''
@@ -77,178 +76,203 @@ function handleEditTheme(theme?: ThemeDef): void {
 </script>
 
 <template>
-  <ul class="theme">
-    <li
+  <div class="theme">
+    <button
       v-for="item in themeItems"
       :key="item.def.id"
       class="theme-item"
       :class="{ active: themeId === item.def.id }"
       :style="item.styles"
       :aria-label="item.def.name"
+      :aria-pressed="themeId === item.def.id"
       @click="toggleTheme(item.def.id)"
-      @contextmenu="handleEditTheme(item.def)"
+      @contextmenu.prevent="handleEditTheme(item.def)"
     >
-      <div class="bg" />
-      <span class="label">{{ item.def.name }}</span>
-    </li>
-    <li
+      <span class="preview">
+        <span class="preview-image" />
+        <span class="swatch" />
+        <span v-if="themeId === item.def.id" class="check">✓</span>
+      </span>
+      <span class="label">
+        <strong>{{ item.def.name }}</strong>
+        <small>{{ themeKind(item.def) }}</small>
+      </span>
+    </button>
+
+    <button
       class="theme-item auto"
       :class="{ active: themeId === 'auto' }"
       :style="autoStyles"
       aria-label="跟随系统"
+      :aria-pressed="themeId === 'auto'"
       @click="toggleTheme('auto')"
-      @contextmenu="showAutoDialog = true"
+      @contextmenu.prevent="showAutoDialog = true"
     >
-      <div class="bg">
-        <div class="bg-content">
-          <div class="light" />
-          <div class="dark" />
-        </div>
-      </div>
-      <span class="label">跟随系统</span>
-    </li>
-    <li class="theme-item add" aria-label="添加主题" @click="handleEditTheme()">
-      <div class="bg">
-        <div class="bg-content">
-          <svg class="icon" viewBox="0 0 448 512" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M256 80c0-17.7-14.3-32-32-32s-32 14.3-32 32v144H48c-17.7 0-32 14.3-32 32s14.3 32 32 32h144v144c0 17.7 14.3 32 32 32s32-14.3 32-32V288h144c17.7 0 32-14.3 32-32s-14.3-32-32-32H256V80z"
-            />
-          </svg>
-        </div>
-      </div>
-      <span class="label">添加主题</span>
-    </li>
-  </ul>
+      <span class="preview auto-preview">
+        <span class="light" />
+        <span class="dark" />
+        <span v-if="themeId === 'auto'" class="check">✓</span>
+      </span>
+      <span class="label">
+        <strong>跟随系统</strong>
+        <small>右键设置明暗主题</small>
+      </span>
+    </button>
+
+    <button class="theme-item add" aria-label="添加主题" @click="handleEditTheme()">
+      <span class="preview add-preview">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </span>
+      <span class="label">
+        <strong>添加主题</strong>
+        <small>创建自己的配色</small>
+      </span>
+    </button>
+  </div>
   <AutoThemeDialog v-model="showAutoDialog" />
   <ThemeEditDialog v-model="showEdit" :theme-id="editThemeId" />
 </template>
 
 <style scoped>
 .theme {
-  display: flex;
-  flex-flow: row wrap;
-  margin-bottom: -18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px;
 }
 .theme-item {
-  display: flex;
-  flex-flow: column nowrap;
-  align-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid var(--color-primary-alpha-900);
+  border-radius: 10px;
+  overflow: hidden;
+  color: var(--color-font);
+  background: color-mix(in srgb, var(--color-main-background) 94%, transparent);
+  text-align: left;
   cursor: pointer;
-  margin-right: 8px;
-  margin-bottom: 18px;
-  width: 86px;
   transition:
-    color 0.3s ease,
-    opacity 0.3s ease;
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
 }
 .theme-item:hover {
-  opacity: 0.7;
+  border-color: var(--color-primary-alpha-600);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.07);
+  transform: translateY(-2px);
 }
 .theme-item.active {
-  color: var(--color-primary-font-active);
-}
-.theme-item.active .bg {
-  border-color: var(--color-primary-font-active);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-alpha-800);
 }
 .theme-item.active:hover {
-  opacity: 1;
+  transform: none;
 }
-.bg {
+.preview {
+  position: relative;
   display: block;
-  width: 36px;
-  height: 36px;
-  margin-bottom: 5px;
-  border: 2px solid transparent;
-  padding: 2px;
-  transition: border-color 0.3s ease;
-  border-radius: 5px;
+  height: 72px;
+  overflow: hidden;
+  background-color: var(--color-primary-theme);
 }
-.bg::after {
-  display: block;
-  content: ' ';
-  width: 100%;
-  height: 100%;
-  border-radius: var(--radius-border);
-  background-position: center;
+.preview-image {
+  position: absolute;
+  inset: 0;
+  background-image: var(--background-image-theme);
+  background-position: center 38%;
   background-size: cover;
   background-repeat: no-repeat;
-  background-color: var(--color-primary-theme);
-  background-image: var(--background-image-theme);
+}
+.preview::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+  background: linear-gradient(180deg, transparent 45%, rgba(0, 0, 0, 0.12));
+}
+.swatch {
+  position: absolute;
+  z-index: 1;
+  left: 9px;
+  bottom: 8px;
+  width: 18px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-primary-theme);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+}
+.check {
+  position: absolute;
+  z-index: 2;
+  top: 7px;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  color: var(--color-primary);
+  background: rgba(255, 255, 255, 0.94);
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
 }
 .label {
-  width: 100%;
-  text-align: center;
-  height: 1.2em;
-  font-size: 12px;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px 10px;
+}
+.label strong,
+.label small {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-
-/* 'auto' 双色斜切 */
-.auto .bg::after {
-  content: none;
+.label strong {
+  font-size: 11px;
+  font-weight: 650;
 }
-.auto .bg-content {
-  position: relative;
-  height: 100%;
-  overflow: hidden;
-  border-radius: 5px;
+.label small {
+  color: var(--color-font-label);
+  font-size: 9px;
 }
 .auto .light,
 .auto .dark {
   position: absolute;
-  left: 0;
-  top: 0;
-  width: 100%;
-  height: 100%;
-}
-.auto .light::after,
-.auto .dark::after {
-  display: block;
-  content: ' ';
-  width: 100%;
-  height: 100%;
+  inset: 0;
   background-position: center;
   background-size: cover;
   background-repeat: no-repeat;
 }
-.auto .light::after {
+.auto .light {
   clip-path: polygon(0 0, 100% 0, 0 100%);
   background-color: var(--color-primary-theme-light);
   background-image: var(--background-image-theme-light);
 }
-.auto .dark::after {
+.auto .dark {
   clip-path: polygon(0 100%, 100% 0, 100% 100%);
   background-color: var(--color-primary-theme-dark);
   background-image: var(--background-image-theme-dark);
 }
-
-/* 添加项 */
-.add .bg::after {
-  content: none;
-}
-.add .bg-content {
-  box-sizing: border-box;
-  border: 1px dashed var(--color-primary-light-100-alpha-300);
-  color: var(--color-primary-light-100-alpha-300);
-  height: 100%;
-  overflow: hidden;
-  border-radius: 5px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition:
-    border-color 0.3s ease,
-    color 0.3s ease;
+.add-preview {
+  display: grid;
+  place-items: center;
+  color: var(--color-primary);
+  background:
+    radial-gradient(circle at center, var(--color-primary-alpha-800), transparent 58%),
+    color-mix(in srgb, var(--color-main-background) 92%, var(--color-primary) 8%);
 }
 .add .icon {
-  width: 50%;
-  height: auto;
+  width: 25px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
 }
-.add .label {
-  color: var(--color-primary-dark-100-alpha-300);
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-item {
+    transition: none;
+  }
 }
 </style>

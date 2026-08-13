@@ -9,8 +9,9 @@ import ListAddDialog from '../components/ListAddDialog.vue'
 import QualityDialog from '../components/QualityDialog.vue'
 import PlaylistSortDialog from '../components/PlaylistSortDialog.vue'
 import PlaylistDuplicateDialog from '../components/PlaylistDuplicateDialog.vue'
+import SongIdAddDialog from '../components/SongIdAddDialog.vue'
 import { useLibraryStore } from '../stores/library'
-import { usePlayerStore } from '../stores/player'
+import { usePlayerStore, type QueueSource } from '../stores/player'
 import { useSettingsStore } from '../stores/settings'
 import { useApi } from '../composables/useApi'
 import {
@@ -155,12 +156,37 @@ async function loadTracks(): Promise<void> {
 function isActive(item: MusicItem): boolean {
   return !!player.current && getMusicItemKey(player.current) === getMusicItemKey(item)
 }
+/** 当前选中列表作为播放队列来源（供「正在播放的列表」标记） */
+function playSource(): QueueSource | undefined {
+  const s = selection.value
+  if (!s) return undefined
+  if (s.kind === 'local') return { kind: 'local', id: String(s.id), name: s.name }
+  return { kind: 'platform', id: `${s.source}:${s.id}`, name: s.name }
+}
+/** 正在播放的队列所属列表在左栏的 key（与 selectedKey 同构；single 无对应项返回空） */
+const playingKey = computed(() => {
+  const s = player.queueSource
+  if (!s) return ''
+  // 搜索点单曲的队列来源是「试听列表」，对应左栏系统列表
+  if (s.kind === 'trial') {
+    const t = playlists.value.find((p) => p.systemKind === 'trial')
+    return t ? `local:${t.id}` : ''
+  }
+  if (s.kind === 'local') return `local:${s.id}`
+  if (s.kind === 'platform') return `platform:${s.id}`
+  return ''
+})
+/** 浏览的列表 ≠ 正在播放的队列来源时提示（解释「播放中的列表」与所见列表不同步） */
+const showQueueHint = computed(
+  () => playingKey.value !== '' && playingKey.value !== selectedKey.value
+)
 function play(item: MusicItem): void {
-  // 在线歌单播放累积进试听列表；本地歌单（含试听列表自身）不动试听列表
-  player.playItem(item, tracks.value, { trackTrial: selection.value?.kind === 'platform' })
+  // 队列 = 当前所见列表（含搜索过滤后的结果），保证「下一首」与界面一致
+  player.playItem(item, filteredTracks.value, { source: playSource() })
 }
 function playAll(): void {
-  if (filteredTracks.value.length) play(filteredTracks.value[0])
+  const list = filteredTracks.value
+  if (list.length) player.playItem(list[0], list, { source: playSource() })
 }
 
 // 定位到正在播放的歌曲行（先清搜索，再滚到 .song-row.active 居中）
@@ -220,8 +246,7 @@ function onRowSelect(e: MouseEvent, index: number): void {
 
 function playSelected(): void {
   const items = selectedItems.value
-  if (items.length)
-    player.playItem(items[0], items, { trackTrial: selection.value?.kind === 'platform' })
+  if (items.length) player.playItem(items[0], items, { source: playSource() })
 }
 async function removeSelected(): Promise<void> {
   const s = selection.value
@@ -245,6 +270,24 @@ const addDialog = ref(false)
 function onAdded(): void {
   showToast(`已添加 ${selectedItems.value.length} 首到列表`)
   clearSelection()
+}
+
+// 安卓版「通过歌曲 ID / MID 导入」：仅本地列表可写
+const idAddTarget = ref<{ id: number; name: string } | null>(null)
+function openIdAddDialog(target?: { id: number; name: string }): void {
+  if (target) {
+    idAddTarget.value = target
+    return
+  }
+  const s = selection.value
+  if (s?.kind === 'local') idAddTarget.value = { id: s.id, name: s.name }
+}
+function onSongImported(item: MusicItem): void {
+  const target = idAddTarget.value
+  showToast(`已导入：${item.title}`)
+  if (target && selection.value?.kind === 'local' && selection.value.id === target.id) {
+    void loadTracks()
+  }
 }
 
 // ============ 新建歌单 ============
@@ -318,6 +361,7 @@ const menuItems = computed<MenuItem[]>(() => {
     { key: 'sort', label: '排序歌曲', icon: 'sort', divider: true },
     { key: 'duplicate', label: '重复歌曲', icon: 'copy' },
     { key: 'addLocal', label: '添加本地歌曲', icon: 'folder' },
+    { key: 'addById', label: '通过 ID / MID 添加歌曲', icon: 'plus' },
     { key: 'update', label: '更新', icon: 'refresh', divider: true, disabled: !remote },
     { key: 'detail', label: '歌单详情页', icon: 'library', disabled: !remote },
     { key: 'import', label: '导入', icon: 'download', divider: true },
@@ -346,6 +390,8 @@ async function onMenuSelect(key: string): Promise<void> {
     dupTarget.value = p
   } else if (key === 'addLocal') {
     void addLocalSongs(p)
+  } else if (key === 'addById') {
+    openIdAddDialog(p)
   } else if (key === 'update') {
     void updateFromRemote(p)
   } else if (key === 'detail') {
@@ -534,6 +580,13 @@ onUnmounted(() => {
             class="li-mark"
           />
           <span class="li-name ellipsis">试听列表</span>
+          <AppIcon
+            v-if="playingKey === `local:${trial.id}`"
+            name="headphone"
+            :size="13"
+            class="li-playing"
+            title="正在播放此列表"
+          />
         </button>
         <button
           v-if="favorites"
@@ -549,6 +602,13 @@ onUnmounted(() => {
             class="li-mark"
           />
           <span class="li-name ellipsis">我的收藏</span>
+          <AppIcon
+            v-if="playingKey === `local:${favorites.id}`"
+            name="headphone"
+            :size="13"
+            class="li-playing"
+            title="正在播放此列表"
+          />
         </button>
 
         <template v-for="p in customPlaylists" :key="p.id">
@@ -581,6 +641,13 @@ onUnmounted(() => {
               class="li-mark"
             />
             <span class="li-name ellipsis">{{ p.name }}</span>
+            <AppIcon
+              v-if="playingKey === `local:${p.id}`"
+              name="headphone"
+              :size="13"
+              class="li-playing"
+              title="正在播放此列表"
+            />
           </button>
         </template>
 
@@ -598,6 +665,13 @@ onUnmounted(() => {
             class="li-mark"
           />
           <span class="li-name ellipsis">{{ p.name }}</span>
+          <AppIcon
+            v-if="playingKey === `platform:${g.source}:${p.id}`"
+            name="headphone"
+            :size="13"
+            class="li-playing"
+            title="正在播放此列表"
+          />
         </button>
 
         <!-- 新建列表输入行：位于列表末尾（LX） -->
@@ -630,6 +704,14 @@ onUnmounted(() => {
             <span>{{ showListOps ? '操作' : '' }}</span>
             <span class="head-tools">
               <button
+                v-if="selection.kind === 'local'"
+                class="head-tool"
+                title="通过 ID / MID 添加歌曲"
+                @click="openIdAddDialog()"
+              >
+                <AppIcon name="plus" :size="14" />
+              </button>
+              <button
                 v-if="player.current"
                 class="head-tool"
                 title="定位当前播放"
@@ -647,6 +729,14 @@ onUnmounted(() => {
               </button>
             </span>
           </div>
+        </div>
+
+        <!-- 正在播放的队列来自其他列表时提示（当前所见 ≠ 播放队列） -->
+        <div v-if="showQueueHint" class="queue-hint">
+          <AppIcon name="headphone" :size="13" />
+          <span class="qh-text ellipsis">
+            正在播放「{{ player.queueSource?.name || '其他列表' }}」的队列（{{ player.queue.length }} 首）——点歌或「播放全部」将切换到本列表
+          </span>
         </div>
 
         <!-- 列表内搜索（切换显示） -->
@@ -739,6 +829,15 @@ onUnmounted(() => {
       :items="selectedItems"
       @added="onDownloadAdded"
       @close="qualityDialog = false"
+    />
+
+    <!-- 通过平台歌曲 ID / MID 添加到本地歌单 -->
+    <SongIdAddDialog
+      v-if="idAddTarget"
+      :playlist-id="idAddTarget.id"
+      :playlist-name="idAddTarget.name"
+      @added="onSongImported"
+      @close="idAddTarget = null"
     />
 
     <!-- 删除确认 -->
@@ -847,6 +946,11 @@ onUnmounted(() => {
   margin-left: -6px;
   color: var(--color-primary);
 }
+.li-playing {
+  flex: none;
+  margin-left: 6px;
+  color: var(--color-primary);
+}
 .li-name {
   flex: 1;
   min-width: 0;
@@ -944,6 +1048,24 @@ onUnmounted(() => {
 .head-tool.on {
   color: var(--color-primary);
   background: var(--color-button-background-hover);
+}
+
+/* ---------- 正在播放队列来源提示 ---------- */
+.queue-hint {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 16px 0;
+  padding: 7px 12px;
+  border-radius: var(--form-radius);
+  font-size: 12px;
+  color: var(--color-primary);
+  background: var(--color-primary-background);
+}
+.qh-text {
+  min-width: 0;
+  color: var(--color-font);
 }
 
 /* ---------- 列表内搜索行 ---------- */

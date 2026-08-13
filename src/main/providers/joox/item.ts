@@ -22,7 +22,7 @@ const JOOX_QUALITY: Record<string, [string, string]> = {
   '128': ['128k', '普通音质 128K'],
   '320': ['320k', '高品音质 320K'],
   flac: ['flac', '无损音质 FLAC'],
-  hires: ['hires', '无损音质 Hi-Res'],
+  hires: ['hires', '无损音质 HiRes'],
   master_tape: ['master', '臻品母带'],
   stereo_atmos: ['atmos', '臻品全景声']
 }

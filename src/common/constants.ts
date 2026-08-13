@@ -3,8 +3,8 @@
  */
 import type { MusicSource, QualityId } from './types/music'
 
-/** 六大在线音源顺序（云盘上游已删库，不再实现；local 为本地文件不在其列） */
-export const PLATFORMS: readonly MusicSource[] = ['wy', 'qq', 'kg', 'kw', 'joox', 'sp'] as const
+/** 五大在线音源顺序（云盘上游已删库，不再实现；local 为本地文件不在其列） */
+export const PLATFORMS: readonly MusicSource[] = ['wy', 'qq', 'kg', 'kw', 'joox'] as const
 
 /** 音源显示名（取自 Android 各 Provider.displayName） */
 export const PLATFORM_NAMES: Record<MusicSource, string> = {
@@ -13,7 +13,6 @@ export const PLATFORM_NAMES: Record<MusicSource, string> = {
   kg: '酷狗音乐',
   kw: '酷我音乐',
   joox: 'JOOX',
-  sp: 'Spotify',
   local: '本地'
 }
 
@@ -24,15 +23,13 @@ export const PLATFORM_SHORT_TAGS: Record<MusicSource, string> = {
   kg: 'kg',
   kw: 'kw',
   joox: 'jx',
-  sp: 'sp',
   local: 'local'
 }
 
 /**
  * 内部音源标识 → 自建后端 getUrl 的 platform 名映射。
  * 见 tool/MusicUrlHelper：qq→qq, kg→kugou, kw→kuwo, wy→wyy, joox→joox。
- * sp 不走 /app/getUrl（走 /music/url，由 SpProvider 自行解析），映射仅为类型完整；
- * local 同理（播放直接读文件）。
+ * local 直接播放本地文件，不走后端。
  */
 export const BACKEND_PLATFORM: Record<MusicSource, string> = {
   wy: 'wyy',
@@ -40,7 +37,6 @@ export const BACKEND_PLATFORM: Record<MusicSource, string> = {
   kg: 'kugou',
   kw: 'kuwo',
   joox: 'joox',
-  sp: 'sp',
   local: ''
 }
 
@@ -55,15 +51,35 @@ export const QUALITY_IDS: readonly QualityId[] = [
   'atmos_plus'
 ] as const
 
-/** 音质显示名 */
+/** 音质显示名（全端统一口径；flac24bit 在解码层归一化到 hires） */
 export const QUALITY_NAMES: Record<QualityId, string> = {
-  '128k': '标准',
-  '320k': '高品质',
-  flac: '无损',
-  hires: 'Hi-Res',
-  master: '母带',
-  atmos: '全景声',
-  atmos_plus: '全景声增强'
+  '128k': '普通音质 128K',
+  '320k': '高品音质 320K',
+  flac: '无损音质 FLAC',
+  hires: '无损音质 HiRes',
+  master: '臻品母带',
+  atmos: '臻品全景声',
+  atmos_plus: '臻品全景声 2.0'
+}
+
+/**
+ * 音质自动降级顺序：从目标档开始，按档位从高到低依次降级。
+ * `available` 为该曲真实可用的档位表（缺省视为全部可用）；目标档不在标准档位表时退回 [target]。
+ * 用于下载在首选档解析失败时逐级回退到更低档（播放侧的降级见 player store 的 qualityOrder）。
+ */
+export function qualityFallbackOrder(
+  target: string,
+  available?: Readonly<Record<string, unknown>>
+): string[] {
+  const ladder = [...QUALITY_IDS].reverse() // 高 → 低
+  const start = ladder.indexOf(target as QualityId)
+  if (start < 0) return available && !available[target] ? [] : [target]
+  const order: string[] = []
+  for (let i = start; i < ladder.length; i++) {
+    const q = ladder[i]
+    if (!available || available[q]) order.push(q)
+  }
+  return order
 }
 
 /** 固定列表 id（对应 Android LocalPlaylist 的 favorites/recent 及下载/临时列表） */
@@ -83,9 +99,6 @@ export type FixedListId = (typeof LIST_IDS)[keyof typeof LIST_IDS]
 
 /** 自建播放地址后端 */
 export const GET_URL_ENDPOINT = 'https://c.wwwweb.top/app/getUrl'
-
-/** 自建后端 /music/* 接口基址（Spotify 等经 X-Api-Key 卡密鉴权的源走这套） */
-export const MUSIC_API_BASE = 'https://c.wwwweb.top/music'
 
 /** 窗口尺寸档位（取自 lx-music-desktop common/config.ts 的 windowSizeList） */
 export interface WindowSizeItem {

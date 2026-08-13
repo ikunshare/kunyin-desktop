@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { MusicItem, PlayMode, QualityId } from '@common'
+import { getMusicItemKey } from '@common'
 import { useSettingsStore } from './settings'
 
 /**
@@ -17,6 +18,21 @@ const QUALITY_LADDER: QualityId[] = [
   'atmos',
   'atmos_plus'
 ]
+const SPECTRUM_BAR_COUNT = 20
+
+/**
+ * 播放队列的来源（哪个列表/试听/单曲）。各列表页据此判断「当前正在播放的队列属于哪里」，
+ * 用于展示正在播放的列表标记、提示用户浏览的列表与播放队列不一致。
+ * - local   本地歌单（含系统列表：我的收藏/试听列表）
+ * - platform 在线歌单/专辑/歌手（id 统一为 `source:id`）
+ * - trial   试听列表（搜索点单曲）
+ * - single  单曲临时队列（重复歌曲弹窗等）
+ */
+export interface QueueSource {
+  kind: 'local' | 'platform' | 'trial' | 'single'
+  id?: string
+  name?: string
+}
 
 /** 把 MediaError 翻成人话（网络类错误多半是代理不可用，直接点出来省得用户猜） */
 function describeMediaError(err: MediaError | null): string {
@@ -38,6 +54,8 @@ export const usePlayerStore = defineStore('player', () => {
   const current = ref<MusicItem | null>(null)
   const queue = ref<MusicItem[]>([])
   const index = ref(-1)
+  /** 当前播放队列的来源列表（null 表示队列无来源，如恢复旧存档） */
+  const queueSource = ref<QueueSource | null>(null)
   const playing = ref(false)
   const playMode = ref<PlayMode>('listLoop')
   const currentTime = ref(0)
@@ -50,7 +68,151 @@ export const usePlayerStore = defineStore('player', () => {
   const muted = ref(false)
 
   const audio = new Audio()
+  // kunyin:// 响应带 Access-Control-Allow-Origin；anonymous 让 captureStream 可旁路采样。
+  audio.crossOrigin = 'anonymous'
   audio.volume = volume.value
+
+  // 桌面歌词实时频谱使用 captureStream 旁路采样，绝不把原 <audio> 改接到
+  // MediaElementAudioSourceNode；后者会接管原输出链路，遇到自定义协议/CORS 时可能直接静音。
+  let audioContext: AudioContext | null = null
+  let capturedStream: MediaStream | null = null
+  let spectrumGraph: { source: MediaStreamAudioSourceNode; sink: GainNode } | null = null
+  let analyser: AnalyserNode | null = null
+  let spectrumBytes: Uint8Array<ArrayBuffer> | null = null
+  let spectrumAttachTimer: ReturnType<typeof setTimeout> | null = null
+
+  function resetSpectrumStream(): void {
+    if (spectrumAttachTimer) clearTimeout(spectrumAttachTimer)
+    spectrumAttachTimer = null
+    spectrumGraph?.source.disconnect()
+    analyser?.disconnect()
+    spectrumGraph?.sink.disconnect()
+    capturedStream = null
+    spectrumGraph = null
+    analyser = null
+    spectrumBytes = null
+  }
+
+  function attachSpectrumStream(): void {
+    const context = audioContext
+    if (!context || context.state !== 'running' || analyser || spectrumGraph) return
+    const capture = (
+      audio as HTMLAudioElement & {
+        captureStream?: () => MediaStream
+      }
+    ).captureStream
+    if (!capture) return
+    try {
+      if (!capturedStream?.getAudioTracks().length) {
+        const stream = capture.call(audio)
+        if (!stream.getAudioTracks().length) {
+          // playItem 会在设置 src 前预热 AudioContext；此时 captureStream 还没有音轨。
+          // 不缓存空流，等 loadeddata/play 事件后重新 capture。
+          capturedStream = null
+          return
+        }
+        capturedStream = stream
+      }
+      const activeTrack = capturedStream
+        .getAudioTracks()
+        .filter((track) => track.readyState === 'live')
+        .at(-1)
+      if (!activeTrack) return
+
+      const nextAnalyser = context.createAnalyser()
+      nextAnalyser.fftSize = 256
+      nextAnalyser.smoothingTimeConstant = 0.76
+      nextAnalyser.minDecibels = -90
+      nextAnalyser.maxDecibels = -18
+      // captureStream 在切换 src 后可能同时残留旧/新轨道；只分析最后一个 live track。
+      const nextSource = context.createMediaStreamSource(new MediaStream([activeTrack]))
+      // 零增益输出只用于让分析图持续处理；原声音仍由 <audio> 自己直出，不会重复播放。
+      const nextSink = context.createGain()
+      nextSink.gain.value = 0
+      nextSource.connect(nextAnalyser)
+      nextAnalyser.connect(nextSink)
+      nextSink.connect(context.destination)
+
+      spectrumGraph = { source: nextSource, sink: nextSink }
+      analyser = nextAnalyser
+      spectrumBytes = new Uint8Array(nextAnalyser.frequencyBinCount)
+    } catch (e) {
+      console.warn('[player] 无法接入实时音频频谱旁路', e)
+    }
+  }
+
+  function scheduleSpectrumAttach(attempt = 0): void {
+    if (spectrumAttachTimer) clearTimeout(spectrumAttachTimer)
+    spectrumAttachTimer = null
+    attachSpectrumStream()
+    if (analyser || audio.paused || attempt >= 20) return
+    // 不同音频格式创建 captureStream track 的时机略有差异，最多等待 2 秒。
+    spectrumAttachTimer = setTimeout(() => scheduleSpectrumAttach(attempt + 1), 100)
+  }
+
+  function enableAudioSpectrum(): void {
+    const activation = (navigator as Navigator & { userActivation?: { isActive: boolean } })
+      .userActivation
+    if (!audioContext && activation && !activation.isActive) return
+    if (audioContext) {
+      if (audioContext.state === 'suspended') {
+        void audioContext
+          .resume()
+          .then(attachSpectrumStream)
+          .catch(() => {})
+      } else {
+        attachSpectrumStream()
+      }
+      return
+    }
+
+    const context = new AudioContext()
+    audioContext = context
+    void context
+      .resume()
+      .then(attachSpectrumStream)
+      .catch((e: unknown) => {
+        if (audioContext === context) audioContext = null
+        void context.close().catch(() => {})
+        console.warn('[player] 无法初始化实时音频频谱', e)
+      })
+  }
+
+  function getSpectrumData(): number[] {
+    const bars = new Array<number>(SPECTRUM_BAR_COUNT).fill(0)
+    if (!analyser || !spectrumBytes || audio.paused || audioContext?.state !== 'running')
+      return bars
+    analyser.getByteFrequencyData(spectrumBytes)
+    // 频率桶按幂次划分：低频保留更多分辨率，高频合并，视觉上更接近真实音乐频谱。
+    const usableBins = Math.min(spectrumBytes.length, 96)
+    for (let i = 0; i < SPECTRUM_BAR_COUNT; i++) {
+      const start = Math.max(1, Math.floor((i / SPECTRUM_BAR_COUNT) ** 1.55 * (usableBins - 1)))
+      const end = Math.max(
+        start + 1,
+        Math.floor(((i + 1) / SPECTRUM_BAR_COUNT) ** 1.55 * (usableBins - 1))
+      )
+      let sum = 0
+      let peak = 0
+      for (let bin = start; bin <= Math.min(end, usableBins - 1); bin++) {
+        const value = spectrumBytes[bin]
+        sum += value
+        if (value > peak) peak = value
+      }
+      const count = Math.max(1, Math.min(end, usableBins - 1) - start + 1)
+      const level = (sum / count / 255) * 0.72 + (peak / 255) * 0.28
+      bars[i] = Math.round(Math.max(0, Math.min(1, level)) * 1000) / 1000
+    }
+    return bars
+  }
+
+  window.addEventListener(
+    'pointerdown',
+    () => {
+      if (useSettingsStore().settings.lyrics.desktopAudioVisualization) enableAudioSpectrum()
+    },
+    { capture: true }
+  )
+
   audio.addEventListener('timeupdate', () => {
     currentTime.value = Math.floor(audio.currentTime * 1000)
     if (audio.paused) return
@@ -62,8 +224,28 @@ export const usePlayerStore = defineStore('player', () => {
   audio.addEventListener('durationchange', () => {
     duration.value = Number.isFinite(audio.duration) ? Math.floor(audio.duration * 1000) : 0
   })
-  audio.addEventListener('play', () => (playing.value = true))
+  audio.addEventListener('emptied', resetSpectrumStream)
+  audio.addEventListener('loadeddata', () => {
+    if (useSettingsStore().settings.lyrics.desktopAudioVisualization) scheduleSpectrumAttach()
+  })
+  audio.addEventListener('play', () => {
+    playing.value = true
+    if (useSettingsStore().settings.lyrics.desktopAudioVisualization) {
+      enableAudioSpectrum()
+      attachSpectrumStream()
+    }
+  })
+  // play 事件可能早于 captureStream 音轨创建；playing 表示解码输出已真正开始，
+  // 此时重新 capture 才能稳定拿到 live audio track。
+  audio.addEventListener('playing', () => {
+    if (useSettingsStore().settings.lyrics.desktopAudioVisualization) {
+      enableAudioSpectrum()
+      scheduleSpectrumAttach()
+    }
+  })
   audio.addEventListener('pause', () => {
+    if (spectrumAttachTimer) clearTimeout(spectrumAttachTimer)
+    spectrumAttachTimer = null
     playing.value = false
     persistState()
   })
@@ -104,6 +286,7 @@ export const usePlayerStore = defineStore('player', () => {
     item: MusicItem
     queue: MusicItem[]
     index: number
+    queueSource: QueueSource | null
     positionMs: number
     muted: boolean
     /** 上次实际播放的音质：恢复时优先尝试（可能与全局首选不同，如首选档缺失时的回退档） */
@@ -118,6 +301,7 @@ export const usePlayerStore = defineStore('player', () => {
       item: current.value,
       queue: queue.value,
       index: index.value,
+      queueSource: queueSource.value,
       positionMs: currentTime.value,
       muted: muted.value,
       quality: quality.value
@@ -290,6 +474,7 @@ export const usePlayerStore = defineStore('player', () => {
     }
     queue.value = Array.isArray(saved.queue) ? saved.queue : []
     index.value = typeof saved.index === 'number' ? saved.index : -1
+    queueSource.value = saved.queueSource ?? null
     muted.value = !!saved.muted
     current.value = saved.item
     duration.value = saved.item.duration
@@ -303,16 +488,28 @@ export const usePlayerStore = defineStore('player', () => {
 
   /**
    * 播放一首歌。
-   * @param list 设为播放队列（浏览页传搜索/歌单结果）
-   * @param opts.trackTrial 是否把该曲累积进「试听列表」（对齐 Android：搜索/专辑/歌手点单曲时累积）。
+   * @param list 设为播放队列（浏览页传歌单/专辑等结果列表）
+   * @param opts.source 队列来源列表（用于「正在播放的列表」标记；不传则视为无来源）
+   * @param opts.trackTrial 是否把该曲累积进「试听列表」（专辑/歌手点单曲时作历史累积）。
    *   从试听列表自身播放时应传 false，避免自我扰动。默认 false（不动试听列表）。
+   *   搜索点单曲请用 playInTrial——试听列表即其播放上下文，不只是历史记录。
    */
-  function playItem(item: MusicItem, list?: MusicItem[], opts?: { trackTrial?: boolean }): void {
+  function playItem(
+    item: MusicItem,
+    list?: MusicItem[],
+    opts?: { trackTrial?: boolean; source?: QueueSource }
+  ): void {
+    if (useSettingsStore().settings.lyrics.desktopAudioVisualization) enableAudioSpectrum()
     current.value = item
     retriedAfterError = false // 用户主动切歌：允许错误重试
     if (list) {
       queue.value = list
-      index.value = list.indexOf(item)
+      // 用歌曲身份而非引用定位：队列可能是主进程重新序列化的对象（如试听列表），引用比较会失配
+      index.value = Math.max(
+        0,
+        list.findIndex((m) => getMusicItemKey(m) === getMusicItemKey(item))
+      )
+      queueSource.value = opts?.source ?? null
     }
     schedulePersist()
     if (opts?.trackTrial) {
@@ -323,8 +520,38 @@ export const usePlayerStore = defineStore('player', () => {
     void loadAndPlay(item)
   }
 
+  /**
+   * 试听播放（搜索点单曲）：把该曲累积进试听列表，再以**整个试听列表**为队列播放——
+   * 试听列表即试听场景的播放上下文（对齐 LX）：上一首/下一首在试听历史内导航，
+   * 播完自动接下一首，而不是单曲循环或跳进其他搜索结果。
+   * 拉取失败时退化为只放该曲，保证可播。
+   */
+  async function playInTrial(item: MusicItem): Promise<void> {
+    if (useSettingsStore().settings.lyrics.desktopAudioVisualization) enableAudioSpectrum()
+    // 过 IPC 需普通对象（Pinia 响应式 Proxy 无法被 structuredClone）
+    const plain = JSON.parse(JSON.stringify(item)) as MusicItem
+    // 先累积再拉列表：await 串行保证队列里一定包含本曲。
+    // 主进程 INSERT OR IGNORE 去重——已存在的歌保持原位，不会被挪到末尾。
+    await window.api.library.addToTrial(plain, false).catch(() => {})
+    const list = await window.api.library.trialSongs().catch(() => [] as MusicItem[])
+    const q = list.length ? list : [plain]
+    current.value = item
+    retriedAfterError = false // 用户主动切歌：允许错误重试
+    queue.value = q
+    queueSource.value = { kind: 'trial', name: '试听列表' }
+    // trialSongs 是主进程新序列化出的对象，引用比较找不到，按歌曲身份定位
+    const key = getMusicItemKey(item)
+    index.value = Math.max(
+      0,
+      q.findIndex((m) => getMusicItemKey(m) === key)
+    )
+    schedulePersist()
+    void loadAndPlay(item)
+  }
+
   function toggle(): void {
     if (!current.value) return
+    if (useSettingsStore().settings.lyrics.desktopAudioVisualization) enableAudioSpectrum()
     if (audio.paused) void audio.play().catch(() => {})
     else audio.pause()
   }
@@ -335,7 +562,7 @@ export const usePlayerStore = defineStore('player', () => {
    */
   function playNext(item: MusicItem): void {
     if (!current.value || !queue.value.length) {
-      playItem(item, [item])
+      playItem(item, [item], { source: { kind: 'single' } })
       return
     }
     const key = (m: MusicItem): string => `${m.id}_${m.type}`
@@ -350,6 +577,27 @@ export const usePlayerStore = defineStore('player', () => {
     }
     q.splice(index.value + 1, 0, item)
     queue.value = q
+  }
+
+  /**
+   * 从播放队列移除一首歌（列表删除歌曲时同步调用）。
+   * 删除的是当前播放曲时，立即接播队列「下一首」（队列已空则停止），不再播已删的歌；
+   * 删除其他位置的曲只做数组剔除，index 保持指向不变，prev/next 也切不到已删的这首。
+   */
+  function removeFromQueue(item: MusicItem): void {
+    const key = getMusicItemKey(item)
+    const idx = queue.value.findIndex((m) => getMusicItemKey(m) === key)
+    if (idx < 0) return
+    const removingCurrent =
+      idx === index.value && !!current.value && getMusicItemKey(current.value) === key
+    queue.value.splice(idx, 1)
+    if (idx <= index.value) index.value -= 1
+    if (index.value < 0) index.value = queue.value.length ? 0 : -1
+    schedulePersist()
+    if (removingCurrent) {
+      if (queue.value.length) step(1) // 删除即切走，忽略 singleLoop 的重播语义
+      else audio.pause()
+    }
   }
 
   function seek(ms: number): void {
@@ -368,7 +616,8 @@ export const usePlayerStore = defineStore('player', () => {
     if (i < 0) i = n - 1
     if (i >= n) i = 0
     index.value = i
-    playItem(queue.value[i], queue.value)
+    // 在队列内切歌不改来源；source 回传保持「正在播放的列表」标记稳定
+    playItem(queue.value[i], queue.value, { source: queueSource.value ?? undefined })
   }
   function next(): void {
     if (playMode.value === 'singleLoop' && current.value) {
@@ -414,6 +663,7 @@ export const usePlayerStore = defineStore('player', () => {
     current,
     queue,
     index,
+    queueSource,
     playing,
     playMode,
     currentTime,
@@ -423,8 +673,12 @@ export const usePlayerStore = defineStore('player', () => {
     volume,
     muted,
     quality,
+    enableAudioSpectrum,
+    getSpectrumData,
     playItem,
+    playInTrial,
     playNext,
+    removeFromQueue,
     toggle,
     seek,
     next,

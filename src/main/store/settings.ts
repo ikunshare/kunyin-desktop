@@ -32,7 +32,10 @@ function deepMerge(base: unknown, patch: unknown): unknown {
 function load(): AppSettings {
   try {
     const raw = readFileSync(filePath(), 'utf-8')
-    return deepMerge(DEFAULT_SETTINGS, JSON.parse(raw)) as AppSettings
+    const merged = deepMerge(DEFAULT_SETTINGS, JSON.parse(raw)) as AppSettings
+    // 已移除的桌面歌词描边字段不再带入运行时或后续持久化文件。
+    delete (merged.lyrics as unknown as Record<string, unknown>).desktopShadowColor
+    return merged
   } catch {
     return { ...DEFAULT_SETTINGS }
   }

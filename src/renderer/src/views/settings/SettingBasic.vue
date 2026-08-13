@@ -29,9 +29,9 @@ function setAppFont(font: string): void {
 </script>
 
 <template>
-  <dt id="basic">基础设置</dt>
+  <dt id="basic">外观与界面</dt>
   <dd>
-    <h3 id="basic_theme">主题（右键自定义主题可编辑）</h3>
+    <h3 id="basic_theme">主题外观 <span class="hint">右键自定义主题可编辑</span></h3>
     <div>
       <ThemePicker />
     </div>

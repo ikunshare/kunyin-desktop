@@ -72,7 +72,7 @@ export function parseTrackInfo(item: any): QQMusicItem | null {
   addQ(q, '128k', '普通音质 128K', num(file.size_128mp3, 0), mediaMid)
   addQ(q, '320k', '高品音质 320K', num(file.size_320mp3, 0), mediaMid)
   addQ(q, 'flac', '无损音质 FLAC', num(file.size_flac, 0), mediaMid)
-  addQ(q, 'hires', '无损音质 Hi-Res', num(file.size_hires, 0), mediaMid)
+  addQ(q, 'hires', '无损音质 HiRes', num(file.size_hires, 0), mediaMid)
   addSpecial(q, 'master', '臻品母带', sizeNew, 0, vs, 3)
   addSpecial(q, 'atmos', '臻品全景声', sizeNew, 1, vs, 4)
   addSpecial(q, 'atmos_plus', '臻品全景声 2.0', sizeNew, 2, vs, 4)

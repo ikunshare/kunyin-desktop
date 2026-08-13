@@ -17,14 +17,19 @@ withDefaults(defineProps<{ min?: boolean; outline?: boolean; disabled?: boolean 
 .btn {
   display: inline-block;
   border: none;
-  border-radius: var(--form-radius);
+  min-height: 34px;
+  border: 1px solid var(--color-primary-alpha-900);
+  border-radius: 8px;
   cursor: pointer;
   padding: 8px 15px;
   color: var(--color-button-font);
   outline: none;
-  transition: background-color 0.2s ease;
-  background-color: var(--color-button-background);
-  font-size: 14px;
+  transition:
+    background-color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+  background-color: color-mix(in srgb, var(--color-main-background) 82%, var(--color-primary) 18%);
+  font-size: 12px;
 }
 .btn:disabled {
   opacity: 0.4;
@@ -35,12 +40,15 @@ withDefaults(defineProps<{ min?: boolean; outline?: boolean; disabled?: boolean 
 }
 .btn:hover {
   background-color: var(--color-button-background-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
 }
 .btn:active {
   background-color: var(--color-button-background-active);
 }
 .min {
-  padding: 3px 8px;
+  min-height: 30px;
+  padding: 4px 10px;
   font-size: 12px;
 }
 </style>

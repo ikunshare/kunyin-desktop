@@ -1,7 +1,7 @@
 /**
  * 歌词解密与格式转换（移植自 cpp/Lrc/Lrc.cpp + LrcParser.kt，纯 JS 实现）。
  * - decryptKrc：酷狗 KRC（跳 4 字节 magic → XOR key → zlib inflate）
- * - decryptKuwo：酷我（找 \r\n\r\n → inflate → base64 → XOR yeelion → GB18030）
+ * - decryptKuwo：酷我（找 \r\n\r\n → inflate → base64 → XOR yeelion → 指定编码，默认 GB18030）
  * - decryptQrc：QQ QRC（hex → 3DES-EDE → inflate）
  * 转换函数把各家逐字格式归一化为 music-lyric-kit 可解析的增强 LRC：
  *   行首 [mm:ss.xx]，逐字 <offsetMs,durMs>字（TIME_TAG_2 相对时间）。
@@ -50,8 +50,11 @@ export function decryptKrc(data: Buffer): string {
   }
 }
 
-/** 酷我歌词解密 → GB18030 文本 */
-export function decryptKuwo(data: Buffer): string {
+/**
+ * 酷我歌词解密。默认 GB18030（旧 newlyric 接口）；
+ * 新 mlyric 接口带 `encode=utf8` 时返回 UTF-8，传 `utf-8` 即可。
+ */
+export function decryptKuwo(data: Buffer, encoding = 'gb18030'): string {
   const sep = data.indexOf(Buffer.from([0x0d, 0x0a, 0x0d, 0x0a]))
   const start = sep !== -1 ? sep + 4 : 0
   let inflated: Buffer
@@ -66,18 +69,10 @@ export function decryptKuwo(data: Buffer): string {
   const out = Buffer.allocUnsafe(bytes.length)
   for (let i = 0; i < bytes.length; i++) out[i] = bytes[i] ^ YEELION[i % 7]
   try {
-    return new TextDecoder('gb18030').decode(out)
+    return new TextDecoder(encoding).decode(out)
   } catch {
     return out.toString('utf-8')
   }
-}
-
-/** 酷我歌词请求参数：明文 XOR yeelion + base64 */
-export function buildKuwoParams(id: string): string {
-  const plain = `user=12345,web,web,web&requester=localhost&req=1&rid=MUSIC_${id}&lrcx=1`
-  const buf = Buffer.from(plain, 'latin1')
-  for (let i = 0; i < buf.length; i++) buf[i] ^= YEELION[i % 7]
-  return buf.toString('base64')
 }
 
 /** QQ / JOOX QRC 解密（hex → 改版三重 DES → inflate）→ UTF-8 文本（含 XML） */
@@ -247,12 +242,22 @@ export function parseKrc(rawText: string): KrcResult {
 }
 
 /**
- * 酷我文本 → 三轨（行级 lrc + 逐字 char + 翻译 trans）。完整移植 LrcParser.parseKw。
+ * 酷我文本 → 五轨（行级 lrc + 逐字 char + 翻译 trans + 行级音译 roma + 逐字音译 chroma）。移植 LrcParser.parseKw。
  * - `[kuwo:八进制]` 头 → kwOffset1/2；逐字 <v1,v2> 用除法公式还原绝对时间 → <mm:ss.xxx>字。
  * - 翻译轨靠重复时间戳分离（同一时间戳的第二行视为上一行的翻译）。
+ * - 音译轨（`trans_type=roma` 响应的新类型）：主歌词前插入一行全 `<0,0>` 标签、正文纯拉丁的
+ *   音节行（`<0,0>yan <0,0>zin …`），是**上一行**主歌词的罗马音。识别后按主行索引 1:1 挂回。
+ * - 逐字音译：酷我音译只有行级音节串、没有自身时间，靠「人工对齐」——把空格分隔的音节按 1:1
+ *   挂到上一主行的逐字绝对时间上，生成 `<mm:ss.xxx>音节` 轨（对齐安卓 parseKg 的 chroma）。
+ * - 结尾孤立的音译行（无下一主行）同样挂到上一主行，避免被当成唱词混入 lrc。
  */
-
-export function parseKuwo(text: string): { lrc: string; char: string; trans: string } {
+export function parseKuwo(text: string): {
+  lrc: string
+  char: string
+  trans: string
+  roma: string
+  chroma: string
+} {
   const lines = text.split('\n')
   const rxTag = /^\[(ver|ti|ar|al|offset|by|kuwo):(.*)\]$/
   const rxTime = /^\[(\d{1,2}):(\d{1,2})\.(\d{1,3})\]/
@@ -280,10 +285,18 @@ export function parseKuwo(text: string): { lrc: string; char: string; trans: str
     }
   }
 
-  // 2) 逐行解析：[timeStr, cleanContent, chaseOrClean]
+  // 2) 逐行解析
   const timeMsList: number[] = []
-  const parsed: [string, string, string][] = []
-  let hasWordTiming = false
+  const parsed: {
+    timeStr: string
+    clean: string
+    chase: string
+    wordTimings: { start: number; end: number }[]
+    hasTags: boolean
+    allZero: boolean
+    isRoma: boolean
+    empty: boolean
+  }[] = []
 
   for (const raw of lines) {
     const line = raw.trim()
@@ -305,13 +318,18 @@ export function parseKuwo(text: string): { lrc: string; char: string; trans: str
     let lastEnd = 0
     let prevEnd = 0
     let lineHasWords = false
+    let allZero = true
+    let hasTags = false
+    const wordTimings: { start: number; end: number }[] = []
     rxWord.lastIndex = 0
     let m: RegExpExecArray | null
     while ((m = rxWord.exec(content))) {
-      lineHasWords = true
+      hasTags = true
       const v1 = parseInt(m[1], 10)
       const v2 = parseInt(m[2], 10)
+      if (v1 !== 0 || v2 !== 0) allZero = false
       const word = m[3]
+      lineHasWords = true
       let startTime: number
       let endTime: number
       if (kwDecodeOk) {
@@ -326,57 +344,102 @@ export function parseKuwo(text: string): { lrc: string; char: string; trans: str
         endTime = startTime + v2
       }
       chase += `<${formatElyricTime(startTime)}>${word}`
+      wordTimings.push({ start: startTime, end: endTime })
       lastEnd = endTime
       prevEnd = endTime
     }
     if (lineHasWords && lastEnd > 0) chase += `<${formatElyricTime(lastEnd)}>`
-    if (lineHasWords) hasWordTiming = true
 
+    const clean = cleanContent.trim()
+    const isLatin = !!clean && /^[\x20-\x7e\s]+$/.test(clean) && /[A-Za-z]/.test(clean)
     timeMsList.push(lineStartMs)
-    parsed.push([timeStr, cleanContent, lineHasWords ? chase : cleanContent])
+    parsed.push({
+      timeStr,
+      clean: cleanContent,
+      chase: lineHasWords ? chase : cleanContent,
+      wordTimings,
+      hasTags,
+      allZero,
+      isRoma: hasTags && allZero && !!clean && isLatin,
+      empty: !clean
+    })
   }
 
-  // 3) 重复时间戳 → 分离主歌词 / 翻译
-  const lrcIdx: number[] = []
-  const transIdx: [number, number][] = []
-  const seen = new Set<number>()
+  // 3) 分类主行 / 音译 / 翻译。音译行（含结尾孤立行）挂到「上一主行」，翻译挂重复时间戳的首行。
+  const mainIdx: number[] = []
+  const romaOf = new Map<number, string>()
+  const chromaOf = new Map<number, string>()
+  const transOf = new Map<number, string>()
+  let hasWordTiming = false
   for (let i = 0; i < parsed.length; i++) {
-    const timeMs = timeMsList[i]
-    if (seen.has(timeMs)) {
-      if (lrcIdx.length >= 2) {
-        const transDataIdx = lrcIdx.pop() as number
-        const prevLrcDataIdx = lrcIdx[lrcIdx.length - 1]
-        transIdx.push([transDataIdx, prevLrcDataIdx])
-        lrcIdx.push(i)
+    const line = parsed[i]
+    if (line.hasTags) hasWordTiming = true
+    // 纯空行（无逐字标签，如结尾占位）不是唱词，跳过
+    if (line.empty && !line.hasTags) continue
+    if (line.isRoma) {
+      // 音译行：挂到上一条主行（时间戳用该主行的，天然 1:1）
+      const last = mainIdx[mainIdx.length - 1]
+      if (last != null) {
+        romaOf.set(last, line.clean)
+        // 逐字音译：空格分隔的音节 1:1 挂到上一主行每字绝对时间（对齐安卓 parseKg 的 chroma）。
+        // 音节数≠字数（日文促音/长音连读）时按 min 截断，多余音节丢弃，酷狗同样处理。
+        const target = parsed[last]
+        if (target.wordTimings.length) {
+          const syllables = line.clean.trim().split(/\s+/)
+          const count = Math.min(syllables.length, target.wordTimings.length)
+          let chroma = ''
+          for (let w = 0; w < count; w++) {
+            chroma += `<${formatElyricTime(target.wordTimings[w].start)}>${syllables[w]}`
+          }
+          if (count > 0) chroma += `<${formatElyricTime(target.wordTimings[count - 1].end)}>`
+          if (chroma) chromaOf.set(last, chroma)
+        }
       }
-    } else {
-      lrcIdx.push(i)
-      seen.add(timeMs)
+      continue
+    }
+    if (i + 1 < parsed.length && timeMsList[i + 1] === timeMsList[i]) {
+      // 重复时间戳 [首行, 主唱词]：首行为上一主行的翻译/元信息（AI 音译声明、空占位等）
+      const last = mainIdx[mainIdx.length - 1]
+      if (last != null && !(line.hasTags && line.allZero && line.empty)) {
+        transOf.set(last, line.clean)
+      }
+      mainIdx.push(i + 1)
+      i++
+      continue
+    }
+    mainIdx.push(i)
+  }
+
+  // 误判保护：非逐字且翻译行过多则全当主歌词（保持旧行为，仅对无逐字的旧数据生效）
+  if (!hasWordTiming && transOf.size > mainIdx.length * 0.3 && mainIdx.length - transOf.size > 6) {
+    transOf.clear()
+    mainIdx.length = 0
+    for (let i = 0; i < parsed.length; i++) {
+      if (!parsed[i].empty) mainIdx.push(i)
     }
   }
-  // 误判保护：非逐字且译文行过多则全当主歌词
-  if (
-    !hasWordTiming &&
-    transIdx.length > lrcIdx.length * 0.3 &&
-    lrcIdx.length - transIdx.length > 6
-  ) {
-    transIdx.length = 0
-    lrcIdx.length = 0
-    for (let i = 0; i < parsed.length; i++) lrcIdx.push(i)
-  }
 
+  // 4) 按主行索引 1:1 输出（音译/翻译缺行给空串，渲染层按索引对齐、空正文隐藏）
   const lrcOut: string[] = []
   const chaseOut: string[] = []
   const transOut: string[] = []
-  for (const idx of lrcIdx) {
+  const romaOut: string[] = []
+  const chromaOut: string[] = []
+  for (const idx of mainIdx) {
     const d = parsed[idx]
-    lrcOut.push(d[0] + d[1])
-    chaseOut.push(d[0] + d[2])
+    lrcOut.push(d.timeStr + d.clean)
+    chaseOut.push(d.timeStr + d.chase)
+    transOut.push(d.timeStr + (transOf.get(idx) ?? ''))
+    romaOut.push(d.timeStr + (romaOf.get(idx) ?? ''))
+    chromaOut.push(d.timeStr + (chromaOf.get(idx) ?? ''))
   }
-  for (const [ti, li] of transIdx) {
-    transOut.push(parsed[li][0] + parsed[ti][1])
+  return {
+    lrc: lrcOut.join('\n'),
+    char: chaseOut.join('\n'),
+    trans: transOut.join('\n'),
+    roma: romaOut.join('\n'),
+    chroma: chromaOut.join('\n')
   }
-  return { lrc: lrcOut.join('\n'), char: chaseOut.join('\n'), trans: transOut.join('\n') }
 }
 
 /**

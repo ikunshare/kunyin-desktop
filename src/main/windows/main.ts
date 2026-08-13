@@ -43,7 +43,12 @@ export function createMainWindow(): BrowserWindow {
     autoHideMenuBar: true,
     title: '坤音',
     frame: false,
-    backgroundColor: '#ffffff',
+    // 关闭 Windows 11 DWM 的焦点色边框和外阴影；圆角由渲染层裁切，避免重新带回蓝边。
+    roundedCorners: false,
+    thickFrame: false,
+    hasShadow: false,
+    transparent: true,
+    backgroundColor: '#00000000',
     // mac 的 Dock 图标由 app bundle 决定；win/linux 窗口图标显式给
     // （Windows 打包后 exe 图标接管，这里主要让 dev 模式任务栏不显示 Electron 默认图标）
     ...(process.platform !== 'darwin' ? { icon } : {}),

@@ -57,12 +57,19 @@ export class SyllableElement {
 
     const inputs: MaskGenerateInput[] = new Array(count)
     const lineStart = this.info.time?.start ?? 0
+    const lineDuration = Lyric.Common.getTimeDuration(this.info.time)
     for (let i = 0; i < count; i++) {
       const word = this.words[i]
       const time = word.info.time!
+      // [vendor patch] 词时间窗钳制到行时长内。上游假设词时间必然落在
+      // [lineStart, lineStart+lineDuration]；一旦源数据损坏（如词 end 超出行 end），
+      // 进度会被提前耗尽，后续词的关键帧全部堆叠到 offset=1 —— 整行擦除名存实亡。
+      // 数据正常时本钳制是恒等操作。
+      const start = Math.max(0, Math.min(lineDuration, time.start - lineStart))
+      const end = Math.max(start, Math.min(lineDuration, time.end - lineStart))
       inputs[i] = {
-        start: time.start - lineStart,
-        duration: Lyric.Common.getTimeDuration(time),
+        start,
+        duration: end - start,
         width: word.width,
         height: word.height
       }
