@@ -27,7 +27,14 @@ import {
 } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
-import type { AddDownloadInput, DownloadTask, MediaInfoResult, MusicItem } from '@common'
+import type {
+  AddDownloadInput,
+  DownloadTask,
+  Lyric,
+  MediaInfoResult,
+  MusicItem,
+  MusicSource
+} from '@common'
 import { QUALITY_IDS, qualityFallbackOrder } from '@common'
 import { getSettings } from '../../store/settings'
 import { resolveMediaInfo } from '../../providers/getUrl'
@@ -36,6 +43,7 @@ import { decryptAudioFile } from '../../crypto/decryptor'
 import { fillAudioTags, sniffImageMime } from '../../tag'
 import { requestBuffer, requestRaw } from '../../net/request'
 import { appDataPath } from '../../core/paths'
+import { buildLyrics, encodeLyric } from './lyric'
 
 const MP3_QUALITY_IDS = new Set(['128', '320', '128k', '320k', 'mp3'])
 const PROGRESS_INTERVAL_MS = 500
@@ -185,6 +193,11 @@ async function resolveWithFallback(
     if (info.isSuccess && info.playUrl) return { qualityId: q, info }
     lastReason = info.rejectReason ?? lastReason
   }
+  // 换源下载：主源全部档位失败后，跨源搜索同名歌曲（对齐 lx download.isUseOtherSource）
+  if (getSettings().download.useOtherSource) {
+    const alt = await resolveAlternative(song, qualityId)
+    if (alt) return alt
+  }
   return {
     qualityId,
     info: {
@@ -198,8 +211,46 @@ async function resolveWithFallback(
   }
 }
 
+/** 跨源换源的尝试顺序（排除原源）。 */
+const ALT_SOURCES: MusicSource[] = ['wy', 'kg', 'kw', 'qq', 'qqc', 'joox']
+
+/** 归一化标题用于同名匹配（忽略大小写、空白与常见标点）。 */
+function normalizeTitle(s: string): string {
+  return s.toLowerCase().replace(/[\s()（）【】\-—_·,.，。'"'""?!:：;；]/g, '')
+}
+
+/** 换源下载：按「歌名 歌手」搜其它音源，取第一个同名命中，解析其可用音质的播放地址。 */
+async function resolveAlternative(
+  song: MusicItem,
+  qualityId: string
+): Promise<{ qualityId: string; info: MediaInfoResult } | null> {
+  const target = normalizeTitle(song.title)
+  const keyword = `${song.title} ${song.artist}`.trim()
+  if (!target || !keyword) return null
+
+  for (const src of ALT_SOURCES) {
+    if (src === song.type) continue
+    const provider = getProvider(src)
+    if (!provider) continue
+    try {
+      const res = await provider.search(keyword, 0, 10)
+      const match = res.result.find((i) => normalizeTitle(i.title) === target)
+      if (!match) continue
+      const q = pickQuality(match, qualityId)
+      if (!q) continue
+      const info = await resolveMediaInfo(match, q)
+      if (info.isSuccess && info.playUrl) return { qualityId: q, info }
+    } catch {
+      /* 换源失败继续试下一个源 */
+    }
+  }
+  return null
+}
+
 export function addTask(input: AddDownloadInput): void {
-  const { item, subDir = '', trackNumber = 0 } = input
+  // 下载功能总开关（对齐 lx download.enable）
+  if (!getSettings().download.enabled) return
+  const { item, subDir = '', listName = '', trackNumber = 0 } = input
   const isMv = !!input.mvQuality
   const qualityId = isMv ? `mv_${input.mvQuality}` : pickQuality(item, input.qualityId)
   if (!qualityId) return
@@ -238,6 +289,7 @@ export function addTask(input: AddDownloadInput): void {
     filePath: '',
     errorMessage: '',
     subDir,
+    listName,
     trackNumber
   })
   saveTasks()
@@ -313,13 +365,36 @@ async function executeDownload(taskKey: string): Promise<void> {
       info.encryptionInfo?.isEncrypt && info.encryptionInfo.ekey ? info.encryptionInfo.ekey : null
 
     const s = getSettings().download
-    const dir = task.subDir ? join(defaultDownloadDir(), task.subDir) : defaultDownloadDir()
+    let dir = defaultDownloadDir()
+    // 整专下载：存到「下载目录/专辑名/」（专辑名过滤非法路径字符）
+    if (task.subDir) dir = join(dir, sanitize(task.subDir))
+    else if (s.groupByListName && task.listName) dir = join(dir, sanitize(task.listName))
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
     let baseName = buildFileName(task)
     const ext = extFor(actualQuality)
     let fileName = `${baseName}${ext}`
     let finalPath = join(dir, fileName)
+
+    // 跳过已存在文件（对齐 lx download.skipExistFile：>100 字节视为有效文件，直接视为完成）
+    if (s.skipExistFile && existsSync(finalPath)) {
+      try {
+        if (statSync(finalPath).size > 100) {
+          patchTask(taskKey, {
+            status: 'completed',
+            progress: 1,
+            speedBytesPerSec: 0,
+            filePath: finalPath
+          })
+          saveTasks()
+          notify()
+          return
+        }
+      } catch {
+        /* 无权限/已删除等按不存在处理，继续下载 */
+      }
+    }
+
     const tmpPath = `${finalPath}.tmp`
 
     // 同名处理：非覆盖则追加序号
@@ -369,20 +444,21 @@ async function executeDownload(taskKey: string): Promise<void> {
     }
 
     // 歌词（写入内嵌标签或保存 .lrc 时获取；失败非致命）
-    const needLyricMeta = s.writeLyricMeta
+    const needLyricMeta = s.embedLyric
     const needLrcFile = s.saveLrcFile
-    let lyricsContent: string | null = null
+    let lyric: Lyric | null = null
     if (needLyricMeta || needLrcFile) {
       try {
-        lyricsContent = await getSongLyric(song)
+        lyric = await getSongLyric(song)
       } catch {
         /* 歌词失败不影响下载 */
       }
     }
 
     // 封面字节（内嵌标签与整专封面文件复用，避免重复下载；失败非致命）
+    const needCover = s.embedCover || (s.saveAlbumCover && !!task.subDir)
     let coverBytes: Buffer | null = null
-    if (task.cover) {
+    if (task.cover && needCover) {
       try {
         const bytes = await requestBuffer(task.cover)
         if (bytes.length) coverBytes = bytes
@@ -391,6 +467,14 @@ async function executeDownload(taskKey: string): Promise<void> {
       }
     }
 
+    // 内嵌歌词文本（主歌词 + 可选翻译/罗马音/逐字；空时回退主歌词/逐字）
+    const embedLyricText =
+      needLyricMeta && lyric
+        ? buildLyrics(lyric, s.embedLyricLx, s.embedLyricT, s.embedLyricR).trim() ||
+          lyric.lrc ||
+          lyric.char
+        : ''
+
     // 内嵌标签写入：文件自带标签优先（QQ 解密文件的原容器标签更准），仅补齐缺失字段
     try {
       await fillAudioTags(finalPath, {
@@ -398,21 +482,25 @@ async function executeDownload(taskKey: string): Promise<void> {
         artist: task.artist,
         album: task.album,
         ...(task.trackNumber > 0 ? { trackNumber: task.trackNumber } : {}),
-        ...(coverBytes
+        ...(needCover && coverBytes
           ? { pictureData: coverBytes, pictureMimeType: sniffImageMime(coverBytes) }
           : {}),
-        ...(needLyricMeta && lyricsContent ? { lyrics: lyricsContent } : {})
+        ...(embedLyricText ? { lyrics: embedLyricText } : {})
       })
     } catch (e) {
       console.warn(`[download] 标签写入失败（非致命）: ${finalPath}`, e)
     }
 
-    // 保存 .lrc 歌词文件
-    if (needLrcFile && lyricsContent) {
-      try {
-        writeFileSync(join(dir, `${baseName}.lrc`), lyricsContent, 'utf-8')
-      } catch {
-        /* ignore */
+    // 保存 .lrc 歌词文件（按设置的编码 utf8/gbk 写出）
+    if (needLrcFile && lyric) {
+      const lrcText =
+        buildLyrics(lyric, s.saveLrcLx, s.saveLrcT, s.saveLrcR).trim() || lyric.lrc || lyric.char
+      if (lrcText) {
+        try {
+          writeFileSync(join(dir, `${baseName}.lrc`), encodeLyric(lrcText, s.lrcFormat))
+        } catch {
+          /* ignore */
+        }
       }
     }
 
@@ -553,12 +641,14 @@ async function downloadToFile(
   patchTask(taskKey, { progress: 1, downloadedBytes: downloaded, speedBytesPerSec: 0 })
 }
 
-/** 取歌词的增强 LRC（供 .lrc 文件）。走 Provider.getLyric。 */
-async function getSongLyric(item: MusicItem): Promise<string | null> {
+/** 取歌词（供内嵌标签 / .lrc 文件）。走 Provider.getLyric，全空返回 null。 */
+async function getSongLyric(item: MusicItem): Promise<Lyric | null> {
   const { getProvider } = await import('../../providers')
   const lyric = await getProvider(item.type)?.getLyric(item)
   if (!lyric) return null
-  return lyric.lrc || lyric.char || null
+  if (!lyric.lrc && !lyric.trans && !lyric.roma && !lyric.char && !lyric.chroma && !lyric.phonetic)
+    return null
+  return lyric
 }
 
 // —— 队列控制 ——

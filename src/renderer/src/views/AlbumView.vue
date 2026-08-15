@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import DetailHeader from '../components/DetailHeader.vue'
 import SongRow from '../components/SongRow.vue'
+import QualityDialog from '../components/QualityDialog.vue'
 import { usePlayerStore, type QueueSource } from '../stores/player'
 import { getMusicItemKey, type MusicItem, type MusicSource } from '@common'
 
@@ -12,6 +13,23 @@ const player = usePlayerStore()
 const album = ref<{ name: string; artist?: string; cover?: string; total?: number }>({ name: '' })
 const tracks = ref<MusicItem[]>([])
 const loading = ref(false)
+
+// ============ 整专下载 ============
+const qualityDialog = ref(false)
+function downloadAll(): void {
+  if (!tracks.value.length) return
+  qualityDialog.value = true
+}
+const toast = ref('')
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+function showToast(msg: string): void {
+  toast.value = msg
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => (toast.value = ''), 3600)
+}
+function onDownloadAdded(): void {
+  showToast(`已加入下载 ${tracks.value.length} 首`)
+}
 
 /** albumKey 编码为 `source:id`（source 也可走 query.source） */
 function parseKey(): { source: MusicSource; id: string } | null {
@@ -66,7 +84,9 @@ function playAll(): void {
       :title="album.name"
       :subtitle="album.artist"
       :meta="`专辑 · ${album.total ?? tracks.length} 首`"
+      download
       @play-all="playAll"
+      @download="downloadAll"
     />
     <div v-if="loading" class="hint">加载中…</div>
     <div v-else class="list">
@@ -79,6 +99,19 @@ function playAll(): void {
         @play="play(t)"
       />
     </div>
+
+    <QualityDialog
+      v-if="qualityDialog"
+      :items="tracks"
+      :sub-dir="album.name"
+      numbered
+      @added="onDownloadAdded"
+      @close="qualityDialog = false"
+    />
+
+    <transition name="fade">
+      <div v-if="toast" class="toast">{{ toast }}</div>
+    </transition>
   </div>
 </template>
 
@@ -92,5 +125,26 @@ function playAll(): void {
   text-align: center;
   font-size: 13px;
   color: var(--color-font-label);
+}
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  z-index: 2000;
+  padding: 9px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.72);
+  pointer-events: none;
+}
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

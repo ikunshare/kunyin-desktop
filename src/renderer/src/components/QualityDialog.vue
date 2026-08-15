@@ -10,7 +10,16 @@ import { useDownloadStore } from '../stores/download'
 // - 单曲：只列该曲可用的音质，显示文件大小；
 // - 批量：列全部档位（逐首回退到各自可用的最接近档位，由主进程 pickQuality 处理）。
 // 设置里的「优先下载音质」以（优先）标注。
-const props = defineProps<{ items: MusicItem[] }>()
+const props = defineProps<{
+  items: MusicItem[]
+  listName?: string
+  /** 整专下载：所有曲目保存到该子目录（专辑名） */
+  subDir?: string
+  /** 整专下载：按曲目顺序给文件名加两位轨号（配合「文件名前缀轨号」设置） */
+  numbered?: boolean
+  /** 自定义标题（纯音质选择模式用，例如「下载 N 张专辑」；items 为空时仅选档不下载） */
+  label?: string
+}>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'added', qualityId: string): void }>()
 
 const download = useDownloadStore()
@@ -48,7 +57,16 @@ function fmtSize(bytes: number): string {
 }
 
 function pick(id: string): void {
-  for (const item of props.items) void download.add(item, id)
+  const base = {
+    listName: props.listName,
+    subDir: props.subDir
+  }
+  props.items.forEach((item, i) => {
+    void download.add(item, id, {
+      ...base,
+      trackNumber: props.numbered ? i + 1 : undefined
+    })
+  })
   emit('added', id)
   emit('close')
 }
@@ -58,7 +76,8 @@ function pick(id: string): void {
   <div class="mask" @click.self="emit('close')">
     <div class="dialog">
       <h2 class="title">
-        <template v-if="isBatch">已选 {{ items.length }} 首歌曲</template>
+        <template v-if="label">{{ label }}</template>
+        <template v-else-if="isBatch">已选 {{ items.length }} 首歌曲</template>
         <template v-else>{{ items[0]?.title }}<br />{{ items[0]?.artist }}</template>
       </h2>
       <div class="btns">

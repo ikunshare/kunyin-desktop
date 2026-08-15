@@ -11,9 +11,9 @@ export const SEARCH_TYPES: readonly { id: SearchType; label: string }[] = [
   { id: 'artist', label: '歌手' }
 ] as const
 
-/** 各平台支持的搜索类型（joox 只有单曲，与 Android supportedSearchTypes 一致） */
+/** 各平台支持的搜索类型（joox/qqc 只有单曲，与 Android supportedSearchTypes 一致） */
 export function supportedSearchTypes(source: MusicSource): SearchType[] {
-  return source === 'joox' ? ['song'] : ['song', 'album', 'artist']
+  return source === 'joox' || source === 'qqc' ? ['song'] : ['song', 'album', 'artist']
 }
 
 const HISTORY_KEY = 'kunyin:searchHistory'

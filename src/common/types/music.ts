@@ -7,7 +7,7 @@
 
 /** 音源标识（反序列化分发用）。注意：与后端 getUrl 的 platform 名不同，映射见 crypto/请求层。
  * `local` 为本地文件（不走任何 Provider / 后端），仅出现在歌单里。 */
-export type MusicSource = 'wy' | 'qq' | 'kg' | 'kw' | 'joox' | 'local'
+export type MusicSource = 'wy' | 'qq' | 'qqc' | 'kg' | 'kw' | 'joox' | 'local'
 
 /** 跨平台统一的音质键 */
 export type QualityId = '128k' | '320k' | 'flac' | 'hires' | 'master' | 'atmos' | 'atmos_plus'

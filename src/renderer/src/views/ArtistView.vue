@@ -10,6 +10,7 @@ import SongRow from '../components/SongRow.vue'
 import { usePlayerStore, type QueueSource } from '../stores/player'
 import { useMvStore } from '../stores/mv'
 import { useSettingsStore } from '../stores/settings'
+import { useDownloadStore } from '../stores/download'
 import { useArtistStore, type ArtistTab } from '../stores/artist'
 import { coverUrl } from '../utils/cover'
 import { getMusicItemKey, type AlbumInfoResult, type MusicItem, type MusicSource } from '@common'
@@ -21,6 +22,7 @@ const router = useRouter()
 const player = usePlayerStore()
 const mv = useMvStore()
 const settingsStore = useSettingsStore()
+const download = useDownloadStore()
 const artist = useArtistStore()
 const {
   info,
@@ -91,6 +93,7 @@ const tabs = computed(() => {
 
 function switchTab(id: string): void {
   if (id !== 'songs') exitSelection()
+  if (id !== 'albums') exitAlbumSelection()
   artist.selectTab(id as ArtistTab)
 }
 
@@ -179,6 +182,94 @@ function albumRowSub(a: AlbumInfoResult): string {
     .join(' · ')
 }
 
+/** 发行时间 → 时间戳（用于排序；接口给 `yyyy-MM-dd` / `yyyy.MM.dd` 或时间戳字符串） */
+function publishTimeValue(publishTime: string | undefined): number {
+  if (!publishTime) return 0
+  const m = /^(\d{4})(?:[-/.](\d{1,2})(?:[-/.](\d{1,2}))?)?/.exec(publishTime)
+  if (m) return new Date(Number(m[1]), Number(m[2] ?? 1) - 1, Number(m[3] ?? 1)).getTime()
+  const ts = Number(publishTime)
+  return Number.isFinite(ts) && ts > 0 ? ts : 0
+}
+
+/** 专辑排序：按发行时间降序（新 → 旧），关闭时用接口原始顺序 */
+const albumSortDesc = ref(false)
+function toggleAlbumSort(): void {
+  albumSortDesc.value = !albumSortDesc.value
+}
+const sortedAlbums = computed(() => {
+  if (!albumSortDesc.value) return albums.value
+  return [...albums.value].sort(
+    (a, b) => publishTimeValue(b.publishTime) - publishTimeValue(a.publishTime)
+  )
+})
+
+// —— 专辑多选下载 ——
+const albumSelecting = ref(false)
+const albumSelection = ref<AlbumInfoResult[]>([])
+function enterAlbumSelection(): void {
+  albumSelecting.value = true
+}
+function exitAlbumSelection(): void {
+  albumSelecting.value = false
+  albumSelection.value = []
+}
+function albumSelected(a: AlbumInfoResult): boolean {
+  return albumSelection.value.some((s) => s.source === a.source && s.id === a.id)
+}
+function toggleAlbumSelect(a: AlbumInfoResult): void {
+  const idx = albumSelection.value.findIndex((s) => s.source === a.source && s.id === a.id)
+  if (idx >= 0) albumSelection.value.splice(idx, 1)
+  else albumSelection.value.push(a)
+}
+function selectAllAlbums(): void {
+  const all = sortedAlbums.value
+  albumSelection.value = albumSelection.value.length === all.length ? [] : [...all]
+}
+function onAlbumClick(a: AlbumInfoResult): void {
+  if (albumSelecting.value) toggleAlbumSelect(a)
+  else openAlbum(a)
+}
+
+const albumQualityDialog = ref(false)
+const albumDownloading = ref(false)
+function downloadSelectedAlbums(): void {
+  if (!albumSelection.value.length) return
+  albumQualityDialog.value = true
+}
+/** 选定音质后逐个专辑拉歌，按「专辑名子目录 + 轨号」加入下载队列 */
+async function onAlbumQualityPicked(qualityId: string): Promise<void> {
+  const selected = [...albumSelection.value]
+  albumQualityDialog.value = false
+  if (!selected.length) return
+  albumDownloading.value = true
+  let songCount = 0
+  try {
+    for (const album of selected) {
+      const res = await window.api.discover
+        .albumSongs(album.source, album.id, 0, 200)
+        .catch(() => null)
+      const list = res?.result ?? []
+      list.forEach((song, i) => {
+        void download.add(song, qualityId, { subDir: album.name, trackNumber: i + 1 })
+      })
+      songCount += list.length
+    }
+    showToast(`已加入下载 ${selected.length} 张专辑（${songCount} 首）`)
+  } finally {
+    albumDownloading.value = false
+    exitAlbumSelection()
+  }
+}
+
+// 轻提示（下载结果反馈）
+const toast = ref('')
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+function showToast(msg: string): void {
+  toast.value = msg
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => (toast.value = ''), 3600)
+}
+
 // ============ MV ============
 function fmtDuration(seconds: number | undefined): string {
   if (!seconds) return ''
@@ -263,6 +354,25 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
         <template v-else-if="tab === 'albums'">
           <div class="ar-toolbar">
             <button
+              class="icon-btn text-btn"
+              :class="{ on: albumSortDesc }"
+              title="按发行时间降序排列"
+              @click="toggleAlbumSort"
+            >
+              <AppIcon name="sort" :size="15" />
+              <span>时间降序</span>
+            </button>
+            <button
+              v-if="!albumSelecting"
+              class="icon-btn text-btn"
+              title="批量选择专辑"
+              @click="enterAlbumSelection"
+            >
+              <AppIcon name="check" :size="15" />
+              <span>多选</span>
+            </button>
+            <span class="toolbar-spacer" />
+            <button
               class="icon-btn"
               :title="albumListMode ? '网格视图' : '列表视图'"
               @click="toggleAlbumListMode"
@@ -275,20 +385,26 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
           <template v-else>
             <div v-if="albumListMode" class="album-rows">
               <button
-                v-for="a in albums"
+                v-for="a in sortedAlbums"
                 :key="`${a.source}_${a.id}`"
                 class="album-row"
-                @click="openAlbum(a)"
+                :class="{ selected: albumSelected(a) }"
+                @click="onAlbumClick(a)"
               >
-                <img
-                  v-if="a.cover"
-                  class="ar-cover sm"
-                  :src="coverUrl(a.cover)"
-                  loading="lazy"
-                  alt=""
-                />
-                <div v-else class="ar-cover sm placeholder">
-                  <AppIcon name="library" :size="20" />
+                <div class="cover-wrap sm">
+                  <img
+                    v-if="a.cover"
+                    class="ar-cover sm"
+                    :src="coverUrl(a.cover)"
+                    loading="lazy"
+                    alt=""
+                  />
+                  <div v-else class="ar-cover sm placeholder">
+                    <AppIcon name="library" :size="20" />
+                  </div>
+                  <span v-if="albumSelecting" class="album-check" :class="{ on: albumSelected(a) }">
+                    <AppIcon v-if="albumSelected(a)" name="check" :size="13" />
+                  </span>
                 </div>
                 <div class="album-row-meta">
                   <span class="album-name ellipsis">{{ a.name }}</span>
@@ -298,20 +414,26 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
             </div>
             <div v-else class="album-grid">
               <button
-                v-for="a in albums"
+                v-for="a in sortedAlbums"
                 :key="`${a.source}_${a.id}`"
                 class="album-card"
-                @click="openAlbum(a)"
+                :class="{ selected: albumSelected(a) }"
+                @click="onAlbumClick(a)"
               >
-                <img
-                  v-if="a.cover"
-                  class="album-cover"
-                  :src="coverUrl(a.cover)"
-                  loading="lazy"
-                  alt=""
-                />
-                <div v-else class="album-cover placeholder">
-                  <AppIcon name="library" :size="26" />
+                <div class="cover-wrap">
+                  <img
+                    v-if="a.cover"
+                    class="album-cover"
+                    :src="coverUrl(a.cover)"
+                    loading="lazy"
+                    alt=""
+                  />
+                  <div v-else class="album-cover placeholder">
+                    <AppIcon name="library" :size="26" />
+                  </div>
+                  <span v-if="albumSelecting" class="album-check" :class="{ on: albumSelected(a) }">
+                    <AppIcon v-if="albumSelected(a)" name="check" :size="14" />
+                  </span>
                 </div>
                 <span class="album-name ellipsis">{{ a.name }}</span>
                 <span v-if="albumSub(a)" class="album-sub ellipsis">{{ albumSub(a) }}</span>
@@ -374,6 +496,27 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
       </button>
     </div>
 
+    <!-- 专辑多选操作栏 -->
+    <div v-if="albumSelecting" class="sel-bar">
+      <span class="sel-count">已选 {{ albumSelection.length }} 张专辑</span>
+      <button class="sel-btn" @click="selectAllAlbums">
+        {{ albumSelection.length === sortedAlbums.length ? '取消全选' : '全选' }}
+      </button>
+      <span class="sel-spacer" />
+      <button
+        class="sel-btn"
+        :disabled="!albumSelection.length || albumDownloading"
+        @click="downloadSelectedAlbums"
+      >
+        <AppIcon name="download" :size="14" /><span>{{
+          albumDownloading ? '准备中…' : '下载'
+        }}</span>
+      </button>
+      <button class="sel-btn close" title="退出多选" @click="exitAlbumSelection">
+        <AppIcon name="close" :size="14" />
+      </button>
+    </div>
+
     <ListAddDialog
       v-if="addDialog"
       :items="selection"
@@ -386,6 +529,17 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
       @close="qualityDialog = false"
       @added="exitSelection"
     />
+    <QualityDialog
+      v-if="albumQualityDialog"
+      :items="[]"
+      :label="`下载 ${albumSelection.length} 张专辑`"
+      @close="albumQualityDialog = false"
+      @added="onAlbumQualityPicked"
+    />
+
+    <transition name="fade">
+      <div v-if="toast" class="toast">{{ toast }}</div>
+    </transition>
   </div>
 </template>
 
@@ -534,8 +688,12 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
 /* ---------- 专辑 ---------- */
 .ar-toolbar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
   padding: 0 0 8px;
+}
+.toolbar-spacer {
+  flex: 1;
 }
 .icon-btn {
   display: flex;
@@ -548,6 +706,14 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
 }
 .icon-btn:hover {
   background: var(--color-button-background-hover);
+}
+.icon-btn.text-btn {
+  gap: 5px;
+  font-size: 12px;
+}
+.icon-btn.on {
+  color: var(--color-primary);
+  background: var(--color-primary-background);
 }
 
 .album-grid {
@@ -562,16 +728,25 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
   text-align: left;
   min-width: 0;
 }
+.cover-wrap {
+  position: relative;
+  width: 100%;
+  transition: transform 0.2s ease;
+}
+.album-card:hover .cover-wrap {
+  transform: translateY(-3px);
+}
+.cover-wrap.sm {
+  flex: none;
+  width: 52px;
+  height: 52px;
+}
 .album-cover {
   width: 100%;
   aspect-ratio: 1;
   border-radius: 8px;
   object-fit: cover;
   background: var(--color-primary-background);
-  transition: transform 0.2s ease;
-}
-.album-card:hover .album-cover {
-  transform: translateY(-3px);
 }
 .album-cover.placeholder,
 .ar-cover.placeholder {
@@ -579,6 +754,29 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
   align-items: center;
   justify-content: center;
   color: var(--color-font-label);
+}
+.album-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+.album-check.on {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.album-card.selected .album-cover,
+.album-row.selected .ar-cover.sm {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
 }
 .album-name {
   font-size: 13px;
@@ -607,9 +805,8 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
   background: var(--color-primary-background-hover);
 }
 .ar-cover.sm {
-  flex: none;
-  width: 52px;
-  height: 52px;
+  width: 100%;
+  height: 100%;
   border-radius: 6px;
   object-fit: cover;
   background: var(--color-primary-background);
@@ -715,7 +912,34 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
 .sel-btn:hover {
   background: var(--color-button-background-hover);
 }
+.sel-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .sel-btn.close {
   padding: 6px 8px;
+}
+
+/* ---------- 轻提示 ---------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  z-index: 2000;
+  padding: 9px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.72);
+  pointer-events: none;
+}
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

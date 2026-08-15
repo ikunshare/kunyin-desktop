@@ -157,6 +157,8 @@ export interface AppSettings {
   }
 
   download: {
+    /** 下载功能总开关（关闭后不再接收新任务） */
+    enabled: boolean
     path: string
     /** 优先下载音质（单曲/批量下载弹窗的默认高亮与无指定时的回退首选） */
     preferredQuality: QualityId
@@ -171,10 +173,32 @@ export interface AppSettings {
     trackNumberPrefix: boolean
     /** 同名文件是否覆盖（否则自动追加序号，对应 downloadOverwriteExisting） */
     overwriteExisting: boolean
-    /** 把歌词写入音频标签（对应 downloadWriteLyricMeta） */
-    writeLyricMeta: boolean
-    /** 额外保存 .lrc 歌词文件（对应 downloadLrcFile） */
+    /** 存在同名文件时跳过下载（优先于 overwriteExisting；对应 download.skipExistFile） */
+    skipExistFile: boolean
+    /** 按歌单名分组保存（下载目录下再建歌单名子目录；对应 download.isSavePathGroupByListName） */
+    groupByListName: boolean
+    /** 把歌曲封面嵌入音频标签（对应 download.isEmbedPic） */
+    embedCover: boolean
+    /** 把歌词写入音频标签（对应 download.isEmbedLyric） */
+    embedLyric: boolean
+    /** 嵌入翻译歌词（需 embedLyric） */
+    embedLyricT: boolean
+    /** 嵌入罗马音歌词（需 embedLyric） */
+    embedLyricR: boolean
+    /** 嵌入逐字歌词（需 embedLyric） */
+    embedLyricLx: boolean
+    /** 额外保存 .lrc 歌词文件（对应 download.isDownloadLrc） */
     saveLrcFile: boolean
+    /** 歌词文件附带翻译 */
+    saveLrcT: boolean
+    /** 歌词文件附带罗马音 */
+    saveLrcR: boolean
+    /** 歌词文件附带逐字歌词 */
+    saveLrcLx: boolean
+    /** 歌词文件编码（对应 download.lrcFormat） */
+    lrcFormat: 'utf8' | 'gbk'
+    /** 歌曲源不可用时换源下载（对应 download.isUseOtherSource） */
+    useOtherSource: boolean
   }
 
   sync: {
@@ -263,6 +287,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     }
   },
   download: {
+    enabled: true,
     path: '',
     preferredQuality: 'flac',
     saveAlbumCover: true,
@@ -271,8 +296,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
     namingStyle: 'artist-title',
     trackNumberPrefix: false,
     overwriteExisting: false,
-    writeLyricMeta: true,
-    saveLrcFile: false
+    skipExistFile: false,
+    groupByListName: false,
+    embedCover: true,
+    embedLyric: true,
+    embedLyricT: false,
+    embedLyricR: false,
+    embedLyricLx: false,
+    saveLrcFile: false,
+    saveLrcT: false,
+    saveLrcR: false,
+    saveLrcLx: true,
+    lrcFormat: 'utf8',
+    useOtherSource: false
   },
   sync: {
     enable: false,

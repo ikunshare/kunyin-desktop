@@ -12,10 +12,20 @@ export const useDownloadStore = defineStore('download', () => {
     tasks.value = await window.api.download.list()
   }
 
-  async function add(item: MusicItem, qualityId?: string): Promise<void> {
+  async function add(
+    item: MusicItem,
+    qualityId?: string,
+    opts: { listName?: string; subDir?: string; trackNumber?: number } = {}
+  ): Promise<void> {
     // contextBridge 无法克隆 Pinia 响应式 Proxy，过 IPC 前转普通对象
     const plain = JSON.parse(JSON.stringify(item)) as MusicItem
-    await window.api.download.add({ item: plain, qualityId })
+    await window.api.download.add({
+      item: plain,
+      qualityId,
+      listName: opts.listName,
+      subDir: opts.subDir,
+      trackNumber: opts.trackNumber
+    })
   }
 
   async function pause(taskKey: string): Promise<void> {

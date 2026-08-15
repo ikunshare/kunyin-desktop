@@ -4,12 +4,13 @@
 import type { MusicSource, QualityId } from './types/music'
 
 /** 五大在线音源顺序（云盘上游已删库，不再实现；local 为本地文件不在其列） */
-export const PLATFORMS: readonly MusicSource[] = ['wy', 'qq', 'kg', 'kw', 'joox'] as const
+export const PLATFORMS: readonly MusicSource[] = ['wy', 'qq', 'qqc', 'kg', 'kw', 'joox'] as const
 
 /** 音源显示名（取自 Android 各 Provider.displayName） */
 export const PLATFORM_NAMES: Record<MusicSource, string> = {
   wy: '网易云音乐',
   qq: 'QQ音乐',
+  qqc: 'QQ音乐云',
   kg: '酷狗音乐',
   kw: '酷我音乐',
   joox: 'JOOX',
@@ -20,6 +21,7 @@ export const PLATFORM_NAMES: Record<MusicSource, string> = {
 export const PLATFORM_SHORT_TAGS: Record<MusicSource, string> = {
   wy: 'wy',
   qq: 'qq',
+  qqc: 'qqc',
   kg: 'kg',
   kw: 'kw',
   joox: 'jx',
@@ -34,6 +36,7 @@ export const PLATFORM_SHORT_TAGS: Record<MusicSource, string> = {
 export const BACKEND_PLATFORM: Record<MusicSource, string> = {
   wy: 'wyy',
   qq: 'qq',
+  qqc: 'qq',
   kg: 'kugou',
   kw: 'kuwo',
   joox: 'joox',
@@ -60,6 +63,42 @@ export const QUALITY_NAMES: Record<QualityId, string> = {
   master: '臻品母带',
   atmos: '臻品全景声',
   atmos_plus: '臻品全景声 2.0'
+}
+
+/** 列表行音质徽标（对应 lx-music 的 tag__high_quality / tag__lossless / tag__lossless_24bit） */
+export interface QualityBadgeInfo {
+  label: string
+  /** primary=无损及以上（绿）；secondary=高品 320K（蓝） */
+  tier: 'primary' | 'secondary'
+}
+
+/**
+ * 取该曲可用的最高音质徽标：320K→HQ、FLAC→SQ、HiRes→24bit，母带/全景声用各自短标签。
+ * 128K 标准音质不显示；无任何可用音质返回 null。
+ */
+export function qualityBadge(qualities: Record<string, unknown>): QualityBadgeInfo | null {
+  const ladder = [...QUALITY_IDS].reverse() // 高 → 低
+  for (const q of ladder) {
+    if (!qualities[q]) continue
+    switch (q) {
+      case '320k':
+        return { label: 'HQ', tier: 'secondary' }
+      case 'flac':
+        return { label: 'SQ', tier: 'primary' }
+      case 'hires':
+        return { label: '24bit', tier: 'primary' }
+      case 'master':
+        return { label: '母带', tier: 'primary' }
+      case 'atmos':
+        return { label: '全景声', tier: 'primary' }
+      case 'atmos_plus':
+        return { label: '全景声+', tier: 'primary' }
+      default:
+        // 128k 标准音质不显示徽标
+        return null
+    }
+  }
+  return null
 }
 
 /**

@@ -10,7 +10,7 @@
  * - app ready 后调 installAudioProtocol()（挂 handler）；
  * - 业务侧 registerAudioStream(spec) 拿 `kunyin://stream/<token>` 喂 <audio>。
  */
-import { protocol, net } from 'electron'
+import { protocol, net, session } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { createReadStream, statSync } from 'node:fs'
 import { extname } from 'node:path'
@@ -91,6 +91,13 @@ const registry = new Map<string, AudioStreamSpec>()
 const UPSTREAM_HEADER_TIMEOUT = 20_000
 
 /**
+ * 上游请求 UA：对齐真实浏览器。部分 CDN/WAF 会把裸 `Mozilla/5.0` 当机器人，
+ * 表现为连接后长期不给响应头（upstream header timeout），浏览器带完整 UA 则秒回。
+ */
+const UPSTREAM_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+/**
  * 快速失败且值得重试的网络错误：多见于 VPN/代理切换节点、Wi-Fi 切换的瞬间，
  * Chromium 会把在飞请求判死（ERR_NETWORK_CHANGED），等网络落定后重发一般就通。
  */
@@ -134,6 +141,18 @@ function normalizeUpstreamUrl(raw: string): string {
     // 非法 URL 交给 net.fetch 按原错误处理
   }
   return raw
+}
+
+/** http → https 升级（用于等响应头超时后的换路重试）；非 http 或非法 URL 返回 null。 */
+function httpsUpgrade(raw: string): string | null {
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'http:') return null
+    url.protocol = 'https:'
+    return url.toString()
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -228,7 +247,7 @@ export function installAudioProtocol(): void {
     if (spec.filePath) return serveLocalFile(spec.filePath, range)
     if (!spec.url) return new Response(null, { status: 404 })
 
-    const headers: Record<string, string> = { 'User-Agent': 'Mozilla/5.0', ...(spec.headers ?? {}) }
+    const headers: Record<string, string> = { 'User-Agent': UPSTREAM_UA, ...(spec.headers ?? {}) }
     let upstreamStart = 0
     if (range) {
       upstreamStart = parseRangeStart(range)
@@ -250,10 +269,19 @@ export function installAudioProtocol(): void {
       }
       // 仅重试当前请求。不能 closeAllConnections()：它会把正在播放或刚切换的其他歌曲
       // 一并中止，制造与真实网络故障无关的 net::ERR_ABORTED。
-      console.warn('[audio] 上游取流失败，等待后重试', (e as Error)?.message ?? e)
+      // 等响应头超时多为 http CDN 的 IPv6/路由问题（同 music.tc.qq.com 已知故障），
+      // 升级 https 重新选路通常能恢复；其它可重试网络错误仍用原 URL。
+      const retryUrl =
+        e instanceof HeaderTimeoutError ? (httpsUpgrade(spec.url) ?? spec.url) : spec.url
+      if (e instanceof HeaderTimeoutError) {
+        // 「重启才恢复」的典型根因是主机解析器缓存了坏 IP/坏路由：清掉后重试才能重新解析，
+        // 而不是继续连同一个坏地址。仅清 DNS 缓存，不影响正在播放的其它歌曲。
+        await session.defaultSession.clearHostResolverCache().catch(() => {})
+      }
+      console.warn('[audio] 上游取流失败，等待后重试', (e as Error)?.message ?? e, retryUrl)
       try {
         await sleep(NET_RETRY_DELAY)
-        upstream = await fetchUpstreamOnce(spec.url, headers, request.signal)
+        upstream = await fetchUpstreamOnce(retryUrl, headers, request.signal)
       } catch (e2) {
         if (request.signal.aborted || (e2 as Error)?.name === 'AbortError') {
           return new Response(null, { status: 499 })

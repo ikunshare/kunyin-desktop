@@ -112,6 +112,8 @@ export const IpcChannels = {
 
   // 系统媒体控制（主 → 渲染 命令：全局媒体键/托盘触发）
   MEDIA_COMMAND: 'media:command',
+  /** 渲染 → 主：推送播放状态（用于更新任务栏缩略图工具栏的播放/暂停按钮） */
+  MEDIA_SET_STATE: 'media:setState',
 
   // 桌面歌词悬浮窗
   DESKTOP_LYRIC_TOGGLE: 'desktopLyric:toggle', // 渲染 → 主：开/关窗口
@@ -128,6 +130,10 @@ export const IpcChannels = {
   DOWNLOAD_REMOVE: 'download:remove',
   DOWNLOAD_CLEAR_COMPLETED: 'download:clearCompleted',
   DOWNLOAD_CHANGED: 'download:changed', // 主 → 渲染 事件
+
+  // 系统对话框 / Shell（下载路径选择、打开目录等）
+  DIALOG_SELECT_DIRECTORY: 'dialog:selectDirectory',
+  SHELL_OPEN_PATH: 'shell:openPath',
 
   // 平台登录 / 账号
   ACCOUNT_LIST: 'account:list', // 各平台登录态
@@ -487,6 +493,8 @@ export interface WindowApi {
   media: {
     /** 订阅播放命令（playpause/next/prev），返回取消订阅 */
     onCommand(cb: (cmd: MediaCommand) => void): Unsubscribe
+    /** 推送播放状态给主进程（更新任务栏缩略图工具栏的播放/暂停按钮） */
+    setState(playing: boolean): void
   }
 
   /** 桌面歌词悬浮窗 */
@@ -512,6 +520,14 @@ export interface WindowApi {
     clearCompleted(): Promise<void>
     /** 订阅下载队列变更（主进程广播），返回取消订阅 */
     onChange(cb: () => void): Unsubscribe
+  }
+
+  /** 系统对话框 / Shell（下载路径选择、打开目录等） */
+  shell: {
+    /** 弹目录选择框，返回所选目录路径；取消返回 null */
+    selectDirectory(defaultPath?: string): Promise<string | null>
+    /** 在系统文件管理器中打开目录/文件 */
+    openPath(path: string): Promise<string>
   }
 
   /** 平台登录 / 账号 */

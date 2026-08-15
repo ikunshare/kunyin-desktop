@@ -152,7 +152,8 @@ const api: WindowApi = {
       return () => {
         ipcRenderer.off(IpcChannels.MEDIA_COMMAND, listener)
       }
-    }
+    },
+    setState: (playing) => ipcRenderer.send(IpcChannels.MEDIA_SET_STATE, playing)
   },
   desktopLyric: {
     toggle: (enabled) => ipcRenderer.invoke(IpcChannels.DESKTOP_LYRIC_TOGGLE, enabled),
@@ -183,6 +184,11 @@ const api: WindowApi = {
         ipcRenderer.off(IpcChannels.DOWNLOAD_CHANGED, listener)
       }
     }
+  },
+  shell: {
+    selectDirectory: (defaultPath) =>
+      ipcRenderer.invoke(IpcChannels.DIALOG_SELECT_DIRECTORY, defaultPath),
+    openPath: (path) => ipcRenderer.invoke(IpcChannels.SHELL_OPEN_PATH, path)
   },
   account: {
     list: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_LIST),

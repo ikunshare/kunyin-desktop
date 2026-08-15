@@ -48,7 +48,7 @@ function qqDate(raw: unknown): string | undefined {
   return s && !s.startsWith('0000') ? s : undefined
 }
 
-async function zzcRequest<T = any>(reqData: Record<string, unknown>): Promise<T> {
+export async function zzcRequest<T = any>(reqData: Record<string, unknown>): Promise<T> {
   // 签名走 musics.fcg：sign 对实际发送的 body 字节计算，故先 stringify 一次
   const text = JSON.stringify(reqData)
   const sign = zzcSign(text)

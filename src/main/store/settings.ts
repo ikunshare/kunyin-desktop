@@ -35,6 +35,12 @@ function load(): AppSettings {
     const merged = deepMerge(DEFAULT_SETTINGS, JSON.parse(raw)) as AppSettings
     // 已移除的桌面歌词描边字段不再带入运行时或后续持久化文件。
     delete (merged.lyrics as unknown as Record<string, unknown>).desktopShadowColor
+    // 旧字段 writeLyricMeta 迁移到 embedLyric（歌词写入标签拆分出翻译/罗马音/逐字子开关）。
+    const dl = merged.download as unknown as Record<string, unknown>
+    if (typeof dl.writeLyricMeta === 'boolean') {
+      dl.embedLyric = dl.writeLyricMeta
+      delete dl.writeLyricMeta
+    }
     return merged
   } catch {
     return { ...DEFAULT_SETTINGS }

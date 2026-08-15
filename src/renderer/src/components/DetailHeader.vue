@@ -9,8 +9,10 @@ const props = defineProps<{
   subtitle?: string
   meta?: string
   round?: boolean
+  /** 是否显示「下载全部」按钮（专辑页用） */
+  download?: boolean
 }>()
-const emit = defineEmits<{ playAll: [] }>()
+const emit = defineEmits<{ playAll: []; download: [] }>()
 
 // 封面走主进程磁盘缓存协议
 const cachedCover = computed(() => coverUrl(props.cover))
@@ -30,6 +32,10 @@ const cachedCover = computed(() => coverUrl(props.cover))
         <button class="play-all" @click="emit('playAll')">
           <AppIcon name="play" :size="16" />
           <span>播放全部</span>
+        </button>
+        <button v-if="download" class="download-all" @click="emit('download')">
+          <AppIcon name="download" :size="16" />
+          <span>下载全部</span>
         </button>
         <button class="fav" title="收藏"><AppIcon name="heart" :size="18" /></button>
       </div>
@@ -111,6 +117,27 @@ const cachedCover = computed(() => coverUrl(props.cover))
   background: var(--color-primary-dark-100);
 }
 .play-all:active {
+  transform: scale(0.97);
+}
+.download-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 20px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-primary);
+  background: var(--color-primary-background);
+  border: 1px solid var(--color-primary-alpha-900);
+  transition:
+    background 0.2s ease,
+    transform 0.1s ease;
+}
+.download-all:hover {
+  background: var(--color-primary-background-hover);
+}
+.download-all:active {
   transform: scale(0.97);
 }
 .fav {

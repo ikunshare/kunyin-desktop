@@ -27,6 +27,8 @@ win:
   icon: resources/icons/icon.ico
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
+  # 安装向导的用户协议页（内容为 MIT License，见 build/license.txt）
+  license: build/license.txt
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
@@ -61,8 +63,13 @@ linux:
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
+# 自动更新：electron-updater 从 GitHub Releases 拉取 latest*.yml
+# 发布时由 CI（.github/workflows/release.yml）以 --publish always 上传安装包与更新元数据。
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: ikunshare
+  repo: kunyin-desktop
+  # 直接发布为正式 Release（默认是 draft，draft 不会被 autoUpdater 检索到）
+  releaseType: release
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/

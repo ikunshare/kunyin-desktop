@@ -1,3 +1,6 @@
-provider: generic
-url: https://example.com/auto-updates
+# 开发/未打包环境下的 electron-updater 配置（仅用于本地调试更新链路）。
+# 与 electron-builder.yml 的 publish 保持一致；生产环境的 app-update.yml 由 electron-builder 自动生成。
+provider: github
+owner: ikunshare
+repo: kunyin-desktop
 updaterCacheDirName: kunyin-desktop-updater

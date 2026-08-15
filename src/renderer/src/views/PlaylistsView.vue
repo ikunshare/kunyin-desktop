@@ -695,7 +695,7 @@ onUnmounted(() => {
       <template v-else>
         <!-- 列头 -->
         <div class="track-head">
-          <div class="th num">#</div>
+          <div class="th num"></div>
           <div class="th name">歌曲名</div>
           <div class="th singer">艺术家</div>
           <div class="th album">专辑名</div>
@@ -827,6 +827,7 @@ onUnmounted(() => {
     <QualityDialog
       v-if="qualityDialog"
       :items="selectedItems"
+      :list-name="selection?.name"
       @added="onDownloadAdded"
       @close="qualityDialog = false"
     />
@@ -1004,8 +1005,7 @@ onUnmounted(() => {
   min-width: 0;
 }
 .th.num {
-  flex: 0 0 5%;
-  text-align: center;
+  flex: 0 0 68px;
 }
 .th.name {
   flex: 1 1 auto;

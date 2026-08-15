@@ -29,6 +29,8 @@ export interface DownloadTask {
   errorMessage: string
   /** 整专下载时的子目录（专辑名） */
   subDir: string
+  /** 按歌单名分组下载时的子目录（歌单名，groupByListName 开启时使用） */
+  listName: string
   /** 整专下载时的轨号（>0 时文件名前缀两位轨号） */
   trackNumber: number
 }
@@ -40,6 +42,8 @@ export interface AddDownloadInput {
   qualityId?: string
   subDir?: string
   trackNumber?: number
+  /** 歌单名（groupByListName 开启时作为下载目录下的子目录名） */
+  listName?: string
   /** MV 下载：给定 MV 清晰度（对应 getMvUrl 的 quality），任务走视频分支下 .mp4 */
   mvQuality?: string
 }
