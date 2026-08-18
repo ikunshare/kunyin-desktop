@@ -108,7 +108,18 @@ function migrateV6ToV7(d: Database.Database): void {
 export function getDb(): Database.Database {
   if (db) return db
   const file = appDataPath('kunyin_music.db')
-  const d = new Database(file)
+  let d: Database.Database
+  try {
+    // 这里才真正加载 better-sqlite3 的原生模块（require 该包本身不加载 .node）。
+    // 打包漏掉当前平台的 prebuilds/*.node 时就崩在这一行（issue #1），故包装成可读错误。
+    d = new Database(file)
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    throw new Error(
+      `无法打开本地数据库（${process.platform}-${process.arch}）：${detail}\n数据库文件：${file}`,
+      { cause: e }
+    )
+  }
   d.pragma('journal_mode = WAL')
   d.pragma('foreign_keys = ON')
 

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { MusicItem, PlayMode, QualityId } from '@common'
-import { getMusicItemKey } from '@common'
+import { blockedQualityIds, getMusicItemKey } from '@common'
 import { useSettingsStore } from './settings'
 
 /**
@@ -332,13 +332,20 @@ export const usePlayerStore = defineStore('player', () => {
   }
   window.addEventListener('beforeunload', persistState)
 
-  /** 音质尝试顺序：优先设置项，其余从低到高兜底（高音质常需卡密） */
+  /**
+   * 音质尝试顺序：优先设置项，其余从低到高兜底（高音质常需卡密）。
+   * 开启「屏蔽 AI 音质」后，被屏蔽的档位（全景声等）整条链路都不参与取流。
+   */
   function qualityOrder(item: MusicItem): string[] {
-    const preferred = useSettingsStore().settings.player.preferredQuality
+    const settings = useSettingsStore().settings
+    const preferred = settings.player.preferredQuality
+    const blocked = blockedQualityIds(settings)
+    const usable = (q: string): boolean => !!item.qualities[q] && !blocked.includes(q)
     const order: string[] = []
-    if (item.qualities[preferred]) order.push(preferred)
-    for (const q of QUALITY_LADDER) if (item.qualities[q] && !order.includes(q)) order.push(q)
-    for (const q of Object.keys(item.qualities)) if (!order.includes(q)) order.push(q)
+    if (usable(preferred)) order.push(preferred)
+    for (const q of QUALITY_LADDER) if (usable(q) && !order.includes(q)) order.push(q)
+    for (const q of Object.keys(item.qualities))
+      if (!blocked.includes(q) && !order.includes(q)) order.push(q)
     return order.length ? order : ['128k']
   }
 
@@ -407,10 +414,12 @@ export const usePlayerStore = defineStore('player', () => {
 
     loading.value = true
     const plain = JSON.parse(JSON.stringify(item)) as MusicItem
+    const base = qualityOrder(item)
+    // preferQuality 来自上次播放/手动切档，需与 qualityOrder 同样受 AI 音质屏蔽约束
     const order =
-      preferQuality && item.qualities[preferQuality]
-        ? [preferQuality, ...qualityOrder(item).filter((q) => q !== preferQuality)]
-        : qualityOrder(item)
+      preferQuality && base.includes(preferQuality)
+        ? [preferQuality, ...base.filter((q) => q !== preferQuality)]
+        : base
     try {
       for (const q of order) {
         const res = await window.api.player.stream(plain, q)
@@ -595,7 +604,8 @@ export const usePlayerStore = defineStore('player', () => {
     if (index.value < 0) index.value = queue.value.length ? 0 : -1
     schedulePersist()
     if (removingCurrent) {
-      if (queue.value.length) step(1) // 删除即切走，忽略 singleLoop 的重播语义
+      if (queue.value.length)
+        step(1) // 删除即切走，忽略 singleLoop 的重播语义
       else audio.pause()
     }
   }

@@ -44,6 +44,7 @@ function qqFormatSize(bytes: number): string {
 
 /** 清洗发行日期：`0000-…`（QQ 的未知日期占位）与空值归一为 undefined，年份由渲染层截取。 */
 function qqDate(raw: unknown): string | undefined {
+  if (typeof raw === 'number') return raw > 0 ? String(raw) : undefined
   const s = typeof raw === 'string' ? raw.trim() : ''
   return s && !s.startsWith('0000') ? s : undefined
 }
@@ -327,7 +328,7 @@ export class QqProvider extends BaseProvider {
       name: basic.albumName,
       cover: `https://y.gtimg.cn/music/photo_new/T002R800x800M000${albumMid}.jpg`,
       artist: data.singer?.singerList?.[0]?.name,
-      publishTime: basic.publishDate,
+      publishTime: qqDate(basic.publishDate),
       description: basic.desc,
       total: num(json.req_2?.data?.totalNum, 0)
     }

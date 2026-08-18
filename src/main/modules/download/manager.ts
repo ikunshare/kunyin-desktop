@@ -33,9 +33,16 @@ import type {
   Lyric,
   MediaInfoResult,
   MusicItem,
-  MusicSource
+  MusicSource,
+  QualityId
 } from '@common'
-import { QUALITY_IDS, qualityFallbackOrder } from '@common'
+import {
+  QUALITY_IDS,
+  QUALITY_NAMES,
+  blockedQualityIds,
+  qualityFallbackOrder,
+  qualityUpgradeOrder
+} from '@common'
 import { getSettings } from '../../store/settings'
 import { resolveMediaInfo } from '../../providers/getUrl'
 import { getProvider } from '../../providers'
@@ -98,6 +105,7 @@ function buildFileName(task: DownloadTask): string {
     default:
       base = `${sanitize(task.artist)} - ${sanitize(task.title)}`
   }
+  // trackNumber 仅整专/批量专辑下载时 >0，故此前缀等价于「整专文件名带曲目号」
   if (s.trackNumberPrefix && task.trackNumber > 0) {
     return `${String(task.trackNumber).padStart(2, '0')}.${base}`
   }
@@ -167,14 +175,28 @@ export function listTasks(): DownloadTask[] {
   return [...tasks.values()]
 }
 
-/** 选音质：给定 qualityId 优先，否则按「优先下载音质」设置从高到低选可用的。 */
+/** 当前设置下被屏蔽的音质档（AI 音质），下载全程跳过。 */
+function blockedQualities(): readonly string[] {
+  return blockedQualityIds(getSettings())
+}
+
+/**
+ * 选音质：以「指定档 →（无则）设置里的优先下载音质」为目标，先按档位向下降级，
+ * 目标档及更低档都没有时才向上取最接近的可用档。
+ * 绝不直接跳到该曲最高档——否则整专下载选 HiRes 时，没有 HiRes 的曲子会被抓成全景声 2.0。
+ */
 function pickQuality(item: MusicItem, preferred?: string): string | undefined {
-  if (preferred && item.qualities[preferred]) return preferred
-  const ladder = [...QUALITY_IDS].reverse() // 高 → 低
-  const first = getSettings().download.preferredQuality
-  if (item.qualities[first]) return first
-  for (const q of ladder) if (item.qualities[q]) return q
-  const keys = Object.keys(item.qualities)
+  const blocked = blockedQualities()
+  const target = preferred || getSettings().download.preferredQuality
+  const down = qualityFallbackOrder(target, item.qualities, blocked)
+  if (down.length) return down[0]
+  const up = qualityUpgradeOrder(target, item.qualities, blocked)
+  if (up.length) return up[0]
+  // 非标准档位键（各源自定义）兜底
+  const standard = QUALITY_IDS as readonly string[]
+  const keys = Object.keys(item.qualities).filter(
+    (k) => !blocked.includes(k) && !standard.includes(k)
+  )
   return keys.length ? keys[0] : undefined
 }
 
@@ -186,7 +208,10 @@ async function resolveWithFallback(
   song: MusicItem,
   qualityId: string
 ): Promise<{ qualityId: string; info: MediaInfoResult }> {
-  const order = qualityFallbackOrder(qualityId, song.qualities)
+  const blocked = blockedQualities()
+  const order = qualityFallbackOrder(qualityId, song.qualities, blocked)
+  // 目标档及更低档全无可用档时（如该曲只有 HiRes 而任务档为 FLAC），向上取最接近的
+  if (!order.length) order.push(...qualityUpgradeOrder(qualityId, song.qualities, blocked))
   let lastReason = '获取播放链接失败'
   for (const q of order) {
     const info = await resolveMediaInfo(song, q)
@@ -253,7 +278,14 @@ export function addTask(input: AddDownloadInput): void {
   const { item, subDir = '', listName = '', trackNumber = 0 } = input
   const isMv = !!input.mvQuality
   const qualityId = isMv ? `mv_${input.mvQuality}` : pickQuality(item, input.qualityId)
-  if (!qualityId) return
+  if (!qualityId) {
+    // 该曲只剩被屏蔽的 AI 音质版本：记一条失败任务说明原因，别让用户点了下载毫无反应
+    if (!isMv && onlyBlockedQualities(item)) {
+      const target = input.qualityId || getSettings().download.preferredQuality
+      addBlockedTask(item, target, subDir, listName, trackNumber)
+    }
+    return
+  }
   const source = item.type
   const taskKey = `${source}_${item.id}_${qualityId}`
 
@@ -297,10 +329,57 @@ export function addTask(input: AddDownloadInput): void {
   scheduleNext()
 }
 
+/** 该曲可用档位是否已被「屏蔽 AI 音质」全部挡下（无档可下）。 */
+function onlyBlockedQualities(item: MusicItem): boolean {
+  const blocked = blockedQualities()
+  if (!blocked.length) return false
+  const keys = Object.keys(item.qualities)
+  return keys.length > 0 && keys.every((k) => blocked.includes(k))
+}
+
+/**
+ * 记一条「仅剩 AI 音质版本」的失败任务，让用户在下载列表里看得到跳过原因。
+ * 任务本身按原目标档登记：用户若改主意关掉屏蔽，直接点重试即可下到该版本。
+ */
+function addBlockedTask(
+  item: MusicItem,
+  target: string,
+  subDir: string,
+  listName: string,
+  trackNumber: number
+): void {
+  const taskKey = `${item.type}_${item.id}_${target}`
+  const existing = tasks.get(taskKey)
+  if (existing && existing.status !== 'failed') return
+  songCache.set(taskKey, item)
+  upsertTask({
+    taskKey,
+    songId: item.id,
+    source: item.type,
+    title: item.title,
+    artist: item.artist,
+    album: item.album,
+    cover: item.cover,
+    qualityId: target,
+    qualityName: QUALITY_NAMES[target as QualityId] ?? target,
+    status: 'failed',
+    progress: 0,
+    speedBytesPerSec: 0,
+    downloadedBytes: 0,
+    totalBytes: 0,
+    filePath: '',
+    errorMessage: '该曲仅提供 AI 音质版本，已按设置屏蔽',
+    subDir,
+    listName,
+    trackNumber
+  })
+  saveTasks()
+  notify()
+}
+
 function runningCount(): number {
   return [...tasks.values()].filter((t) => t.status === 'downloading').length
 }
-
 function scheduleNext(): void {
   const max = Math.max(1, getSettings().download.maxConcurrent)
   for (const task of tasks.values()) {

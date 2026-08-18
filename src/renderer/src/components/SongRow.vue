@@ -8,6 +8,7 @@ import QualityDialog from './QualityDialog.vue'
 import RedirectDialog from './RedirectDialog.vue'
 import {
   PLATFORM_SHORT_TAGS,
+  blockedQualityIds,
   getSingerRouteId,
   qualityBadge,
   type MusicItem,
@@ -38,8 +39,10 @@ const mv = useMvStore()
 const settingsStore = useSettingsStore()
 
 const sourceTag = PLATFORM_SHORT_TAGS[props.item.type] ?? props.item.type
-// 音质徽标（HQ/SQ/24bit…，取该曲可用最高档）
-const qualityInfo = computed(() => qualityBadge(props.item.qualities))
+// 音质徽标（HiRes/SQ/HQ/标准，取该曲可用最高档；被屏蔽的 AI 音质不计入）
+const qualityInfo = computed(() =>
+  qualityBadge(props.item.qualities, blockedQualityIds(settingsStore.settings))
+)
 // 行首小封面（http→https 规范化 + 酷我 sycdn 兼容）
 const cover = coverUrl(props.item.cover)
 
@@ -319,6 +322,9 @@ function onSelect(key: string): void {
 }
 .quality-tag.secondary {
   color: var(--color-badge-secondary);
+}
+.quality-tag.tertiary {
+  color: var(--color-font-label);
 }
 .source-tag {
   flex: none;

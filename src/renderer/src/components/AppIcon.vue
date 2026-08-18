@@ -63,12 +63,18 @@ const ICONS: Record<string, IconDef> = {
   },
   close: { inner: '<path d="M6 6l12 12M18 6 6 18"/>' },
   minus: { inner: '<path d="M5 12h14"/>' },
+  maximize: { inner: '<rect x="5" y="5" width="14" height="14" rx="1"/>' },
+  restore: {
+    inner: '<path d="M8 8V5h11v11h-3"/><rect x="5" y="8" width="11" height="11" rx="1"/>'
+  },
   eraser: {
     inner:
       '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>'
   },
   'chevron-down': { inner: '<path d="m6 9 6 6 6-6"/>' },
   'chevron-right': { inner: '<path d="m9 6 6 6-6 6"/>' },
+  // 返回：左箭头（详情页头部）
+  'arrow-left': { inner: '<path d="M19 12H5"/><path d="m11 18-6-6 6-6"/>' },
   clock: { inner: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.8"/>' },
   locate: {
     inner: '<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>'

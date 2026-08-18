@@ -7,6 +7,7 @@ import { useDownloadStore } from './stores/download'
 import { usePlayerStore } from './stores/player'
 import { useMediaSession } from './composables/useMediaSession'
 import { useDesktopLyricBridge } from './composables/useDesktopLyricBridge'
+import { usePopupAnimation } from './composables/usePopupAnimation'
 import { useApi } from './composables/useApi'
 import { currentBackgroundImageUrl } from './theme/apply'
 import MvPlayer from './components/MvPlayer.vue'
@@ -23,6 +24,21 @@ const unsubs: (() => void)[] = []
 useMediaSession()
 // 桌面歌词桥：把歌词/进度推给悬浮窗
 useDesktopLyricBridge()
+// 各弹窗保持原组件结构，通过 DOM 观察统一获得 LX 风格（可随机）的入场动画。
+usePopupAnimation(
+  () => settings.settings.behavior.showAnimation,
+  () => settings.settings.behavior.randomAnimation
+)
+
+function applyFullscreenState(fullscreen: boolean): void {
+  document.documentElement.classList.toggle('fullscreen', fullscreen)
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'F11') return
+  event.preventDefault()
+  void api.window.fullscreen().then((current) => api.window.fullscreen(!current))
+}
 
 // 通知主进程显示窗口。三个条件都满足才上报：
 // 1. router.isReady —— Vue Router 初始导航是异步的，onMounted 时 RouterView 仍是空占位，
@@ -55,6 +71,9 @@ function notifyWindowReady(): void {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+  unsubs.push(api.window.onFullscreenChange(applyFullscreenState))
+  void api.window.fullscreen().then(applyFullscreenState)
   void settings.load()
   void library.refresh()
   void download.refresh()
@@ -67,6 +86,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
   unsubs.forEach((u) => u())
 })
 </script>

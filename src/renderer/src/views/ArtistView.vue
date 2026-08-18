@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import AppIcon from '../components/AppIcon.vue'
@@ -13,7 +13,15 @@ import { useSettingsStore } from '../stores/settings'
 import { useDownloadStore } from '../stores/download'
 import { useArtistStore, type ArtistTab } from '../stores/artist'
 import { coverUrl } from '../utils/cover'
-import { getMusicItemKey, type AlbumInfoResult, type MusicItem, type MusicSource } from '@common'
+import {
+  albumFolderName,
+  getMusicItemKey,
+  publishTimestamp,
+  publishYear,
+  type AlbumInfoResult,
+  type MusicItem,
+  type MusicSource
+} from '@common'
 
 defineOptions({ name: 'ArtistView' })
 
@@ -98,13 +106,22 @@ function switchTab(id: string): void {
 }
 
 // ============ 滚动到底自动加载更多（对应 Android LazyColumn 的 shouldLoadMore） ============
+const bodyEl = ref<HTMLElement>()
 function onScroll(e: Event): void {
   const el = e.target as HTMLElement
+  artist.setScroll(el.scrollTop)
   if (el.scrollTop + el.clientHeight < el.scrollHeight - 240) return
   if (tab.value === 'songs') void artist.loadMoreSongs()
   else if (tab.value === 'albums') void artist.loadMoreAlbums()
   else void artist.loadMoreMvs()
 }
+
+// 从专辑/MV 返回时回到原来的滚动位置（列表数据留在 store 里，直接复位即可）
+onMounted(async () => {
+  if (!artist.scrollTop) return
+  await nextTick()
+  if (bodyEl.value) bodyEl.value.scrollTop = artist.scrollTop
+})
 
 // ============ 歌曲 ============
 function isActive(item: MusicItem): boolean {
@@ -163,13 +180,9 @@ function toggleAlbumListMode(): void {
 function openAlbum(a: AlbumInfoResult): void {
   void router.push({ name: 'album', params: { albumKey: a.id }, query: { source: a.source } })
 }
-/** 发行日期 → 年份（接口给的是 `yyyy-MM-dd` 或时间戳字符串） */
+/** 发行日期 → 年份（各源给的可能是 `yyyy-MM-dd`，也可能是毫秒时间戳，见 publishYear） */
 function year(publishTime: string | undefined): string {
-  if (!publishTime) return ''
-  const m = /^(\d{4})/.exec(publishTime)
-  if (m) return m[1]
-  const ts = Number(publishTime)
-  return Number.isFinite(ts) && ts > 0 ? String(new Date(ts).getFullYear()) : ''
+  return publishYear(publishTime)
 }
 function albumSub(a: AlbumInfoResult): string {
   return [year(a.publishTime), a.subType, a.total ? `${a.total} 首` : '']
@@ -182,25 +195,22 @@ function albumRowSub(a: AlbumInfoResult): string {
     .join(' · ')
 }
 
-/** 发行时间 → 时间戳（用于排序；接口给 `yyyy-MM-dd` / `yyyy.MM.dd` 或时间戳字符串） */
-function publishTimeValue(publishTime: string | undefined): number {
-  if (!publishTime) return 0
-  const m = /^(\d{4})(?:[-/.](\d{1,2})(?:[-/.](\d{1,2}))?)?/.exec(publishTime)
-  if (m) return new Date(Number(m[1]), Number(m[2] ?? 1) - 1, Number(m[3] ?? 1)).getTime()
-  const ts = Number(publishTime)
-  return Number.isFinite(ts) && ts > 0 ? ts : 0
-}
-
-/** 专辑排序：按发行时间降序（新 → 旧），关闭时用接口原始顺序 */
-const albumSortDesc = ref(false)
+/**
+ * 专辑排序：各源接口返回的本来就是发行时间「新 → 旧」，所以按钮不能在「排序/不排序」
+ * 之间切（点了看不出变化），而是在新→旧 / 旧→新 之间切。无发行时间的专辑始终沉底。
+ */
+const albumSortAsc = computed(() => settingsStore.settings.list.albumSortAsc)
 function toggleAlbumSort(): void {
-  albumSortDesc.value = !albumSortDesc.value
+  void settingsStore.update({ list: { albumSortAsc: !albumSortAsc.value } })
 }
 const sortedAlbums = computed(() => {
-  if (!albumSortDesc.value) return albums.value
-  return [...albums.value].sort(
-    (a, b) => publishTimeValue(b.publishTime) - publishTimeValue(a.publishTime)
-  )
+  const dir = albumSortAsc.value ? 1 : -1
+  return [...albums.value].sort((a, b) => {
+    const ta = publishTimestamp(a.publishTime)
+    const tb = publishTimestamp(b.publishTime)
+    if (!ta || !tb) return ta === tb ? 0 : ta ? -1 : 1
+    return (ta - tb) * dir
+  })
 })
 
 // —— 专辑多选下载 ——
@@ -236,7 +246,7 @@ function downloadSelectedAlbums(): void {
   if (!albumSelection.value.length) return
   albumQualityDialog.value = true
 }
-/** 选定音质后逐个专辑拉歌，按「专辑名子目录 + 轨号」加入下载队列 */
+/** 选定音质后逐个专辑拉歌，按「年份 艺人 - 专辑名」子目录 + 曲目号加入下载队列 */
 async function onAlbumQualityPicked(qualityId: string): Promise<void> {
   const selected = [...albumSelection.value]
   albumQualityDialog.value = false
@@ -249,8 +259,13 @@ async function onAlbumQualityPicked(qualityId: string): Promise<void> {
         .albumSongs(album.source, album.id, 0, 200)
         .catch(() => null)
       const list = res?.result ?? []
+      const subDir = albumFolderName({
+        name: album.name,
+        artist: album.artist || info.value?.name,
+        publishTime: album.publishTime
+      })
       list.forEach((song, i) => {
-        void download.add(song, qualityId, { subDir: album.name, trackNumber: i + 1 })
+        void download.add(song, qualityId, { subDir, trackNumber: i + 1 })
       })
       songCount += list.length
     }
@@ -288,9 +303,12 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
 
 <template>
   <div class="artist-view">
-    <div class="body scroll" @scroll.passive="onScroll">
-      <!-- 头部：圆形头像 + 名称 + 专辑/歌曲数 + 粉丝 + 播放全部 -->
+    <div ref="bodyEl" class="body scroll" @scroll.passive="onScroll">
+      <!-- 头部：返回 + 圆形头像 + 名称 + 专辑/歌曲数 + 粉丝 + 播放全部 -->
       <div class="ar-header">
+        <button class="ar-back" title="返回" @click="router.back()">
+          <AppIcon name="arrow-left" :size="18" />
+        </button>
         <div class="ar-avatar">
           <img v-if="info?.cover" :src="coverUrl(info.cover)" alt="" />
           <AppIcon v-else name="library" :size="40" />
@@ -355,12 +373,14 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
           <div class="ar-toolbar">
             <button
               class="icon-btn text-btn"
-              :class="{ on: albumSortDesc }"
-              title="按发行时间降序排列"
+              :class="{ on: albumSortAsc }"
+              :title="
+                albumSortAsc ? '当前：发行时间旧 → 新，点击切换' : '当前：发行时间新 → 旧，点击切换'
+              "
               @click="toggleAlbumSort"
             >
               <AppIcon name="sort" :size="15" />
-              <span>时间降序</span>
+              <span>{{ albumSortAsc ? '时间升序' : '时间降序' }}</span>
             </button>
             <button
               v-if="!albumSelecting"
@@ -560,6 +580,25 @@ async function openMv(item: { vid: string; title: string; cover: string }): Prom
   display: flex;
   gap: 20px;
   padding: 0 0 18px;
+}
+.ar-back {
+  flex: none;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-right: -8px;
+  border-radius: 50%;
+  color: var(--color-font-label);
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease;
+}
+.ar-back:hover {
+  color: var(--color-font);
+  background: var(--color-button-background-hover);
 }
 .ar-avatar {
   flex: none;

@@ -1,7 +1,14 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSettingsStore } from '../../stores/settings'
-import { QUALITY_IDS, QUALITY_NAMES, type AppSettings, type QualityId } from '@common'
+import {
+  QUALITY_IDS,
+  QUALITY_NAMES,
+  blockedQualityIds,
+  type AppSettings,
+  type QualityId
+} from '@common'
 import BaseCheckbox from '../../components/BaseCheckbox.vue'
 import BaseSelect from '../../components/BaseSelect.vue'
 import BaseBtn from '../../components/BaseBtn.vue'
@@ -20,8 +27,14 @@ const lrcFormatList = [
   { id: 'gbk', label: 'GBK' }
 ]
 
-// 音质从高到低（与下载弹窗一致）
-const qualityList = [...QUALITY_IDS].reverse().map((id) => ({ id, label: QUALITY_NAMES[id] }))
+// 音质从高到低（与下载弹窗一致）；屏蔽的 AI 音质不可选，当前值除外
+const qualityList = computed(() => {
+  const blocked = blockedQualityIds(settings.value)
+  return [...QUALITY_IDS]
+    .reverse()
+    .filter((id) => !blocked.includes(id) || id === settings.value.download.preferredQuality)
+    .map((id) => ({ id, label: QUALITY_NAMES[id] }))
+})
 
 function setNaming(id: string): void {
   void store.update({
@@ -121,6 +134,14 @@ function openDir(): void {
         :list="namingList"
         @update:model-value="setNaming"
       />
+      <div class="gap-top">
+        <BaseCheckbox
+          id="setting_download_track_number"
+          :model-value="settings.download.trackNumberPrefix"
+          label="整专下载文件名前缀曲目号（如 01.歌手 - 歌名）"
+          @update:model-value="store.update({ download: { trackNumberPrefix: $event as boolean } })"
+        />
+      </div>
     </div>
   </dd>
 

@@ -71,6 +71,12 @@
   flex-direction: column;
   align-items: center;
 
+  // Reserve a small paint gutter inside the element that actually owns the mask. Roman glyphs can
+  // extend beyond their advance box (notably a trailing g/p/y); without this gutter the mask clips
+  // that ink at the word edge. The negative margin keeps the lyric layout footprint unchanged.
+  padding: 0.08em 0.12em;
+  margin: -0.08em -0.12em;
+
   mask-mode: alpha;
   mask-repeat: no-repeat;
 

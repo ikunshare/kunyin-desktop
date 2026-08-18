@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
-import { QUALITY_IDS, QUALITY_NAMES, type QualityId } from '@common'
+import { QUALITY_IDS, QUALITY_NAMES, blockedQualityIds, type QualityId } from '@common'
 import AppIcon from '../components/AppIcon.vue'
 import AmllBackground from '../components/AmllBackground.vue'
 import QualityDialog from '../components/QualityDialog.vue'
@@ -22,6 +22,28 @@ const { current, playing, currentTime, duration, volume, muted, playMode, qualit
   storeToRefs(player)
 
 const track = computed(() => current.value)
+const playerFullscreen = ref(false)
+let unsubscribeFullscreen: (() => void) | null = null
+
+/**
+ * Electron 在部分 Windows 环境不会稳定触发 enter-full-screen；除主进程状态外，
+ * 再用当前视口是否覆盖屏幕工作区兜底，保证播放页能拿到真实的全屏布局状态。
+ */
+function viewportCoversScreen(): boolean {
+  const tolerance = 8
+  return (
+    window.innerWidth >= window.screen.availWidth - tolerance &&
+    window.innerHeight >= window.screen.availHeight - tolerance
+  )
+}
+
+function applyPlayerFullscreen(nativeFullscreen: boolean): void {
+  playerFullscreen.value = nativeFullscreen || viewportCoversScreen()
+}
+
+function syncPlayerFullscreen(): void {
+  void api.window.fullscreen().then(applyPlayerFullscreen)
+}
 // 封面统一走主进程磁盘缓存协议（<img> 与背景渲染器同源）
 const cover = computed(() => coverUrl(track.value?.cover))
 
@@ -117,11 +139,12 @@ function toggleTrans(): void {
 const moreOpen = ref(false)
 const showQualityDialog = ref(false)
 const dialogItems = computed(() => (track.value ? [track.value] : []))
-// 当前曲可用音质（高 → 低）
+// 当前曲可用音质（高 → 低；被屏蔽的 AI 音质不列出）
 const qualityOptions = computed<QualityId[]>(() => {
   const t = track.value
   if (!t) return []
-  return [...QUALITY_IDS].reverse().filter((id) => t.qualities[id])
+  const blocked = blockedQualityIds(settings.settings)
+  return [...QUALITY_IDS].reverse().filter((id) => t.qualities[id] && !blocked.includes(id))
 })
 function qualityLabel(id: QualityId): string {
   return track.value?.qualities[id]?.name || QUALITY_NAMES[id]
@@ -143,11 +166,24 @@ function likeFromMenu(): void {
 const lyricHost = ref<HTMLElement>()
 const lyric = useLyricPlayer()
 const hasLyric = ref(false)
+const hasTranslation = ref(false)
 // 每次加载自增，避免异步竞态（旧请求回来覆盖新歌）
 let loadToken = 0
 
+/** 忽略 LRC 时间戳/元数据标签后，判断翻译轨是否含有实际文本。 */
+function hasLyricText(raw: string): boolean {
+  return raw.split(/\r?\n/).some(
+    (line) =>
+      line
+        .replace(/\[[^\]]*]/g, '')
+        .replace(/<[^>]*>/g, '')
+        .trim().length > 0
+  )
+}
+
 async function loadLyric(): Promise<void> {
   const token = ++loadToken
+  hasTranslation.value = false
   if (!current.value) {
     lyric.clear()
     hasLyric.value = false
@@ -159,6 +195,7 @@ async function loadLyric(): Promise<void> {
     if (token !== loadToken) return
     const original = ly.char || ly.lrc
     if (original) {
+      hasTranslation.value = hasLyricText(ly.trans)
       // 先露出宿主（visibility 而非 display:none），再加载，避免行高测成 0 叠行
       hasLyric.value = true
       await nextTick()
@@ -176,12 +213,14 @@ async function loadLyric(): Promise<void> {
     } else {
       lyric.clear()
       hasLyric.value = false
+      hasTranslation.value = false
     }
   } catch (e) {
     if (token !== loadToken) return
     console.error('[lyric] 获取失败', current.value?.type, current.value?.id, e)
     lyric.clear()
     hasLyric.value = false
+    hasTranslation.value = false
   }
 }
 
@@ -198,10 +237,18 @@ function applyLyricFont(): void {
 }
 
 onMounted(() => {
+  syncPlayerFullscreen()
+  unsubscribeFullscreen = api.window.onFullscreenChange(applyPlayerFullscreen)
+  window.addEventListener('resize', syncPlayerFullscreen)
   lyricHost.value?.appendChild(lyric.element.value)
   applyAnnotationVisible()
   applyLyricFont()
   loadLyric()
+})
+
+onUnmounted(() => {
+  unsubscribeFullscreen?.()
+  window.removeEventListener('resize', syncPlayerFullscreen)
 })
 
 watch(
@@ -237,7 +284,7 @@ watch(currentTime, (t) => {
   <!-- 挂到 body：字体大小设置靠 #app 的 zoom 整体缩放实现，全屏播放器
        （封面/控件/歌词字号）不应跟随界面字号档位变化 -->
   <Teleport to="body">
-    <div class="player-page">
+    <div class="player-page" :class="{ fullscreen: playerFullscreen }">
       <AmllBackground :cover="cover" />
       <div class="scrim" />
 
@@ -319,6 +366,7 @@ watch(currentTime, (t) => {
               <AppIcon name="lyric" :size="20" />
             </button>
             <button
+              v-if="hasTranslation"
               class="abtn"
               :class="{ off: !showTrans }"
               :title="showTrans ? '隐藏翻译' : '显示翻译'"
@@ -382,6 +430,8 @@ watch(currentTime, (t) => {
 
 <style scoped>
 .player-page {
+  --player-panel-width: 240px;
+  --player-cover-size: 240px;
   position: fixed;
   inset: 0;
   z-index: 2000;
@@ -446,8 +496,8 @@ watch(currentTime, (t) => {
   gap: 18px;
 }
 .cover {
-  width: 240px;
-  height: 240px;
+  width: var(--player-cover-size);
+  height: var(--player-cover-size);
   border-radius: 10px;
   overflow: hidden;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
@@ -467,7 +517,7 @@ watch(currentTime, (t) => {
   background: rgba(255, 255, 255, 0.1);
 }
 .track-info {
-  width: 240px;
+  width: var(--player-panel-width);
   text-align: left;
 }
 .track-title {
@@ -481,7 +531,7 @@ watch(currentTime, (t) => {
 }
 
 .progress {
-  width: 240px;
+  width: var(--player-panel-width);
 }
 .bar {
   height: 5px;
@@ -545,7 +595,7 @@ watch(currentTime, (t) => {
 
 /* 音量条：图标 + 轨道（轨道样式与进度条一致） */
 .volume {
-  width: 240px;
+  width: var(--player-panel-width);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -564,7 +614,7 @@ watch(currentTime, (t) => {
 }
 
 .actions {
-  width: 240px;
+  width: var(--player-panel-width);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -693,5 +743,107 @@ watch(currentTime, (t) => {
   height: 100%;
   font-size: 20px;
   color: rgba(255, 255, 255, 0.6);
+}
+
+/*
+ * 播放页 Teleport 到 body，不在 #app 内；全屏圆角和尺度必须在这里单独处理。
+ * 窗口模式继续使用上面的 240px 紧凑布局，全屏才按视口有限放大，避免低分辨率溢出。
+ */
+.player-page.fullscreen {
+  --player-panel-width: clamp(300px, 19vw, 380px);
+  --player-cover-size: clamp(280px, min(19vw, 31vh), 380px);
+  border-radius: 0;
+}
+
+.player-page.fullscreen .content {
+  padding-inline: clamp(56px, 4vw, 96px);
+  gap: clamp(56px, 5vw, 112px);
+}
+
+.player-page.fullscreen .left {
+  width: clamp(420px, 32vw, 560px);
+  max-width: none;
+  gap: clamp(18px, 1.6vh, 24px);
+}
+
+/* 歌词隐藏后几何中心略显右重，做一档随视口变化的光学左移补偿。 */
+.player-page.fullscreen .content.no-lyric-panel .left {
+  transform: translateX(clamp(-28px, -1vw, -16px));
+}
+
+.player-page.fullscreen .track-title {
+  font-size: clamp(23px, 1.25vw, 28px);
+}
+
+.player-page.fullscreen .track-artist {
+  margin-top: 5px;
+  font-size: clamp(15px, 0.82vw, 18px);
+}
+
+.player-page.fullscreen .bar {
+  height: 7px;
+}
+
+.player-page.fullscreen .thumb {
+  right: -7px;
+  width: 15px;
+  height: 15px;
+}
+
+.player-page.fullscreen .time {
+  margin-top: 9px;
+  font-size: 13px;
+}
+
+.player-page.fullscreen .controls {
+  gap: clamp(42px, 3vw, 58px);
+}
+
+.player-page.fullscreen .tbtn {
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+}
+
+.player-page.fullscreen .tbtn:not(.play) :deep(.app-icon) {
+  width: 34px;
+  height: 34px;
+}
+
+.player-page.fullscreen .play {
+  width: 72px;
+  height: 72px;
+}
+
+.player-page.fullscreen .play :deep(.app-icon) {
+  width: 43px;
+  height: 43px;
+}
+
+.player-page.fullscreen .volume {
+  gap: 14px;
+}
+
+.player-page.fullscreen .vbtn :deep(.app-icon) {
+  width: 22px;
+  height: 22px;
+}
+
+.player-page.fullscreen .actions :deep(.app-icon) {
+  width: 25px;
+  height: 25px;
+}
+
+.player-page.fullscreen .close {
+  top: 26px;
+  right: 30px;
+  width: 48px;
+  height: 48px;
+}
+
+.player-page.fullscreen .close :deep(.app-icon) {
+  width: 28px;
+  height: 28px;
 }
 </style>

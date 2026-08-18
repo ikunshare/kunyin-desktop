@@ -28,6 +28,14 @@ const api: WindowApi = {
   window: {
     minimize: () => ipcRenderer.invoke(IpcChannels.WINDOW_MINIMIZE),
     close: () => ipcRenderer.invoke(IpcChannels.WINDOW_CLOSE),
+    fullscreen: (enabled) => ipcRenderer.invoke(IpcChannels.WINDOW_FULLSCREEN, enabled),
+    onFullscreenChange: (cb) => {
+      const listener = (_e: Electron.IpcRendererEvent, fullscreen: boolean): void => cb(fullscreen)
+      ipcRenderer.on(IpcChannels.WINDOW_FULLSCREEN_CHANGED, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.WINDOW_FULLSCREEN_CHANGED, listener)
+      }
+    },
     setSize: (width, height) => ipcRenderer.invoke(IpcChannels.WINDOW_SET_SIZE, width, height),
     ready: () => ipcRenderer.send(IpcChannels.WINDOW_READY)
   },

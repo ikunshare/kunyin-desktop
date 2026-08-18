@@ -1,18 +1,26 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import { coverUrl } from '../utils/cover'
 
-const props = defineProps<{
-  cover?: string
-  title: string
-  subtitle?: string
-  meta?: string
-  round?: boolean
-  /** 是否显示「下载全部」按钮（专辑页用） */
-  download?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    cover?: string
+    title: string
+    subtitle?: string
+    meta?: string
+    round?: boolean
+    /** 是否显示「下载全部」按钮（专辑页用） */
+    download?: boolean
+    /** 是否显示返回按钮（详情页从列表/歌手页点进来，需要退回上一个状态） */
+    back?: boolean
+  }>(),
+  { back: true }
+)
 const emit = defineEmits<{ playAll: []; download: [] }>()
+
+const router = useRouter()
 
 // 封面走主进程磁盘缓存协议
 const cachedCover = computed(() => coverUrl(props.cover))
@@ -20,6 +28,9 @@ const cachedCover = computed(() => coverUrl(props.cover))
 
 <template>
   <div class="detail-header">
+    <button v-if="back" class="dh-back" title="返回" @click="router.back()">
+      <AppIcon name="arrow-left" :size="18" />
+    </button>
     <div class="dh-cover" :class="{ round }">
       <img v-if="cachedCover" :src="cachedCover" alt="" />
       <AppIcon v-else name="library" :size="40" />
@@ -48,6 +59,25 @@ const cachedCover = computed(() => coverUrl(props.cover))
   display: flex;
   gap: 20px;
   padding: 10px 0 24px;
+}
+.dh-back {
+  flex: none;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-right: -8px;
+  border-radius: 50%;
+  color: var(--color-font-label);
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease;
+}
+.dh-back:hover {
+  color: var(--color-font);
+  background: var(--color-button-background-hover);
 }
 .dh-cover {
   flex: none;

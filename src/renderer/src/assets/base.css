@@ -123,6 +123,79 @@ body {
   transition: background-color var(--transition-normal);
 }
 
+/* 全屏不保留透明窗口的内容圆角，避免四角露出桌面。 */
+html.fullscreen #app {
+  border-radius: 0;
+}
+
+/* 对齐 lx-music-desktop 的 disableAnimation：设置关闭后停用所有界面动效。 */
+html.disable-animation *,
+html.disable-animation *::before,
+html.disable-animation *::after {
+  transition: none !important;
+  animation: none !important;
+  scroll-behavior: auto !important;
+}
+
+/* 弹出层默认/随机入场动画，由 usePopupAnimation 在节点出现时选择。 */
+.popup-enter-zoom {
+  animation: popup-zoom-in 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.popup-enter-slide {
+  animation: popup-slide-in 0.34s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.popup-enter-flip {
+  backface-visibility: hidden;
+  animation: popup-flip-in 0.4s ease-out both;
+}
+.popup-enter-drop {
+  animation: popup-drop-in 0.38s cubic-bezier(0.18, 0.89, 0.32, 1.28) both;
+}
+
+@keyframes popup-zoom-in {
+  from {
+    opacity: 0;
+    transform: scale(0.88);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes popup-slide-in {
+  from {
+    opacity: 0;
+    transform: translate3d(38px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes popup-flip-in {
+  from {
+    opacity: 0;
+    transform: perspective(480px) rotateX(28deg) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(480px) rotateX(0) scale(1);
+  }
+}
+
+@keyframes popup-drop-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -34px, 0) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
 ul,
 ol {
   list-style: none;

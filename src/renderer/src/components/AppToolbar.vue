@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import AppIcon from './AppIcon.vue'
@@ -11,6 +11,8 @@ const router = useRouter()
 const searchStore = useSearchStore()
 const { keyword } = storeToRefs(searchStore)
 const local = ref('')
+const isFullscreen = ref(false)
+let unsubscribeFullscreen: (() => void) | null = null
 
 const focused = ref(false)
 const tips = ref<string[]>([])
@@ -54,6 +56,23 @@ function clearInput(): void {
   keyword.value = ''
   searchStore.clearResults()
 }
+
+function toggleFullscreen(): void {
+  void api.window.fullscreen(!isFullscreen.value).then((value) => {
+    isFullscreen.value = value
+  })
+}
+
+onMounted(() => {
+  void api.window.fullscreen().then((value) => {
+    isFullscreen.value = value
+  })
+  unsubscribeFullscreen = api.window.onFullscreenChange((value) => {
+    isFullscreen.value = value
+  })
+})
+
+onUnmounted(() => unsubscribeFullscreen?.())
 </script>
 
 <template>
@@ -89,6 +108,13 @@ function clearInput(): void {
     <div class="win-controls no-drag">
       <button class="win-btn min" title="最小化" @click="api.window.minimize()">
         <AppIcon name="minus" :size="16" />
+      </button>
+      <button
+        class="win-btn fullscreen"
+        :title="isFullscreen ? '退出全屏' : '全屏'"
+        @click="toggleFullscreen"
+      >
+        <AppIcon :name="isFullscreen ? 'restore' : 'maximize'" :size="15" />
       </button>
       <button class="win-btn close" title="关闭" @click="api.window.close()">
         <AppIcon name="close" :size="16" />
@@ -199,6 +225,9 @@ function clearInput(): void {
 }
 .win-btn.min:hover {
   background-color: var(--color-btn-min);
+}
+.win-btn.fullscreen:hover {
+  background-color: var(--color-btn-hide);
 }
 .win-btn.close:hover {
   background-color: var(--color-btn-close);

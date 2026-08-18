@@ -40,10 +40,12 @@ function kgFormatSize(bytes: number): string {
   return mb >= 1024 ? `${(mb / 1024).toFixed(2)}GB` : `${mb.toFixed(1)}MB`
 }
 
-/** 清洗发行日期：`0000-…` 占位与空值归一为 undefined。 */
+/** 清洗发行日期：`0000-…` 占位与空值归一为 undefined；数字时间戳原样透出（年份由 publishYear 解析）。 */
 function kgDate(raw: unknown): string | undefined {
-  const s = typeof raw === 'string' ? raw.trim().slice(0, 10) : ''
-  return s && !s.startsWith('0000') ? s : undefined
+  if (typeof raw === 'number') return raw > 0 ? String(raw) : undefined
+  const s = typeof raw === 'string' ? raw.trim() : ''
+  if (!s || s.startsWith('0000')) return undefined
+  return /^\d+$/.test(s) ? s : s.slice(0, 10)
 }
 
 export class KgProvider extends BaseProvider {
@@ -183,7 +185,7 @@ export class KgProvider extends BaseProvider {
       name: ai.album_name,
       cover: ai.sizable_cover ? String(ai.sizable_cover).replace('{size}', '480') : undefined,
       artist: ai.author_name,
-      publishTime: ai.publish_date,
+      publishTime: kgDate(ai.publish_date),
       description: ai.intro ?? ai.short_intro_v2,
       total: num(data.song_data?.total, 0)
     }

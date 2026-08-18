@@ -52,6 +52,12 @@ export const useArtistStore = defineStore('artist', () => {
   const mvsHasMore = ref(true)
   const mvsPage = ref(0)
 
+  /** 页面滚动位置：点进专辑/MV 再返回时恢复到原处（换歌手时清零） */
+  const scrollTop = ref(0)
+  function setScroll(v: number): void {
+    scrollTop.value = v
+  }
+
   let currentKey = ''
   let source: MusicSource | '' = ''
   let artistId = ''
@@ -83,6 +89,7 @@ export const useArtistStore = defineStore('artist', () => {
     loading.value = true
     error.value = ''
     tab.value = 'songs'
+    scrollTop.value = 0
     songs.value = []
     songsLoadingMore.value = false
     songsHasMore.value = true
@@ -223,6 +230,8 @@ export const useArtistStore = defineStore('artist', () => {
     mvsLoading,
     mvsHasMore,
     mvsLoaded,
+    scrollTop,
+    setScroll,
     cachePreview,
     load,
     loadMoreSongs,

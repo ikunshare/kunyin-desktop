@@ -64,12 +64,26 @@ export interface AppSettings {
     fontSize: number
   }
 
+  /** 桌面端窗口与动效行为（对应 lx-music-desktop 基础设置） */
+  behavior: {
+    /** 显示界面过渡与弹出层动画 */
+    showAnimation: boolean
+    /** 弹出层每次从若干入场动画中随机选择 */
+    randomAnimation: boolean
+    /** 启动后直接进入全屏 */
+    startInFullscreen: boolean
+    /** 点击关闭按钮时隐藏主窗口，由托盘继续驻留 */
+    closeToTray: boolean
+  }
+
   /** 列表显示（对应 lx-music-desktop 基础设置的列表项） */
   list: {
     /** 显示列表操作按钮（歌曲行 hover 的试听/添加/下载） */
     showOperationButtons: boolean
     /** 歌手页专辑用列表视图（false=网格；对应 Android albumListMode） */
     albumListMode: boolean
+    /** 歌手页专辑按发行时间升序排列（false=新→旧，true=旧→新） */
+    albumSortAsc: boolean
   }
 
   player: {
@@ -80,6 +94,14 @@ export interface AppSettings {
     preferredQuality: QualityId
     /** 启动是否自动续播 */
     autoPlay: boolean
+  }
+
+  /** 音质过滤（播放取流与下载共用） */
+  quality: {
+    /** 屏蔽 AI 生成音质：播放与下载都跳过 aiQualities 里的档位，歌曲行徽标也不再显示 */
+    blockAi: boolean
+    /** 视为「AI 音质」的档位（可选项见 AI_QUALITY_CANDIDATES） */
+    aiQualities: QualityId[]
   }
 
   lyrics: {
@@ -169,7 +191,7 @@ export interface AppSettings {
     maxConcurrent: number
     /** 文件命名风格（对应 Android DownloadNamingStyle） */
     namingStyle: 'artist-title' | 'title-artist' | 'title-only'
-    /** 文件名前缀两位轨号（整专用，对应 downloadTrackNumber） */
+    /** 整专下载的文件名前缀两位曲目号，如 `01.歌手 - 歌名`（对应 downloadTrackNumber） */
     trackNumberPrefix: boolean
     /** 同名文件是否覆盖（否则自动追加序号，对应 downloadOverwriteExisting） */
     overwriteExisting: boolean
@@ -221,7 +243,7 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  version: 1,
+  version: 2,
   appearance: {
     themeId: 'green',
     followSystem: true,
@@ -233,15 +255,26 @@ export const DEFAULT_SETTINGS: AppSettings = {
     windowSizeId: 3,
     fontSize: 16
   },
+  behavior: {
+    showAnimation: true,
+    randomAnimation: true,
+    startInFullscreen: false,
+    closeToTray: false
+  },
   list: {
     showOperationButtons: true,
-    albumListMode: false
+    albumListMode: false,
+    albumSortAsc: false
   },
   player: {
     volume: 1,
     playMode: 'listLoop',
     preferredQuality: 'flac',
     autoPlay: false
+  },
+  quality: {
+    blockAi: true,
+    aiQualities: ['atmos', 'atmos_plus']
   },
   lyrics: {
     showTranslation: true,
@@ -294,7 +327,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     appendQualityTag: true,
     maxConcurrent: 3,
     namingStyle: 'artist-title',
-    trackNumberPrefix: false,
+    trackNumberPrefix: true,
     overwriteExisting: false,
     skipExistFile: false,
     groupByListName: false,

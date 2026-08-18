@@ -223,10 +223,16 @@ export function useLyricPlayer(): {
   // 默认 Apple Music 白色系（主窗口全屏播放器用）
   setColors('#ffffff', '#ffffff')
 
-  /** 设歌词字体（空=跟随软件/继承）。直接设 DOM 根元素 font-family，逐字/翻译/音译都继承。 */
+  /** 设歌词字体（空=跟随宿主字体）。写入引擎基础字体配置，让主词、翻译和音译的变量链一起更新。 */
   function setFontFamily(font: string): void {
-    if (font) dom.element.style.fontFamily = `"${font}"`
-    else dom.element.style.removeProperty('font-family')
+    const family = font ? `"${font.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"` : 'inherit'
+    dom.config.merge({
+      line: {
+        normal: {
+          base: { font: { family } }
+        }
+      }
+    })
   }
 
   /** 桌面歌词等紧凑宿主可动态覆盖排版，但不替换逐字动画驱动。 */

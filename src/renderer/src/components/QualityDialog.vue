@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { QUALITY_IDS, QUALITY_NAMES, type MusicItem } from '@common'
+import { QUALITY_IDS, QUALITY_NAMES, blockedQualityIds, type MusicItem } from '@common'
 import { useSettingsStore } from '../stores/settings'
 import { useDownloadStore } from '../stores/download'
 
@@ -34,7 +34,9 @@ interface QualityOption {
 }
 
 const options = computed<QualityOption[]>(() => {
-  const ladder = [...QUALITY_IDS].reverse() // 高 → 低
+  // 高 → 低；开启「屏蔽 AI 音质」后这些档位不出现在可选项里
+  const blocked = blockedQualityIds(settings.value)
+  const ladder = [...QUALITY_IDS].reverse().filter((id) => !blocked.includes(id))
   const suffix = (id: string, size?: number): string =>
     `${size ? ` - ${fmtSize(size)}` : ''}${id === preferred.value ? '（优先）' : ''}`
   if (isBatch.value) {

@@ -37,6 +37,36 @@ function setAppFont(font: string): void {
     </div>
   </dd>
   <dd>
+    <h3 id="basic_behavior">动画与窗口</h3>
+    <div class="behavior-options">
+      <BaseCheckbox
+        id="setting_show_animation"
+        :model-value="settings.behavior.showAnimation"
+        label="显示动画效果"
+        @update:model-value="store.update({ behavior: { showAnimation: $event as boolean } })"
+      />
+      <BaseCheckbox
+        id="setting_random_animation"
+        :disabled="!settings.behavior.showAnimation"
+        :model-value="settings.behavior.randomAnimation"
+        label="弹出层随机动画"
+        @update:model-value="store.update({ behavior: { randomAnimation: $event as boolean } })"
+      />
+      <BaseCheckbox
+        id="setting_start_in_fullscreen"
+        :model-value="settings.behavior.startInFullscreen"
+        label="以全屏模式启动"
+        @update:model-value="store.update({ behavior: { startInFullscreen: $event as boolean } })"
+      />
+      <BaseCheckbox
+        id="setting_close_to_tray"
+        :model-value="settings.behavior.closeToTray"
+        label="关闭窗口时不退出软件，将其最小化到系统托盘"
+        @update:model-value="store.update({ behavior: { closeToTray: $event as boolean } })"
+      />
+    </div>
+  </dd>
+  <dd>
     <h3 id="basic_window_size">窗口尺寸</h3>
     <div>
       <BaseCheckbox
@@ -92,3 +122,12 @@ function setAppFont(font: string): void {
     </div>
   </dd>
 </template>
+
+<style scoped>
+.behavior-options {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+</style>

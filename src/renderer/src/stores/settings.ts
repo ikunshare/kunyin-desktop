@@ -26,6 +26,11 @@ function applyAppearance(s: AppSettings): void {
   lastWindowSizeId = s.appearance.windowSizeId
 }
 
+/** 同 lx-music-desktop 的 disableAnimation：关闭后即时停用全局 CSS 动画与过渡。 */
+function applyBehavior(s: AppSettings): void {
+  document.documentElement.classList.toggle('disable-animation', !s.behavior.showAnimation)
+}
+
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<AppSettings>(structuredClone(DEFAULT_SETTINGS))
   let unsubscribe: (() => void) | null = null
@@ -34,10 +39,12 @@ export const useSettingsStore = defineStore('settings', () => {
   async function load(): Promise<void> {
     settings.value = await window.api.settings.get()
     applyAppearance(settings.value)
+    applyBehavior(settings.value)
     if (!unsubscribe) {
       unsubscribe = window.api.settings.onChange((next) => {
         settings.value = next
         applyAppearance(next)
+        applyBehavior(next)
       })
     }
   }
@@ -46,6 +53,7 @@ export const useSettingsStore = defineStore('settings', () => {
   async function update(patch: DeepPartial<AppSettings>): Promise<void> {
     settings.value = await window.api.settings.set(patch)
     applyAppearance(settings.value)
+    applyBehavior(settings.value)
   }
 
   return { settings, load, update }

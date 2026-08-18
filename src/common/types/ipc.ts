@@ -37,6 +37,8 @@ export const IpcChannels = {
   // 窗口控制（无边框主窗口）
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_CLOSE: 'window:close',
+  WINDOW_FULLSCREEN: 'window:fullscreen',
+  WINDOW_FULLSCREEN_CHANGED: 'window:fullscreen-changed',
   WINDOW_SET_SIZE: 'window:setSize',
   WINDOW_READY: 'window:ready', // 渲染 → 主：UI 首帧已绘制，可显示窗口
 
@@ -315,10 +317,14 @@ export interface WindowApi {
     getPlatform(): Promise<NodeJS.Platform>
   }
 
-  /** 主窗口控制（无边框固定尺寸窗口的最小化/关闭） */
+  /** 主窗口控制（无边框窗口的最小化/关闭/全屏） */
   window: {
     minimize(): Promise<void>
     close(): Promise<void>
+    /** 不传值时只查询当前状态；传值时切换全屏并返回新状态 */
+    fullscreen(enabled?: boolean): Promise<boolean>
+    /** 原生全屏状态变化（含 Esc 退出） */
+    onFullscreenChange(cb: (fullscreen: boolean) => void): Unsubscribe
     /** 按档位尺寸调整窗口（设置页窗口尺寸选择） */
     setSize(width: number, height: number): Promise<void>
     /** 通知主进程 UI 首帧已绘制完成，可以显示窗口（防启动闪裸背景图） */

@@ -1,15 +1,20 @@
 /**
  * 主窗口管理。
  */
-import { BrowserWindow, Menu, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell } from 'electron'
 import { join } from 'node:path'
 import { is } from '@electron-toolkit/utils'
-import { WINDOW_SIZE_LIST } from '@common'
+import { IpcChannels, WINDOW_SIZE_LIST } from '@common'
 import icon from '../../../resources/icons/icon.png?asset'
 import { appEvent } from '../core/events'
 import { getSettings } from '../store/settings'
 
 let mainWindow: BrowserWindow | null = null
+let isQuitting = false
+
+app.on('before-quit', () => {
+  isQuitting = true
+})
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow
@@ -17,9 +22,10 @@ export function getMainWindow(): BrowserWindow | null {
 
 /** 显示主窗口（幂等）。由渲染层 window:ready 触发，另有创建时的超时兜底。 */
 export function showMainWindow(): void {
-  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-    mainWindow.show()
-  }
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  if (!mainWindow.isVisible()) mainWindow.show()
+  mainWindow.focus()
 }
 
 export function createMainWindow(): BrowserWindow {
@@ -28,17 +34,18 @@ export function createMainWindow(): BrowserWindow {
     return mainWindow
   }
 
+  const settings = getSettings()
   // 按设置中的窗口尺寸档位创建（对应设置页"窗口尺寸"选项）
   const sizeConf =
-    WINDOW_SIZE_LIST.find((i) => i.id === getSettings().appearance.windowSizeId) ??
-    WINDOW_SIZE_LIST[3]
+    WINDOW_SIZE_LIST.find((i) => i.id === settings.appearance.windowSizeId) ?? WINDOW_SIZE_LIST[3]
 
   const win = new BrowserWindow({
     width: sizeConf.width,
     height: sizeConf.height,
-    resizable: false,
+    resizable: process.platform === 'linux' && settings.behavior.startInFullscreen,
     maximizable: false,
-    fullscreenable: false,
+    fullscreenable: true,
+    fullscreen: settings.behavior.startInFullscreen,
     show: false,
     autoHideMenuBar: true,
     title: '坤音',
@@ -75,6 +82,29 @@ export function createMainWindow(): BrowserWindow {
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
+  })
+
+  const notifyFullscreen = (): void => {
+    if (!win.isDestroyed()) {
+      win.webContents.send(IpcChannels.WINDOW_FULLSCREEN_CHANGED, win.isFullScreen())
+    }
+  }
+  win.on('enter-full-screen', notifyFullscreen)
+  win.on('leave-full-screen', notifyFullscreen)
+
+  win.on('close', (event) => {
+    if (isQuitting) return
+    if (getSettings().behavior.closeToTray) {
+      event.preventDefault()
+      win.hide()
+      return
+    }
+    // 桌面歌词窗口即使不可见也仍计入 BrowserWindow；只关闭主窗口会导致
+    // window-all-closed 永远不触发。Windows/Linux 明确走 app.quit 关闭所有窗口。
+    if (process.platform !== 'darwin') {
+      event.preventDefault()
+      app.quit()
+    }
   })
 
   // HMR：开发期加载 dev server，生产加载打包后的 index.html

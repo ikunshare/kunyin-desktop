@@ -1,18 +1,43 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import DetailHeader from '../components/DetailHeader.vue'
 import SongRow from '../components/SongRow.vue'
 import QualityDialog from '../components/QualityDialog.vue'
 import { usePlayerStore, type QueueSource } from '../stores/player'
-import { getMusicItemKey, type MusicItem, type MusicSource } from '@common'
+import {
+  albumFolderName,
+  getMusicItemKey,
+  publishYear,
+  type MusicItem,
+  type MusicSource
+} from '@common'
 
 const route = useRoute()
 const player = usePlayerStore()
 
-const album = ref<{ name: string; artist?: string; cover?: string; total?: number }>({ name: '' })
+const album = ref<{
+  name: string
+  artist?: string
+  cover?: string
+  total?: number
+  publishTime?: string
+}>({ name: '' })
 const tracks = ref<MusicItem[]>([])
 const loading = ref(false)
+
+/** 整专下载目录名：`年份 艺人 - 专辑名`（专辑接口没给艺人时退回首曲艺人） */
+const downloadDir = computed(() =>
+  albumFolderName({
+    name: album.value.name,
+    artist: album.value.artist || tracks.value[0]?.artist,
+    publishTime: album.value.publishTime
+  })
+)
+const headerMeta = computed(() => {
+  const year = publishYear(album.value.publishTime)
+  return [`专辑 · ${album.value.total ?? tracks.value.length} 首`, year].filter(Boolean).join(' · ')
+})
 
 // ============ 整专下载 ============
 const qualityDialog = ref(false)
@@ -49,7 +74,13 @@ async function load(): Promise<void> {
   try {
     const info = await window.api.discover.albumInfo(key.source, key.id)
     album.value = info
-      ? { name: info.name, artist: info.artist, cover: info.cover, total: info.total }
+      ? {
+          name: info.name,
+          artist: info.artist,
+          cover: info.cover,
+          total: info.total,
+          publishTime: info.publishTime
+        }
       : { name: '专辑' }
     const res = await window.api.discover.albumSongs(key.source, key.id, 0, 100)
     tracks.value = res.result
@@ -83,7 +114,7 @@ function playAll(): void {
       :cover="album.cover"
       :title="album.name"
       :subtitle="album.artist"
-      :meta="`专辑 · ${album.total ?? tracks.length} 首`"
+      :meta="headerMeta"
       download
       @play-all="playAll"
       @download="downloadAll"
@@ -103,7 +134,7 @@ function playAll(): void {
     <QualityDialog
       v-if="qualityDialog"
       :items="tracks"
-      :sub-dir="album.name"
+      :sub-dir="downloadDir"
       numbered
       @added="onDownloadAdded"
       @close="qualityDialog = false"
