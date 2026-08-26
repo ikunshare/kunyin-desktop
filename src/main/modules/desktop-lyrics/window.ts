@@ -15,7 +15,7 @@ import { appEvent } from '../../core/events'
 import { sendToAllRenderers } from '../../ipc/helpers'
 
 let lyricWindow: BrowserWindow | null = null
-/** 最近一次状态，新窗口打开时立即回灌 */
+/** 增量帧合并出的完整状态，新窗口打开时立即回灌 */
 let lastState: DesktopLyricState | null = null
 let saveBoundsTimer: ReturnType<typeof setTimeout> | null = null
 let alwaysOnTopTimer: ReturnType<typeof setInterval> | null = null
@@ -237,10 +237,13 @@ export function registerDesktopLyricModule(): void {
     toggleDesktopLyric(enabled)
   })
 
-  // 主窗口推状态 → 缓存 + 转发歌词窗
+  // 主窗口推状态 → 合并进快照 + 转发歌词窗。
+  // 推送是增量的：歌词全文只在内容帧携带（见 DesktopLyricState），所以这里必须**合并**
+  // 而非覆盖，否则回灌给新歌词窗的快照会缺歌词。
   ipcMain.on(IpcChannels.DESKTOP_LYRIC_PUSH, (_e, state: DesktopLyricState) => {
-    lastState = state
+    lastState = lastState ? { ...lastState, ...state } : state
     if (lyricWindow && !lyricWindow.isDestroyed()) {
+      // 转发原样的增量帧：歌词窗按「本帧是否携带 lyric」判断要不要重建歌词
       lyricWindow.webContents.send(IpcChannels.DESKTOP_LYRIC_STATE, state)
     }
   })

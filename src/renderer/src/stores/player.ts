@@ -1,7 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { MusicItem, PlayMode, QualityId } from '@common'
-import { blockedQualityIds, getMusicItemKey } from '@common'
+import {
+  blockedQualityIds,
+  getMusicItemKey,
+  qualityFallbackOrder,
+  qualityUpgradeOrder
+} from '@common'
 import { useSettingsStore } from './settings'
 
 /**
@@ -9,15 +14,6 @@ import { useSettingsStore } from './settings'
  * 播放地址经主进程自定义协议 kunyin:// 供 <audio>，规避 CSP 与 CDN 鉴权。
  * currentTime/duration 单位为毫秒（与歌词引擎、UI 一致）。
  */
-const QUALITY_LADDER: QualityId[] = [
-  '128k',
-  '320k',
-  'flac',
-  'hires',
-  'master',
-  'atmos',
-  'atmos_plus'
-]
 const SPECTRUM_BAR_COUNT = 20
 
 /**
@@ -81,13 +77,33 @@ export const usePlayerStore = defineStore('player', () => {
   let spectrumBytes: Uint8Array<ArrayBuffer> | null = null
   let spectrumAttachTimer: ReturnType<typeof setTimeout> | null = null
 
+  /**
+   * 停掉旁路采样流的全部轨道。
+   *
+   * ⚠ 只把引用置空是不够的：captureStream() 每调一次就给 <audio> 挂一条**不会自动摘除**
+   * 的 audio sink，而 live 的 MediaStreamTrack 有 pending activity（还能派发 ended），
+   * GC 也不会回收它。于是切歌一次泄漏一条 sink：音频渲染线程上挂着越来越多的旁路
+   * 在拉 PCM，更要紧的是残留 sink 会拖住上一首的媒体管线无法释放，新 src 的加载被排在
+   * 这些资源后面——症状就是「听久了切歌加载越来越慢」。必须显式 stop。
+   */
+  function stopCapturedStream(): void {
+    for (const track of capturedStream?.getTracks() ?? []) {
+      try {
+        track.stop()
+      } catch {
+        /* 已结束的轨道再 stop 不算错 */
+      }
+    }
+    capturedStream = null
+  }
+
   function resetSpectrumStream(): void {
     if (spectrumAttachTimer) clearTimeout(spectrumAttachTimer)
     spectrumAttachTimer = null
     spectrumGraph?.source.disconnect()
     analyser?.disconnect()
     spectrumGraph?.sink.disconnect()
-    capturedStream = null
+    stopCapturedStream()
     spectrumGraph = null
     analyser = null
     spectrumBytes = null
@@ -103,16 +119,18 @@ export const usePlayerStore = defineStore('player', () => {
     ).captureStream
     if (!capture) return
     try {
-      if (!capturedStream?.getAudioTracks().length) {
-        const stream = capture.call(audio)
-        if (!stream.getAudioTracks().length) {
-          // playItem 会在设置 src 前预热 AudioContext；此时 captureStream 还没有音轨。
-          // 不缓存空流，等 loadeddata/play 事件后重新 capture。
-          capturedStream = null
-          return
-        }
-        capturedStream = stream
+      // 每首歌只 capture 一次。音轨要等解码器就绪才出现，但 Chromium 是往**同一个流**里
+      // addTrack（旧实现能观察到「同时残留旧/新轨道」正是这个行为），所以拿到暂时没有
+      // 音轨的空流时应当留着它等轨道长出来，而不是丢掉重 capture——每次重 capture 都白挂
+      // 一条摘不掉的 sink（见 stopCapturedStream），重试 20 次就泄漏 20 条。
+      // 流由 setAudioSource / emptied 经 resetSpectrumStream 统一 stop。
+      const tracks = capturedStream?.getAudioTracks() ?? []
+      // 长出过轨道却全部 ended：这条流再也不会有 live 轨道，停掉后重建。
+      // 仅凭「还没有轨道」不能判失效——那正是等待解码器就绪的正常中间态。
+      if (tracks.length && !tracks.some((track) => track.readyState === 'live')) {
+        stopCapturedStream()
       }
+      if (!capturedStream) capturedStream = capture.call(audio)
       const activeTrack = capturedStream
         .getAudioTracks()
         .filter((track) => track.readyState === 'live')
@@ -176,6 +194,15 @@ export const usePlayerStore = defineStore('player', () => {
         void context.close().catch(() => {})
         console.warn('[player] 无法初始化实时音频频谱', e)
       })
+  }
+
+  /**
+   * 换播放源。先停掉旁路采样再设 src：不依赖 `emptied` 的派发时序，
+   * 保证上一首挂在 <audio> 上的 audio sink 一定被摘掉（见 stopCapturedStream）。
+   */
+  function setAudioSource(url: string): void {
+    resetSpectrumStream()
+    audio.src = url
   }
 
   function getSpectrumData(): number[] {
@@ -333,17 +360,21 @@ export const usePlayerStore = defineStore('player', () => {
   window.addEventListener('beforeunload', persistState)
 
   /**
-   * 音质尝试顺序：优先设置项，其余从低到高兜底（高音质常需卡密）。
+   * 音质尝试顺序：从首选档开始逐级**降级**，首选档及更低档全不可用时才向上取最接近的。
+   * 与下载侧（download/manager.ts 的 pickQuality / resolveWithFallback）共用 @common 的
+   * 同一套档位顺序，播放与下载的降级行为因此始终一致。
+   *
+   * 早先这里自带一份档位表并从最低档往上爬，首选档取流失败就直接掉到 128K——
+   * 明明有 HiRes 权限也只能听标准音质。改为真正的降级后，拿到的是最接近首选的可用档。
    * 开启「屏蔽 AI 音质」后，被屏蔽的档位（全景声等）整条链路都不参与取流。
    */
   function qualityOrder(item: MusicItem): string[] {
     const settings = useSettingsStore().settings
     const preferred = settings.player.preferredQuality
     const blocked = blockedQualityIds(settings)
-    const usable = (q: string): boolean => !!item.qualities[q] && !blocked.includes(q)
-    const order: string[] = []
-    if (usable(preferred)) order.push(preferred)
-    for (const q of QUALITY_LADDER) if (usable(q) && !order.includes(q)) order.push(q)
+    const order = qualityFallbackOrder(preferred, item.qualities, blocked)
+    order.push(...qualityUpgradeOrder(preferred, item.qualities, blocked))
+    // 各源自定义的非标准档位键兜底（与下载侧 pickQuality 的收尾同理）
     for (const q of Object.keys(item.qualities))
       if (!blocked.includes(q) && !order.includes(q)) order.push(q)
     return order.length ? order : ['128k']
@@ -380,7 +411,7 @@ export const usePlayerStore = defineStore('player', () => {
         if (stale()) return
         if (res.ok) {
           quality.value = q
-          audio.src = res.url
+          setAudioSource(res.url)
           audio.volume = muted.value ? 0 : volume.value
           await audio.play().catch(() => {})
           if (stale()) return
@@ -426,7 +457,7 @@ export const usePlayerStore = defineStore('player', () => {
         if (stale()) return
         if (res.ok) {
           quality.value = q
-          audio.src = res.url
+          setAudioSource(res.url)
           audio.volume = muted.value ? 0 : volume.value
           // 等元数据就绪才能 seek；5s 超时兜底
           await new Promise<void>((resolve) => {
@@ -566,6 +597,23 @@ export const usePlayerStore = defineStore('player', () => {
   }
 
   /**
+   * 明确「播放」/「暂停」（幂等）。
+   *
+   * SMTC / 耳机线控给的是明确语义的 play / pause 命令，不能翻译成 toggle：
+   * playing 要等 <audio> 的 play 事件才置 true，命令连续到达（蓝牙 AVRCP 常同时
+   * 合成按键与 SMTC 事件）时两次都会读到旧值，第二次就把刚开始的播放又暂停掉。
+   * 直接按 audio.paused 判断则天然幂等，重复命令是空操作。
+   */
+  function play(): void {
+    if (!current.value || !audio.paused) return
+    if (useSettingsStore().settings.lyrics.desktopAudioVisualization) enableAudioSpectrum()
+    void audio.play().catch(() => {})
+  }
+  function pause(): void {
+    if (!audio.paused) audio.pause()
+  }
+
+  /**
    * 「下一首播放」：把歌曲插入队列，紧跟当前曲之后，不打断当前播放。
    * 队列为空或未在播放时，直接开始播放该曲。已在队列中的先去重再插入。
    */
@@ -690,6 +738,8 @@ export const usePlayerStore = defineStore('player', () => {
     playNext,
     removeFromQueue,
     toggle,
+    play,
+    pause,
     seek,
     next,
     prev,

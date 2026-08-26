@@ -17,26 +17,40 @@ export function useDesktopLyricBridge(): void {
 
   let cached: Lyric | null = null
   let loadToken = 0
+  /** 待随下一帧发出的内容字段；发过一次即清空，之后只推进度/频谱（见 DesktopLyricState） */
+  let pendingContent: Partial<DesktopLyricState> | null = null
 
   function enabled(): boolean {
     return settings.settings.lyrics.desktopEnabled
   }
 
-  function push(): void {
-    if (!enabled()) return
+  /**
+   * 歌词/曲目变化后登记一份内容快照，由下一次 push 带出去。
+   * 高频的 push 因此完全不必触碰歌词全文——那是每秒二十几次的大对象克隆。
+   */
+  function markContentChanged(): void {
     const c = current.value
-    const hasLyric = !!(cached && (cached.char || cached.lrc))
-    const state: DesktopLyricState = {
-      hasLyric,
+    pendingContent = {
+      hasLyric: !!(cached && (cached.char || cached.lrc)),
       lyric: cached ? cached.char || cached.lrc : '',
       translate: cached?.trans ?? '',
       roman: (cached?.chroma || cached?.roma) ?? '',
-      currentTime: currentTime.value,
-      playing: playing.value,
-      spectrum: settings.settings.lyrics.desktopAudioVisualization ? player.getSpectrumData() : [],
       title: c ? `${c.title} - ${c.artist}` : '',
       musicName: c?.title,
       musicSinger: c?.artist ? [c.artist] : []
+    }
+  }
+
+  function push(): void {
+    if (!enabled()) return
+    const state: DesktopLyricState = {
+      currentTime: currentTime.value,
+      playing: playing.value,
+      spectrum: settings.settings.lyrics.desktopAudioVisualization ? player.getSpectrumData() : []
+    }
+    if (pendingContent) {
+      Object.assign(state, pendingContent)
+      pendingContent = null
     }
     window.api.desktopLyric.push(state)
   }
@@ -45,6 +59,7 @@ export function useDesktopLyricBridge(): void {
     const token = ++loadToken
     cached = null
     if (!current.value || !enabled()) {
+      markContentChanged()
       push()
       return
     }
@@ -56,6 +71,7 @@ export function useDesktopLyricBridge(): void {
     } catch {
       cached = null
     }
+    markContentChanged()
     push()
   }
 

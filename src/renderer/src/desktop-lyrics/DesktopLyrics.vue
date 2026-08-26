@@ -66,24 +66,28 @@ function applyAppearance(settings: AppSettings): void {
 }
 
 async function apply(state: DesktopLyricState): Promise<void> {
-  title.value = state.title
   playing.value = state.playing
   spectrum.value = state.spectrum ?? []
-  const key = `${state.lyric}\0${state.translate}\0${state.roman}\0${state.musicName ?? ''}\0${state.musicSinger?.join('/') ?? ''}`
-  if (key !== lastLyricKey) {
-    lastLyricKey = key
-    if (state.hasLyric && state.lyric) {
-      hasLyric.value = true
-      await nextTick()
-      lyric.loadLyric(state.lyric, state.translate, state.roman, {
-        name: state.musicName,
-        singer: state.musicSinger
-      })
-      await nextTick()
-      requestAnimationFrame(() => lyric.relayout())
-    } else {
-      lyric.clear()
-      hasLyric.value = false
+  // 只有内容帧携带歌词/标题（见 DesktopLyricState）：进度帧直接跳过这一整段。
+  // 指纹也因此从每帧一次（12.5 次/秒拼接整份 QRC）降到每首歌一次。
+  if (state.lyric !== undefined) {
+    title.value = state.title ?? ''
+    const key = `${state.lyric}\0${state.translate}\0${state.roman}\0${state.musicName ?? ''}\0${state.musicSinger?.join('/') ?? ''}`
+    if (key !== lastLyricKey) {
+      lastLyricKey = key
+      if (state.hasLyric && state.lyric) {
+        hasLyric.value = true
+        await nextTick()
+        lyric.loadLyric(state.lyric, state.translate, state.roman, {
+          name: state.musicName,
+          singer: state.musicSinger
+        })
+        await nextTick()
+        requestAnimationFrame(() => lyric.relayout())
+      } else {
+        lyric.clear()
+        hasLyric.value = false
+      }
     }
   }
   if (hasLyric.value) {
