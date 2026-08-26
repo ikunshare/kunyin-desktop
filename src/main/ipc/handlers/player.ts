@@ -12,6 +12,7 @@ import { handle } from '../helpers'
 import { getProvider } from '../../providers'
 import { resolveMediaInfo as resolveMedia, invalidateMediaUrl } from '../../providers/getUrl'
 import { registerAudioStream } from '../../audio/protocol'
+import { audioCacheKey, dropCachedAudio, isAudioFullyCached } from '../../cache/audioCache'
 import { getCachedLyric, setCachedLyric } from '../../cache/lyricCache'
 import { getRedirect } from '../../store/library'
 import { getKgFallbackLyric } from '../../providers/kg/lyric'
@@ -66,6 +67,14 @@ export function registerPlayerHandlers(): void {
         const url = registerAudioStream({ filePath: item.filePath })
         return { ok: true, url, expire: 0, quality: qualityId }
       }
+      // 完整命中音频缓存：所有块都在，连后端 getUrl 都不必发。
+      // 判定必须在解析之前，所以键用「请求的」音质档（见 audioCacheKey）。
+      const cacheKey = audioCacheKey(item, qualityId)
+      if (isAudioFullyCached(cacheKey)) {
+        // 不带 url：协议层看到条目齐全，全程走本地块
+        const url = registerAudioStream({ cacheKey })
+        return { ok: true, url, expire: 0, quality: qualityId }
+      }
       const info = await resolveMedia(item, qualityId)
       if (!info.isSuccess || !info.playUrl) {
         return {
@@ -79,9 +88,11 @@ export function registerPlayerHandlers(): void {
       // 一律走 kunyin:// 协议：加密格式（QQ .mflac/.mgg 等）必须边下边解密；
       // 普通格式也由协议层统一提供响应头超时和局部重试。重试不得清空全局连接池，
       // 否则切歌时会误杀另一首正在建立的连接并制造 ERR_ABORTED。
+      // cacheKey 让协议层按块落盘，并在部分命中时只回源缺的那几块。
       const url = registerAudioStream({
         url: info.playUrl,
-        ekey: info.encryptionInfo?.ekey
+        ekey: info.encryptionInfo?.ekey,
+        cacheKey
       })
       return { ok: true, url, expire: info.expire ?? 0, quality: info.quality || qualityId }
     }
@@ -119,8 +130,10 @@ export function registerPlayerHandlers(): void {
     setCachedLyric(target, lyric)
     return lyric
   })
-  // 播放失败（直链过期/403）：渲染层上报，使 URL 缓存失效后重新解析
+  // 播放失败（直链过期/403/缓存文件损坏）：渲染层上报，使缓存失效后重新解析
   handle(IpcChannels.PLAYER_URL_INVALIDATE, (item: MusicItem, qualityId: string): void => {
     invalidateMediaUrl(item, qualityId)
+    // 命中音频缓存的那一路不碰网络，只失效直链缓存的话重试还会撞上同一个坏文件
+    dropCachedAudio(audioCacheKey(item, qualityId))
   })
 }

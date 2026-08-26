@@ -4,7 +4,8 @@
  * 两类缓存来源不同，清理方式也不同：
  * - 资源缓存：封面等图片由渲染层 <img> 直连 CDN，落在 Chromium 自己的 HTTP 磁盘缓存
  *   （userData/Cache、Code Cache、GPUCache 等），故大小靠遍历目录得出、清理走 session.clearCache()。
- * - 业务缓存：播放地址 / 歌词，是我们自己的 LruJsonStore，按条目数统计。
+ * - 业务缓存：播放地址 / 歌词，是我们自己的 LruJsonStore，按条目数统计；
+ *   音频缓存自带按字节的 LRU 索引（见 audioCache），按字节与曲目数统计。
  *
  * 业务缓存存于 `data/cache/`（见 core/paths.ts），与 Chromium 的数据完全分离。
  */
@@ -15,6 +16,7 @@ import type { Dirent } from 'node:fs'
 import type { CacheStats } from '@common'
 import { clearMediaInfoCache, countCachedMediaInfo } from './urlCache'
 import { clearLyricCache, countCachedLyric } from './lyricCache'
+import { audioCacheStats, clearAudioCache } from './audioCache'
 import { LEGACY_DATA_CACHE_DIR } from '../core/paths'
 
 /** Chromium 落盘缓存的目录名（相对 userData） */
@@ -70,10 +72,13 @@ async function dirSize(path: string): Promise<number> {
 export async function getCacheStats(): Promise<CacheStats> {
   const userData = app.getPath('userData')
   const sizes = await Promise.all(SIZE_DIRS.map((d) => dirSize(join(userData, d))))
+  const audio = audioCacheStats()
   return {
     resourceBytes: sizes.reduce((a, b) => a + b, 0),
     urlCount: countCachedMediaInfo(),
-    lyricCount: countCachedLyric()
+    lyricCount: countCachedLyric(),
+    audioBytes: audio.bytes,
+    audioCount: audio.count
   }
 }
 
@@ -98,4 +103,9 @@ export function clearUrlCache(): void {
 /** 清理歌词缓存 */
 export function clearLyricCacheAll(): void {
   clearLyricCache()
+}
+
+/** 清理音频缓存（整个 data/cache/audio 目录） */
+export async function clearAudioCacheAll(): Promise<void> {
+  await clearAudioCache()
 }
