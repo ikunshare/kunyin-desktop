@@ -218,6 +218,20 @@ export class DomLyricPlayer {
     return this.root.element
   }
 
+  /**
+   * [vendor patch] 歌词末尾附注区（制作人信息）的宿主元素。
+   * 业务侧往里填 DOM，位置由 LayoutManager 排在最后一行之后，与歌词一起滚动。
+   * 内容改完调 refreshFooter() 让布局按新高度重排。
+   */
+  get footerElement() {
+    return this.container.footer
+  }
+
+  /** [vendor patch] 附注区内容变化后重排（高度变了，末行之后的位置要重算） */
+  refreshFooter() {
+    this.scheduleLayoutUpdate({ updateSize: true })
+  }
+
   get instanceId() {
     return this.root.instanceId
   }

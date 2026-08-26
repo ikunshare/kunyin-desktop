@@ -103,6 +103,8 @@ function pick(id: string): void {
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.35);
+  /* 播放页整块底板是窗口拖拽区，本弹窗渲染在其内部会继承 drag 而点不动 */
+  -webkit-app-region: no-drag;
 }
 .dialog {
   width: 300px;

@@ -67,7 +67,11 @@ export function createMainWindow(): BrowserWindow {
       nodeIntegration: true,
       sandbox: false,
       enableWebSQL: false,
-      spellcheck: false // 禁用拼写检查器
+      spellcheck: false, // 禁用拼写检查器
+      // 关掉后台节流：窗口最小化/隐藏到托盘后 Chromium 会限制定时器与渲染，
+      // 而播放态、进度、SMTC 元数据都由渲染层推送——被节流后系统媒体面板
+      // 与桌面歌词会停在旧状态上。音乐播放器必须全程保持后台活跃。
+      backgroundThrottling: false
     }
   })
 

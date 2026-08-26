@@ -1,6 +1,8 @@
 export const PlayerRole = {
   root: 'root',
   container: 'container',
+  // [vendor patch] 歌词末尾的附注区（制作人信息），跟随最后一行一起滚动
+  footer: 'footer',
   line: {
     self: 'line',
     normal: {

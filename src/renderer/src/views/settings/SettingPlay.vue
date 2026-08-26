@@ -18,11 +18,13 @@ const { settings } = storeToRefs(store)
 
 const blocked = computed(() => blockedQualityIds(settings.value))
 
+// 音质从高到低（与下载设置、下载弹窗、播放页音质菜单一致）
 // 被屏蔽的档位不作为首选（当前值若已被屏蔽仍保留在列表里，避免下拉显示空白）
 const qualityList = computed(() =>
-  QUALITY_IDS.filter(
-    (q) => !blocked.value.includes(q) || q === settings.value.player.preferredQuality
-  ).map((q) => ({ id: q as string, label: QUALITY_NAMES[q] }))
+  [...QUALITY_IDS]
+    .reverse()
+    .filter((q) => !blocked.value.includes(q) || q === settings.value.player.preferredQuality)
+    .map((q) => ({ id: q as string, label: QUALITY_NAMES[q] }))
 )
 
 const aiList = AI_QUALITY_CANDIDATES.map((q) => ({ id: q, label: QUALITY_NAMES[q] }))

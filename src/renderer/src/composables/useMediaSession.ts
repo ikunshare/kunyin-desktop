@@ -5,12 +5,14 @@ import { coverUrl } from '../utils/cover'
 
 /**
  * 系统媒体控制（SMTC / 耳机线控 / 系统媒体键）：
- * 用 Web `navigator.mediaSession`（Chromium 自动桥接 Windows SMTC / macOS NowPlaying），
- * 播放中的 <audio> 会被系统识别为媒体源，耳机的播放/暂停/上一首/下一首按钮经 SMTC
- * 回投到这里，再转成 player store 的动作。
+ * 用 Web `navigator.mediaSession`（Chromium 自动桥接 Windows SMTC / macOS NowPlaying /
+ * Linux MPRIS），播放中的 <audio> 会被系统识别为媒体源，媒体面板与耳机的
+ * 播放/暂停/上一首/下一首按钮经此回投到这里，再转成 player store 的动作。
  *
- * 与主进程 media 模块（globalShortcut 键盘媒体键 + 托盘）互补：键盘媒体键走主进程
- * MEDIA_COMMAND，蓝牙耳机 AVRCP 与系统媒体弹窗走本模块的 SMTC。
+ * Windows/macOS 的键盘媒体键也走这条路（Chromium 的 HardwareMediaKeyHandling 在这两个
+ * 平台默认开启，由系统按「当前活跃媒体会话」路由），主进程不再重复注册 globalShortcut
+ * ——原因见 src/main/modules/media/index.ts 的说明。主进程只保留托盘与任务栏缩略图
+ * 工具栏的 MEDIA_COMMAND。
  * 在应用根组件挂载时调用一次即可。
  */
 export function useMediaSession(): void {
@@ -21,6 +23,14 @@ export function useMediaSession(): void {
 
   const ms = navigator.mediaSession
 
+  /** 由 URL 后缀推断封面 MIME（推断不出就不报，交给响应头） */
+  function artworkType(url: string): string | undefined {
+    const ext = /\.(jpe?g|png|webp|gif|bmp)(?:[?#]|$)/i.exec(url)?.[1]?.toLowerCase()
+    if (!ext) return undefined
+    if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg'
+    return `image/${ext}`
+  }
+
   function updateMetadata(): void {
     const c = current.value
     if (!c) {
@@ -29,16 +39,29 @@ export function useMediaSession(): void {
       return
     }
     const artwork = coverUrl(c.cover)
+    const type = artwork ? artworkType(artwork) : undefined
     ms.metadata = new MediaMetadata({
       title: c.title,
       artist: c.artist,
       album: c.album,
-      artwork: artwork ? [{ src: artwork }] : []
+      // 缩略图由 Chromium 下载后交给系统。sizes 必须给：Chromium 用 MediaImageManager
+      // 按尺寸给候选图打分，无尺寸提示的图评分最低，Windows 侧常表现为「只有文字没封面」。
+      // 平台只给单一封面 URL，同一张按常用档位报出即可（系统取实际解码尺寸）。
+      artwork: artwork
+        ? [
+            { src: artwork, sizes: '256x256', ...(type ? { type } : {}) },
+            { src: artwork, sizes: '512x512', ...(type ? { type } : {}) }
+          ]
+        : []
     })
+    // 换 MediaMetadata 会让系统媒体面板整体重置一次，必须紧接着把播放态与进度补回去，
+    // 否则切歌后面板会停在「暂停 + 上一首的进度」上。
+    syncPlaybackState()
+    updatePositionState()
   }
 
   function syncPlaybackState(): void {
-    ms.playbackState = playing.value ? 'playing' : 'paused'
+    ms.playbackState = !current.value ? 'none' : playing.value ? 'playing' : 'paused'
     // 同步给主进程，刷新任务栏缩略图工具栏的播放/暂停按钮
     window.api.media.setState(playing.value)
   }
@@ -49,7 +72,9 @@ export function useMediaSession(): void {
     try {
       ms.setPositionState({
         duration: dur,
-        position: Math.min(currentTime.value / 1000, dur),
+        position: Math.min(Math.max(currentTime.value / 1000, 0), dur),
+        // 恒为 1：playbackRate 传 0 会被 Chromium 判为非法（TypeError）。
+        // 暂停时不外推进度靠 playbackState='paused' 表达，故先同步播放态再报进度。
         playbackRate: 1
       })
     } catch {
@@ -57,19 +82,13 @@ export function useMediaSession(): void {
     }
   }
 
-  // 动作处理器 → player store。play/pause 用精确语义（按真实播放态判断），
-  // 避免 SMTC 状态与 <audio> 短暂失配时「按播放却暂停」的反直觉行为。
-  ms.setActionHandler('play', () => {
-    if (!playing.value) player.toggle()
-  })
-  ms.setActionHandler('pause', () => {
-    if (playing.value) player.toggle()
-  })
+  // 动作处理器 → player store。play/pause 用 store 的幂等实现（按 <audio> 真实状态
+  // 判断），SMTC 与线控重复下发同一命令时不会互相抵消。
+  ms.setActionHandler('play', () => player.play())
+  ms.setActionHandler('pause', () => player.pause())
   ms.setActionHandler('previoustrack', () => player.prev())
   ms.setActionHandler('nexttrack', () => player.next())
-  ms.setActionHandler('stop', () => {
-    if (playing.value) player.toggle()
-  })
+  ms.setActionHandler('stop', () => player.pause())
   ms.setActionHandler('seekto', (details) => {
     if (details.seekTime != null) player.seek(details.seekTime * 1000)
   })
@@ -82,7 +101,7 @@ export function useMediaSession(): void {
     player.seek(currentTime.value + off)
   })
 
-  // 主进程全局媒体键 / 托盘命令 → player
+  // 主进程托盘 / 缩略图工具栏命令 → player
   window.api.media.onCommand((cmd) => {
     if (cmd === 'playpause') player.toggle()
     else if (cmd === 'next') player.next()
@@ -90,8 +109,17 @@ export function useMediaSession(): void {
   })
 
   watch(current, updateMetadata, { immediate: true })
-  // immediate：启动恢复/首曲播放时立刻同步播放态，保证 SMTC 一开始就处于正确状态
-  watch(playing, syncPlaybackState, { immediate: true })
+  // immediate：启动恢复/首曲播放时立刻同步播放态，保证 SMTC 一开始就处于正确状态。
+  // 暂停/恢复时进度也要一并上报——系统按 playbackState 冻结或外推进度，
+  // 只改状态不报位置会让面板从一个过期的点继续走。
+  watch(
+    playing,
+    () => {
+      syncPlaybackState()
+      updatePositionState()
+    },
+    { immediate: true }
+  )
   watch(duration, updatePositionState)
   // 进度大跳变（seek）时同步一次；平稳播放交给系统外推，避免高频调用
   let last = 0

@@ -21,6 +21,12 @@ export class Container {
   readonly event: Event<ContainerEventMap> = new Event()
 
   private readonly dom: HTMLDivElement
+  /**
+   * [vendor patch] 歌词末尾的附注区（制作人信息）宿主。
+   * 常驻元素：clearChild 重建歌词行时不会被清掉；位置由 LayoutManager 排在最后一行之后，
+   * 因此能与歌词一起滚动，而不是浮在面板底部的独立区块。
+   */
+  private readonly footerDom: HTMLDivElement
   private readonly resizeObserver: ResizeObserver
   private readonly intersectionObserver: IntersectionObserver
 
@@ -36,6 +42,11 @@ export class Container {
 
     this.dom = document.createElement('div')
     applyRole(this.dom, PlayerRole.container)
+
+    this.footerDom = document.createElement('div')
+    applyRole(this.footerDom, PlayerRole.footer)
+    applyClassName(this.footerDom, [styles.footer])
+    this.dom.appendChild(this.footerDom)
 
     this.resizeObserver = new ResizeObserver(this.handleResize)
     this.intersectionObserver = new IntersectionObserver(this.handleIntersection)
@@ -111,7 +122,36 @@ export class Container {
   }
 
   clearChild() {
-    this.dom.replaceChildren()
+    // [vendor patch] footer 是常驻附注区，重建歌词行时不能被一并清掉
+    this.dom.replaceChildren(this.footerDom)
+  }
+
+  /**
+   * [vendor patch] 由 LayoutManager 调用，把附注区排到最后一行之后。
+   * transform / transition 与行元素同款，滚动时与歌词同步位移。
+   */
+  updateFooterStyle(top: number, duration: number, delay: number, easing: string) {
+    const style = this.footerDom.style
+    style.transition = `transform ${Math.max(0, duration)}ms ${easing} ${Math.max(0, delay)}ms`
+    style.transform = `translateY(${top}px)`
+    // 必须显式写 'visible'：样式表里 .footer 默认 visibility:hidden（首帧未定位时别糊在容器顶部），
+    // 置空只是删掉 inline 声明、会回落到那条 hidden，元素就永远看不见。
+    style.visibility = 'visible'
+  }
+
+  /** [vendor patch] 附注区无内容时收起（换到没有制作人信息的歌时复位） */
+  hideFooter() {
+    this.footerDom.style.visibility = 'hidden'
+  }
+
+  /** [vendor patch] 附注区实测高度（0 表示没有内容，此时无需参与布局） */
+  get footerHeight() {
+    return this.footerDom.offsetHeight
+  }
+
+  /** [vendor patch] 附注区宿主，交给业务侧填内容 */
+  get footer() {
+    return this.footerDom
   }
 
   destroy() {
