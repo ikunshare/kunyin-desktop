@@ -728,6 +728,16 @@ interface MeshState {
   alpha: number
 }
 
+/**
+ * 同时保留的网格状态上限（当前 + 一个正在淡出的旧状态）。
+ *
+ * 交叉淡入结束后的清理在 onRedraw 里靠 rAF 推进，而 setAlbum 是纯异步、不依赖 rAF。
+ * 窗口最小化或被完全遮挡时 Chromium 可能一帧都不产（backgroundThrottling 的实际行为
+ * 随平台与版本而异），那时每次切歌都往 meshStates 里塞一个 50 细分网格 + 一张纹理却
+ * 没人回收；等窗口再显示，一帧要画几十个网格并做同样多次 FBO 往返，渲染进程直接被压死。
+ */
+const MAX_MESH_STATES = 2
+
 export class MeshGradientRenderer extends BaseRenderer {
   private gl: RenderingContext
   private lastFrameTime = 0
@@ -1179,6 +1189,13 @@ export class MeshGradientRenderer extends BaseRenderer {
         mesh: newMesh,
         texture: albumTexture,
         alpha: 0
+      }
+      // 兜住上限，别指望 onRedraw 一定跑得到（见 MAX_MESH_STATES）
+      while (this.meshStates.length >= MAX_MESH_STATES) {
+        const stale = this.meshStates.shift()
+        if (!stale) break
+        stale.mesh.dispose()
+        stale.texture.dispose()
       }
       this.meshStates.push(newState)
     }

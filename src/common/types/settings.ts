@@ -94,6 +94,13 @@ export interface AppSettings {
     preferredQuality: QualityId
     /** 启动是否自动续播 */
     autoPlay: boolean
+    /**
+     * 音频缓存容量上限（字节），0 = 关闭。
+     *
+     * 完整听过的曲目按**解密后**的字节落盘（见 cache/audioCache），重听时连后端 getUrl
+     * 都不必发；超出上限按 LRU 淘汰最久未播的。比上限还大的单曲不缓存。
+     */
+    audioCacheBytes: number
   }
 
   /** 音质过滤（播放取流与下载共用） */
@@ -270,7 +277,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     volume: 1,
     playMode: 'listLoop',
     preferredQuality: 'flac',
-    autoPlay: false
+    autoPlay: false,
+    audioCacheBytes: 4 * 1024 ** 3
   },
   quality: {
     blockAi: true,
@@ -374,10 +382,14 @@ export interface CacheStats {
   urlCount: number
   /** 歌词缓存条目数 */
   lyricCount: number
+  /** 音频缓存字节数 */
+  audioBytes: number
+  /** 音频缓存曲目数 */
+  audioCount: number
 }
 
 /** 可单独清理的缓存类型 */
-export type CacheKind = 'resource' | 'url' | 'lyric'
+export type CacheKind = 'resource' | 'url' | 'lyric' | 'audio'
 
 /** 卡密激活状态（authst 校验结果，主/渲染共享） */
 export interface AuthState {

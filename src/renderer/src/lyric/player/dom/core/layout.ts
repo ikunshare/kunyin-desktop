@@ -385,6 +385,43 @@ export class LayoutManager {
     this.previousLineIndex = currentLineIndex
     this.previousActiveLineIndexes = player.currentIndex.slice()
     this.previousOffset = currentOffset
+
+    // [vendor patch] 歌词末尾的附注区（制作人信息）跟在最后一行之后一起滚动。
+    // 不纳入 lineManager：它不是唱词，不该参与激活判定、窗口化与逐字动画；
+    // 这里只按最后一行的排版结果给它一个 top，transition 取与末行同款，
+    // 滚动时不会与末行产生相对位移。
+    const footerHeight = component.container.footerHeight
+    if (footerHeight > 0) {
+      const lastIndex = elementCount - 1
+      const lastElement = elements[lastIndex]
+      const lastTop = topPositions[lastIndex] ?? 0
+      const lastHeight = lastElement ? this.lineManager.getHeight(lastElement) : 0
+      const footerTop = lastTop + lastHeight + currentSpace + currentOffset
+
+      let footerDuration = transitionConfig.duration
+      let footerDelay = 0
+      if (!isInScroll) {
+        const transition = this.calcTransition(
+          transitionConfig,
+          lastIndex - activeIndex,
+          lastIndex < activeIndex,
+          currentDirection
+        )
+        footerDuration = transition.duration
+        footerDelay = transition.delay
+      } else {
+        footerDuration = 200
+      }
+
+      component.container.updateFooterStyle(
+        footerTop,
+        footerDuration,
+        footerDelay,
+        config.current.scroll.animation.easing
+      )
+    } else {
+      component.container.hideFooter()
+    }
   }
 
   reset() {

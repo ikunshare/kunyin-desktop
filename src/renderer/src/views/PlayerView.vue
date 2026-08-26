@@ -241,6 +241,8 @@ onMounted(() => {
   unsubscribeFullscreen = api.window.onFullscreenChange(applyPlayerFullscreen)
   window.addEventListener('resize', syncPlayerFullscreen)
   lyricHost.value?.appendChild(lyric.element.value)
+  // 制作人信息作为歌词流的收尾展示（跟着最后一行滚动）
+  lyric.setCreditsVisible(true)
   applyAnnotationVisible()
   applyLyricFont()
   loadLyric()
@@ -441,6 +443,22 @@ watch(currentTime, (t) => {
   /* 网格渐变画布按音量留出 ~5% 透明度，给个深色底，
      免得主题背景图从缝隙里透出来；渲染失败时也退化成深色而非主题图 */
   background: #101013;
+  /*
+   * 无边框窗口只能靠 app-region 拖动。本页 Teleport 到 body 且铺满窗口，
+   * 会把 AppToolbar/AppAside 上唯一的拖拽区整块盖掉——那时窗口彻底拖不动。
+   * 因此让页面底板（背景/遮罩/封面/曲目信息这些无交互的地方）可拖，
+   * 再由下面一条规则把所有交互区域显式排除。
+   */
+  -webkit-app-region: drag;
+}
+/* app-region 会被后代继承，按容器排除即可覆盖其中所有按钮/滑块/菜单 */
+.close,
+.progress,
+.controls,
+.volume,
+.actions,
+.right {
+  -webkit-app-region: no-drag;
 }
 .scrim {
   position: absolute;
@@ -746,6 +764,32 @@ watch(currentTime, (t) => {
 }
 
 /*
+ * 制作人信息：由歌词引擎渲染在末行之后的 footer 里（跟着歌词一起滚动），
+ * 所以要用 :deep 穿透 scoped。与歌词同左对齐，字号小一档、压低不透明度，
+ * 读起来是「附注」而不是又一句唱词——Apple Music 的处理方式。
+ */
+.lyric-host :deep(.lyric-credits) {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 4px 0 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.lyric-host :deep(.lyric-credits-row) {
+  display: flex;
+  gap: 10px;
+}
+.lyric-host :deep(.lyric-credits-role) {
+  flex: none;
+  color: rgba(255, 255, 255, 0.34);
+}
+.lyric-host :deep(.lyric-credits-names) {
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/*
  * 播放页 Teleport 到 body，不在 #app 内；全屏圆角和尺度必须在这里单独处理。
  * 窗口模式继续使用上面的 240px 紧凑布局，全屏才按视口有限放大，避免低分辨率溢出。
  */
@@ -845,5 +889,10 @@ watch(currentTime, (t) => {
 .player-page.fullscreen .close :deep(.app-icon) {
   width: 28px;
   height: 28px;
+}
+
+.player-page.fullscreen .lyric-host :deep(.lyric-credits) {
+  gap: 6px;
+  font-size: 14px;
 }
 </style>

@@ -1,6 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** 酷狗歌词：搜索候选 → 下载 → KRC 解密 → 增强 LRC（移植自 KgProvider 歌词链） */
-import OpenCC from 'opencc-js'
+// 只用「繁 → 简」这一个方向，因此走 t2cn 子入口而不是主入口：
+// 主入口 dist/umd/full.js 带着全量双向词典（约 1.1M，整包 5.9M），
+// t2cn 只有 0.1M——差的那几 MB 会原样进 app.asar（见 electron-builder.yml 的排除规则）。
+import OpenCC from 'opencc-js/t2cn'
 import { EMPTY_LYRIC, type KgLyricCandidate, type KugouMusicItem, type Lyric } from '@common'
 import { requestJson } from '../../net/request'
 import { decryptKrc, parseKrc } from '../../crypto/lyric'

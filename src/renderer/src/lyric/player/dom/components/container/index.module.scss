@@ -22,3 +22,16 @@
     );
   }
 }
+
+// [vendor patch] 歌词末尾的附注区（制作人信息）。
+// 与行元素同样是 absolute + transform 定位，由 LayoutManager 排在最后一行之后，
+// 因此能与歌词一起平滑滚动。transform / transition 由 JS 逐帧写入 inline style。
+.footer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: build-root-variable('container-width');
+  box-sizing: border-box;
+  // 未测量出位置前不要停在容器顶部糊住第一行
+  visibility: hidden;
+}

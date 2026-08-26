@@ -32,6 +32,10 @@
 
 | 位置                                                                    | 改动                                               | 原因                                                                                 |
 | ----------------------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `player/dom/constants/role.ts`                                          | 新增 `PlayerRole.footer`                           | 歌词末尾附注区（制作人信息）需要一个角色标识                                         |
+| `player/dom/components/container/index.ts` + `index.module.scss`        | 新增常驻 `footer` 子元素：`clearChild` 改为 `replaceChildren(footerDom)` 保留它，并加 `updateFooterStyle` / `hideFooter` / `footerHeight` / `footer` | 制作人信息要作为歌词流的收尾**跟着最后一行一起滚动**（Apple Music 的排法）。挂在歌词面板外的独立区块不会随歌词滚动；而行元素由引擎窗口化管理（远处的行会被 detach），从外部同步位置不可靠。注意 `.footer` 样式表里默认 `visibility:hidden`（首帧未定位时别糊在容器顶部），故 `updateFooterStyle` 必须显式写 `visible` —— 置空只是删掉 inline 声明、会回落到那条 hidden |
+| `player/dom/core/layout.ts`                                             | `update()` 末尾按末行排版结果定位 footer（`lastTop + lastHeight + gap + offset`），transition 取与末行同款 | 同上。不纳入 `lineManager`：它不是唱词，不该参与激活判定、窗口化与逐字动画           |
+| `player/dom/core/index.ts`                                              | 新增 `footerElement` getter 与 `refreshFooter()`    | 业务侧填充附注内容，并在内容变化后按新高度重排                                       |
 | `player/dom/.../syllable/word.ts`                                       | `forceOwnWipe` 由硬编码 `true` 改读配置            | 恒为 true 时逐字音译永远自走时钟，与主词擦除不同步（「主词播主词的、音译播音译的」） |
 | `player/dom/config/.../syllable/annotation/index.ts` + `config/root.ts` | 新增 `forceOwnWipe` 配置项，默认 `false`           | 同上，给出开关                                                                       |
 | `player/dom/.../syllable/index.module.scss`                             | `.annotation-row` 的 `width: 100%` → `max-content` | 钉死在单字宽会让拼音横向溢出到邻字                                                   |

@@ -188,22 +188,31 @@ export type PlaylistSortField = 'title' | 'artist' | 'album' | 'duration' | 'sou
 /** 歌单内排序方向；random 为随机打乱 */
 export type PlaylistSortOrder = 'asc' | 'desc' | 'random'
 
-/** 桌面歌词状态（主窗口 → 歌词窗口，经主进程转发） */
+/**
+ * 桌面歌词状态（主窗口 → 歌词窗口，经主进程转发）。
+ *
+ * ⚠ 增量帧：歌词全文按曲目才变，进度/频谱却要 80ms 推一次——全量重发等于每秒把整份
+ * QRC 结构化克隆二十几遍（主窗口→主进程→歌词窗各一次）。因此内容字段只在曲目/歌词
+ * 变化的那一帧携带，其余帧省略。主进程按帧合并出完整快照，新歌词窗打开时回灌该快照；
+ * 歌词窗则以「本帧是否携带 lyric」判断要不要重建歌词。
+ */
 export interface DesktopLyricState {
-  /** 是否有歌词（无则显示占位/隐藏） */
-  hasLyric: boolean
-  /** 主歌词（增强 LRC 或行级 LRC），歌词窗自行用 kit 解析 */
-  lyric: string
-  translate: string
-  roman: string
   /** 当前播放时间（毫秒） */
   currentTime: number
   playing: boolean
   /** Web Audio AnalyserNode 采样的实时频谱，值域 0..1 */
   spectrum: number[]
-  /** 当前曲目标题（无歌词时展示） */
-  title: string
-  /** 供歌词净化识别首行「歌名 - 歌手」元信息 */
+  /** 是否有歌词（无则显示占位/隐藏）。仅内容帧携带。 */
+  hasLyric?: boolean
+  /** 主歌词（增强 LRC 或行级 LRC），歌词窗自行用 kit 解析。仅内容帧携带。 */
+  lyric?: string
+  /** 仅内容帧携带 */
+  translate?: string
+  /** 仅内容帧携带 */
+  roman?: string
+  /** 当前曲目标题（无歌词时展示）。仅内容帧携带。 */
+  title?: string
+  /** 供歌词净化识别首行「歌名 - 歌手」元信息。仅内容帧携带。 */
   musicName?: string
   musicSinger?: string[]
 }

@@ -4,11 +4,13 @@ import { getSettings, updateSettings } from '../../store/settings'
 import { applyProxy, getProxyStatus } from '../../net/proxy'
 import { appEvent } from '../../core/events'
 import {
+  clearAudioCacheAll,
   clearLyricCacheAll,
   clearResourceCache,
   clearUrlCache,
   getCacheStats
 } from '../../cache/manager'
+import { applyAudioCacheLimit } from '../../cache/audioCache'
 
 export function registerSettingsHandlers(): void {
   handle(IpcChannels.SETTINGS_GET, () => getSettings())
@@ -19,6 +21,8 @@ export function registerSettingsHandlers(): void {
     appEvent.emit('settings-updated', next)
     // 代理设置变更即时生效
     if (patch.network?.proxy) void applyProxy()
+    // 上限调小/关闭后立刻收敛，别等下一次落盘时才淘汰
+    if (patch.player?.audioCacheBytes !== undefined) applyAudioCacheLimit()
     return next
   })
   handle(IpcChannels.SETTINGS_PROXY_STATUS, () => getProxyStatus())
@@ -29,6 +33,7 @@ export function registerSettingsHandlers(): void {
     if (kind === 'resource') await clearResourceCache()
     else if (kind === 'url') clearUrlCache()
     else if (kind === 'lyric') clearLyricCacheAll()
+    else if (kind === 'audio') await clearAudioCacheAll()
     return getCacheStats()
   })
 }

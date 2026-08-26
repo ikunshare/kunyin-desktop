@@ -10,19 +10,34 @@ import {
 } from './attachWordRomans'
 
 /**
- * 音源塞进歌词轨的元信息行（非唱词）。
- * 正文置空但保留时间标签，避免打乱主/译/音译 1:1 行对齐。
+ * 音源塞进歌词轨的噪音行（AI 音译声明等）——不是制作人信息，kit 的 extractCreator 不认，
+ * 必须自行剔除。正文置空但保留时间标签，避免打乱主/译/音译 1:1 行对齐。
  * 匹配前先剥掉逐字 <...> 标签，否则增强 LRC 会漏过滤。
  */
-const META_CONTENT_RE =
-  /音译标注|音譯標註|由\s*AI\s*工具|AI\s*工具生产|AI\s*工具生產|AI\s*生成|以下.+AI|作[词詞曲]\s*[:：]|作曲\s*[:：]|编曲\s*[:：]|編曲\s*[:：]|填[词詞]\s*[:：]|谱曲\s*[:：]|譜曲\s*[:：]|演唱\s*[:：]|制作人?\s*[:：]|製作人?\s*[:：]|监制\s*[:：]|監制\s*[:：]|词曲\s*[:：]|詞曲\s*[:：]|lyricist\s*[:：]|composer\s*[:：]|arranger\s*[:：]|additional\s+vocal[s]?\s+by\s*[:：]|repertoire\s+owner\s*[:：]/i
+const NOISE_CONTENT_RE =
+  /音译标注|音譯標註|由\s*AI\s*工具|AI\s*工具生产|AI\s*工具生產|AI\s*生成|以下.+AI/i
+
+/**
+ * 制作人/职务行（作词、作曲、混音师……）。
+ *
+ * 主轨**不再**在这里剔除：交给 kit 的 pure.extractCreator 结构化提取到 meta.credits
+ * （replace 默认 true，会把行从正文移除），既能在歌词末尾展示这些信息，
+ * 又比这里手写的正则覆盖得广（kit 内置数百条职务规则）。
+ * 副轨（翻译/音译）不走 extractCreator，仍在此直接剔除——制作人信息糊在注解位上没意义。
+ */
+const CREDIT_CONTENT_RE =
+  /作[词詞曲]\s*[:：]|作曲\s*[:：]|编曲\s*[:：]|編曲\s*[:：]|填[词詞]\s*[:：]|谱曲\s*[:：]|譜曲\s*[:：]|演唱\s*[:：]|制作人?\s*[:：]|製作人?\s*[:：]|监制\s*[:：]|監制\s*[:：]|词曲\s*[:：]|詞曲\s*[:：]|lyricist\s*[:：]|composer\s*[:：]|arranger\s*[:：]|additional\s+vocal[s]?\s+by\s*[:：]|repertoire\s+owner\s*[:：]/i
 
 /** 中文职务后直接拼英文职务是 QQ/酷狗歌词常见格式，例如「和声Backing Vocals：…」。 */
-const META_CREDIT_PREFIX_RE =
+const CREDIT_PREFIX_RE =
   /^(?:作[词詞曲]|曲|词|詞|编曲|編曲|填[词詞]|谱曲|譜曲|演唱|制作人?|製作人?|监制|監制|词曲|詞曲|吉他|混音师|混音師|母带后期混音师|母帶後期混音師|和声编写|和聲編寫|和声|和聲|配唱制作人|配唱製作人|录音师|錄音師|人声编辑|人聲編輯|视觉设计|視覺設計|艺人统筹|藝人統籌|推广策划|推廣策劃|特别合作|特別合作|混音棚|录音棚|錄音棚|企划营销|企劃營銷|制作公司|製作公司|蒙古长调|蒙古長調|OP|SP)(?:\s*[A-Za-z][A-Za-z0-9 .&/'’()_-]*)?\s*[:：]/i
 
-function isMetaContent(text: string): boolean {
-  return META_CONTENT_RE.test(text) || META_CREDIT_PREFIX_RE.test(text)
+function isNoiseContent(text: string): boolean {
+  return NOISE_CONTENT_RE.test(text)
+}
+
+function isCreditContent(text: string): boolean {
+  return CREDIT_CONTENT_RE.test(text) || CREDIT_PREFIX_RE.test(text)
 }
 
 function plainLyricBody(text: string): string {
@@ -32,21 +47,28 @@ function plainLyricBody(text: string): string {
     .trim()
 }
 
-function stripMetaLines(lrc: string): string {
+/**
+ * 剔除元信息行。
+ * @param dropCredits 是否连制作人行一并剔除。副轨传 true；主轨传 false，
+ *   把制作人行留给 kit 的 extractCreator 提取成 meta.credits。
+ */
+function stripMetaLines(lrc: string, dropCredits: boolean): string {
   if (!lrc?.trim()) return lrc || ''
+  const shouldDrop = (text: string): boolean =>
+    isNoiseContent(text) || (dropCredits && isCreditContent(text))
   return lrc
     .split(/\r?\n/)
     .map((line) => {
       const m = line.match(/^(\[[^\]]+\])(.*)$/)
       if (!m) {
         const content = plainLyricBody(line)
-        if (content && isMetaContent(content)) return ''
+        if (content && shouldDrop(content)) return ''
         return line
       }
       const [, tag, content] = m
       const text = plainLyricBody(content)
       // 保留时间标签，正文置空，避免 realignByIndex 行数错位
-      if (text && isMetaContent(text)) return tag
+      if (text && shouldDrop(text)) return tag
       return line
     })
     .join('\n')
@@ -82,11 +104,67 @@ function stripPlaceholderLines(text: string): string {
     .join('\n')
 }
 
-/** 翻译/音译轨统一清洗：剥元信息行 → 置空占位行 → 整轨实质为空则丢弃 */
+/** 翻译/音译轨统一清洗：剥元信息行（含制作人行）→ 置空占位行 → 整轨实质为空则丢弃 */
 function cleanAnnotationTrack(text: string): string {
   if (!text?.trim()) return ''
-  const cleaned = stripPlaceholderLines(stripMetaLines(text))
+  const cleaned = stripPlaceholderLines(stripMetaLines(text, true))
   return isAnnotationEmpty(cleaned) ? '' : cleaned
+}
+
+/** 歌词末尾展示的制作人信息（由 kit 的 extractCreator 从歌词行里提取） */
+export interface LyricCredit {
+  role: string
+  names: string[]
+}
+
+/**
+ * 把 credits 渲染进引擎的歌词末尾附注区。
+ *
+ * 挂在引擎 footer 里（而非歌词面板底部的独立区块），才能跟着最后一行一起滚动——
+ * Apple Music 的 credits 就是歌词流的收尾部分，不是常驻页脚。
+ * 样式走宿主提供的 class（见 PlayerView 的 :deep(.lyric-credits*)）。
+ */
+function renderCredits(host: HTMLElement, list: readonly LyricCredit[]): void {
+  if (!list.length) {
+    host.replaceChildren()
+    return
+  }
+  const frag = document.createDocumentFragment()
+  for (const item of list) {
+    const row = document.createElement('div')
+    row.className = 'lyric-credits-row'
+    const role = document.createElement('span')
+    role.className = 'lyric-credits-role'
+    role.textContent = item.role
+    const names = document.createElement('span')
+    names.className = 'lyric-credits-names'
+    names.textContent = item.names.join(' · ')
+    row.append(role, names)
+    frag.appendChild(row)
+  }
+  const box = document.createElement('div')
+  box.className = 'lyric-credits'
+  box.appendChild(frag)
+  host.replaceChildren(box)
+}
+
+/**
+ * 把 kit 的 meta.credits 收敛成 UI 直接可用的形状：
+ * 同一职务的多行合并、去重、丢掉空值——音源常把「作词」分成好几行给出。
+ */
+function toCredits(raw: readonly { role: string; names: { content: string }[] }[]): LyricCredit[] {
+  const merged = new Map<string, string[]>()
+  for (const item of raw) {
+    const role = item.role?.trim()
+    if (!role) continue
+    const names = merged.get(role) ?? []
+    for (const n of item.names) {
+      const name = n?.content?.trim()
+      if (name && !names.includes(name)) names.push(name)
+    }
+    if (names.length) merged.set(role, names)
+  }
+  return [...merged].map(([role, names]) => ({ role, names }))
 }
 
 /**
@@ -124,6 +202,14 @@ export function useLyricPlayer(): {
   relayout: () => void
   /** 歌词引擎当前是否在推进播放（与宿主音频播放状态解耦；桌面歌词据此判断是否需重新 play） */
   playing: ShallowRef<boolean>
+  /**
+   * 当前歌词里的制作人信息（作词/作曲/混音…）。
+   * 由 kit 的 pure.extractCreator 从歌词行提取，这些行本身不会出现在唱词里；
+   * 开启 setCreditsVisible 后会作为歌词流的收尾跟着最后一行一起滚动。
+   */
+  credits: ShallowRef<LyricCredit[]>
+  /** 是否在歌词末尾展示制作人信息（默认关闭；桌面歌词等紧凑宿主保持关闭） */
+  setCreditsVisible: (visible: boolean) => void
 } {
   const base = new BaseLyricPlayer()
   const dom = new DomLyricPlayer(base)
@@ -310,6 +396,28 @@ export function useLyricPlayer(): {
    * playing 可靠：歌词异步拉取期间的中间态（hasLyric=false 但 playing=true）不会误判。
    */
   const playing = shallowRef(false)
+  const credits = shallowRef<LyricCredit[]>([])
+  /** 是否把 credits 渲染到歌词末尾（桌面歌词等紧凑宿主关掉） */
+  let creditsEnabled = false
+
+  function applyCredits(): void {
+    if (!creditsEnabled) return
+    renderCredits(dom.footerElement, credits.value)
+    dom.refreshFooter()
+  }
+
+  /** 开启后，制作人信息会作为歌词流的收尾跟着最后一行一起滚动 */
+  function setCreditsVisible(visible: boolean): void {
+    if (creditsEnabled === visible) return
+    creditsEnabled = visible
+    if (visible) {
+      renderCredits(dom.footerElement, credits.value)
+    } else {
+      renderCredits(dom.footerElement, [])
+    }
+    dom.refreshFooter()
+  }
+
   const onEnginePlay = (): void => {
     playing.value = true
   }
@@ -320,6 +428,8 @@ export function useLyricPlayer(): {
   base.event.add('pause', onEnginePause)
 
   function clear(): void {
+    credits.value = []
+    applyCredits()
     base.updateLyric(Lyric.Parsed.makeParsedInfo())
   }
 
@@ -351,8 +461,8 @@ export function useLyricPlayer(): {
       return
     }
     try {
-      // 去掉 AI 音译声明等元信息行，避免当成唱词/翻译糊在标题上
-      const cleanedOriginal = stripMetaLines(original)
+      // 去掉 AI 音译声明等噪音行；制作人行留着，交给下面的 pure.extractCreator 提取
+      const cleanedOriginal = stripMetaLines(original, false)
       // 副轨清洗：元信息行 + `//` 占位行置空；「实质为空」的轨整体丢掉，
       // 避免 kit 每行留出注解位撑高行。
       const cleanedTranslate = cleanAnnotationTrack(translate)
@@ -389,6 +499,10 @@ export function useLyricPlayer(): {
       pipeline.language.calculatePercent()
 
       const result = pipeline.final().result
+      // extractCreator 已把制作人行从 lines 移出并结构化到 meta.credits，
+      // 作为歌词流的收尾渲染到引擎 footer（跟着最后一行滚动）
+      credits.value = toCredits(result.meta?.credits ?? [])
+      applyCredits()
       // 绝对时间标签的词 end==start，补全时长供卡拉 OK / 重音；
       // 传原文以取行末时间标签（kit 的行 time.end 是末词 start，补不了末字）
       reconstructWordDurations(result, cleanedOriginal)
@@ -438,6 +552,8 @@ export function useLyricPlayer(): {
     setPresentation,
     setAnnotationVisible,
     relayout,
-    playing
+    playing,
+    credits,
+    setCreditsVisible
   }
 }

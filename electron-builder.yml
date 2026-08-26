@@ -8,28 +8,56 @@ electronLanguages:
   - en-US
 afterPack: scripts/afterPack.js
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
+  # ⚠ 这些排除规则必须全部留在顶层，且 win/mac/linux 段里绝不能再出现 files 字段：
+  # 一旦某平台定义了 files，electron-builder 组装应用主体的那套匹配规则
+  # （firstOrDefaultFilePatterns）就只认平台级的，顶层这一整份会被静默忽略。
+  # 1.0.5 就是这么把 .git(149M)、src、dist 一起打进 app.asar 的（173M）。
+  # 平台相关的原生模块筛选改在 scripts/afterPack.js 里做。
+  #
+  # 另：这里只写排除模式。写「包含」模式（如 out/**）会污染收录生产依赖的那套规则，
+  # 导致 node_modules 全量打包。
+  #
+  # glob 的 * 不跨 '/'：'!src/*' 只排除 src 的直接子项，src/main/index.ts 照样进包。
+  # 因此目录一律用 '{,/**/*}'（目录本身 + 全部后代）。
+  #
+  # dist 必须显式排除：它装着上一次构建的安装包与 win-unpacked，
+  # 漏掉就会把几百 MB 旧产物套娃打进新包（outDir 只在恰好等于 dist 时才自动排除）。
+  - '!dist{,/**/*}'
+  - '!dist-*{,/**/*}'
+  - '!.git{,/**/*}'
+  - '!src{,/**/*}'
+  - '!docs{,/**/*}'
+  - '!scripts{,/**/*}'
+  - '!scripts-verify{,/**/*}'
+  - '!tools{,/**/*}'
+  - '!**/.vscode{,/**/*}'
+  - '!*.tsbuildinfo'
+  - '!tsconfig*.json'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
-  - '!dist/**'
   # better-sqlite3 瘦身：源码与本地 node-gyp 产物运行时都不加载（只用 prebuilds/ 下的 N-API 二进制）
   - '!node_modules/better-sqlite3/deps/**'
   - '!node_modules/better-sqlite3/src/**'
   - '!node_modules/better-sqlite3/build/**'
   # musl 版用不上：Electron 官方发行版依赖 glibc
   - '!node_modules/better-sqlite3/prebuilds/linuxmusl-*.node'
+  # opencc-js 瘦身（5.9M → 0.2M）：主进程是 CJS，只 require dist/umd 下的那一个入口，
+  # 且只做繁→简（见 providers/kg/lyric.ts 的 opencc-js/t2cn）。
+  # esm/esm-lib 与 full/cn2t 的全量词典都用不上。
+  - '!node_modules/opencc-js/dist/esm{,/**/*}'
+  - '!node_modules/opencc-js/dist/esm-lib{,/**/*}'
+  - '!node_modules/opencc-js/dist/umd/{full,cn2t}.js'
+  # 图标：win/mac/linux 的 icon 配置是构建时从项目目录读的，不必进包。
+  # 运行时用得上的只有托盘与缩略图工具栏那几张（见 out/main 里的 __dirname 引用）：
+  # icon.ico / icon.png / 32x32.png / thumb-*.png，其余尺寸与 macOS 的 .icns 都是死重量。
+  - '!resources/icons/icon.icns'
+  - '!resources/icons/{16x16,24x24,48x48,64x64,128x128,256x256,512x512,1024x1024}.png'
 asarUnpack:
   - resources/**
 win:
   executableName: kunyin-desktop
   icon: resources/icons/icon.ico
-  # 各平台只留自己的预编译二进制；.node 由 electron-builder 自动 unpack 到 app.asar.unpacked。
-  # 保留同平台 arm64 版本，换架构构建时不会重现「找不到原生模块」（issue #1）。
-  files:
-    - '!node_modules/better-sqlite3/prebuilds/{darwin,linux}-*.node'
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   # 安装向导的用户协议页（内容为 MIT License，见 build/license.txt）
@@ -55,8 +83,6 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
   icon: resources/icons/icon.icns
-  files:
-    - '!node_modules/better-sqlite3/prebuilds/{linux,win32}-*.node'
 dmg:
   artifactName: ${name}-${version}.${ext}
 linux:
@@ -67,8 +93,6 @@ linux:
   maintainer: ikunshare
   category: AudioVideo
   icon: resources/icons
-  files:
-    - '!node_modules/better-sqlite3/prebuilds/{darwin,win32}-*.node'
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false

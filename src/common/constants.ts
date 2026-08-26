@@ -44,15 +44,21 @@ export const BACKEND_PLATFORM: Record<MusicSource, string> = {
   local: ''
 }
 
-/** 音质档位顺序（从低到高） */
+/**
+ * 音质档位顺序（从低到高）——全端唯一的档位排序真源。
+ * 徽标取值、下载降级/升档、播放取流顺序、各处音质列表都由它派生，改这里即全局生效。
+ *
+ * 高低次序：臻品母带 > 全景声 2.0 > 全景声 > HiRes > FLAC > 320K > 128K。
+ * 母带排在全景声之上——全景声是由立体声上混而来的特殊版本，母带才是保真度最高的一档。
+ */
 export const QUALITY_IDS: readonly QualityId[] = [
   '128k',
   '320k',
   'flac',
   'hires',
-  'master',
   'atmos',
-  'atmos_plus'
+  'atmos_plus',
+  'master'
 ] as const
 
 /** 音质显示名（全端统一口径；flac24bit 在解码层归一化到 hires） */
@@ -71,9 +77,9 @@ export const QUALITY_NAMES: Record<QualityId, string> = {
  * 一并列入让用户自行勾选（settings.quality.aiQualities 的可选项，默认只屏蔽两档全景声）。
  */
 export const AI_QUALITY_CANDIDATES: readonly QualityId[] = [
-  'master',
   'atmos',
-  'atmos_plus'
+  'atmos_plus',
+  'master'
 ] as const
 
 /** 当前设置下需要跳过的音质档位（播放取流、下载解析、音质选择列表共用）。 */

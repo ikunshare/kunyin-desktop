@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useApi } from '../../composables/useApi'
+import { useSettingsStore } from '../../stores/settings'
 import type { AccountProvider, AccountStatus, AuthState, CacheKind, CacheStats } from '@common'
 import AccountLoginDialog from '../../components/AccountLoginDialog.vue'
 import BaseBtn from '../../components/BaseBtn.vue'
+import BaseSelect from '../../components/BaseSelect.vue'
 
 // 其他设置：平台账号登录管理 + 卡密激活
 const api = useApi()
@@ -82,6 +85,28 @@ async function clearCache(kind: CacheKind): Promise<void> {
     clearing.value = null
   }
 }
+
+// —— 音频缓存 ——
+const settingsStore = useSettingsStore()
+const { settings } = storeToRefs(settingsStore)
+
+const GIB = 1024 ** 3
+const audioLimitList = [
+  { id: 0, label: '关闭（不缓存音频）' },
+  { id: 1 * GIB, label: '1 GB' },
+  { id: 2 * GIB, label: '2 GB' },
+  { id: 4 * GIB, label: '4 GB' },
+  { id: 8 * GIB, label: '8 GB' },
+  { id: 16 * GIB, label: '16 GB' },
+  { id: 32 * GIB, label: '32 GB' }
+]
+const audioLimit = computed(() => settings.value.player.audioCacheBytes)
+
+async function setAudioLimit(value: string): Promise<void> {
+  await settingsStore.update({ player: { audioCacheBytes: Number(value) } })
+  // 调小上限会当即淘汰，用量得跟着刷新
+  cache.value = await api.cache.stats().catch(() => cache.value)
+}
 </script>
 
 <template>
@@ -141,6 +166,26 @@ async function clearCache(kind: CacheKind): Promise<void> {
       </div>
     </div>
 
+    <h3 id="other_cache_audio" title="完整听过的歌会存到本地，重听时不再联网下载">音频缓存管理</h3>
+    <div>
+      <p class="p">
+        已缓存：{{ cache ? `${fmtSize(cache.audioBytes)}（${cache.audioCount} 首）` : '统计中…' }}
+      </p>
+      <div class="p gap-top cache-row">
+        <span class="cache-label">容量上限</span>
+        <BaseSelect
+          :model-value="audioLimit"
+          :list="audioLimitList"
+          @update:model-value="setAudioLimit"
+        />
+      </div>
+      <div class="p gap-top">
+        <BaseBtn min :disabled="clearing === 'audio'" @click="clearCache('audio')">
+          {{ clearing === 'audio' ? '清理中…' : '清理音频缓存' }}
+        </BaseBtn>
+      </div>
+    </div>
+
     <h3 id="other_cache_other">其他缓存管理</h3>
     <div>
       <p class="p">歌曲 URL 数量：{{ cache ? cache.urlCount : '—' }}</p>
@@ -194,6 +239,15 @@ async function clearCache(kind: CacheKind): Promise<void> {
 .auth-form {
   display: flex;
   gap: 8px;
+}
+.cache-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cache-label {
+  font-size: 13px;
+  color: var(--color-font);
 }
 .text {
   flex: 1;
