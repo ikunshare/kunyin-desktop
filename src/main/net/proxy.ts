@@ -6,7 +6,7 @@
  * （封面 502、取流 502、<audio> ERR_PROXY_CONNECTION_FAILED），而 Node 全局 fetch 不读
  * session 代理，于是「接口通、播放全挂」——极难排查。故应用前先 TCP 探活，不可达就回落直连。
  */
-import { session } from 'electron'
+import { session, type Session } from 'electron'
 import { connect } from 'node:net'
 import type { ProxyStatus } from '@common'
 import { getSettings } from '../store/settings'
@@ -63,4 +63,17 @@ export async function applyProxy(): Promise<void> {
 
 export function getProxyStatus(): ProxyStatus {
   return status
+}
+
+/**
+ * 让另一个 session（如网页登录窗的独立 partition）跟随 applyProxy 已做出的决定：
+ * 代理在用就用同一条规则，否则直连。不再探活——结论以主 session 的为准。
+ */
+export async function mirrorProxy(ses: Session): Promise<void> {
+  const p = getSettings().network.proxy
+  if (status.active && p.host && p.port > 0) {
+    await ses.setProxy({ proxyRules: `http://${p.host}:${p.port}`, proxyBypassRules: '<local>' })
+  } else {
+    await ses.setProxy({ mode: 'direct' })
+  }
 }

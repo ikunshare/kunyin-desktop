@@ -411,7 +411,11 @@ async function fetchUpstream(
           error: new Response(null, { status: e instanceof HeaderTimeoutError ? 504 : 502 })
         }
       }
-      log.warn('上游取流失败，换路重试', { error: msg, inFlight: inFlightUpstreams, host: hostOf(attempts[i + 1]) })
+      log.warn('上游取流失败，换路重试', {
+        error: msg,
+        inFlight: inFlightUpstreams,
+        host: hostOf(attempts[i + 1])
+      })
     }
   }
   // 循环必然在内部返回，这里只为类型完备

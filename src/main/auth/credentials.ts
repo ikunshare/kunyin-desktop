@@ -8,6 +8,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { getProvider } from '../providers'
 import type { ProviderCredentials } from '../providers/base'
 import { appDataPath } from '../core/paths'
+import { createLogger } from '../core/logger'
+
+const log = createLogger('login')
 
 export type CredProviderKey = 'qq' | 'wy' | 'kg' | 'kw'
 const KEYS: CredProviderKey[] = ['qq', 'wy', 'kg', 'kw']
@@ -105,20 +108,30 @@ export function getCredential(key: CredProviderKey): ProviderCredentials | null 
 }
 
 /**
- * 启动后静默续期各平台登录态（对应 Android SoundApplication 的启动刷新）。
- * 酷狗 token 会过期，续期失败不清凭据——可能只是暂时没网。
+ * 启动后静默续期各平台登录态（对应 Android SoundApplication 的启动刷新：qq/kg 各延迟 5s）。
+ * 续期失败不清凭据——可能只是暂时没网。
+ *
+ * 桌面端与手机不同，一开就是几天，只在启动时刷一次远远不够：QQ musickey 会过期，
+ * 过期后所有带登录态的接口静默退化成未登录。故首刷之后每 6 小时再刷一轮。
  */
-export function scheduleLoginRefresh(delayMs = 5000): void {
-  setTimeout(() => {
+export function scheduleLoginRefresh(delayMs = 5000, intervalMs = 6 * 60 * 60 * 1000): void {
+  const run = (): void => {
     for (const key of loggedInKeys()) {
       void getProvider(key)
         ?.refreshLogin()
         .then((refreshed) => {
-          if (refreshed) saveCredential(key, refreshed)
+          if (!refreshed) {
+            log.info('登录态续期无更新', { provider: key })
+            return
+          }
+          saveCredential(key, refreshed)
+          log.info('登录态已续期', { provider: key })
         })
-        .catch(() => {})
+        .catch((e: unknown) => log.warn('登录态续期失败', { provider: key, error: e }))
     }
-  }, delayMs).unref()
+  }
+  setTimeout(run, delayMs).unref()
+  setInterval(run, intervalMs).unref()
 }
 
 /** 已登录的平台 key 列表。 */

@@ -24,8 +24,9 @@ import {
   type QQMusicItem,
   type UserInfo
 } from '@common'
-import { BaseProvider } from '../base'
+import { BaseProvider, type ProviderCredentials } from '../base'
 import { requestJson } from '../../net/request'
+import { qqRefreshCredential, type QQCredentials } from '../../auth/login/qq'
 import { num, parseTrackInfo, stripEm } from './item'
 import { qqComm } from './comm'
 import { zzcSign } from './sign'
@@ -453,6 +454,21 @@ export class QqProvider extends BaseProvider {
     const base = json?.req?.data?.Info?.BaseInfo
     if (!base?.Name) return null
     return { source: 'qq', uid: base.EncryptedUin ?? '', nickname: base.Name, avatar: base.Avatar }
+  }
+
+  /**
+   * 启动时静默续期登录态（对应 QQProvider.refreshLogin → MobileQRLogin.refreshCredential）。
+   * 成功返回换新后的凭据（musickey 会变），由 credentials.ts 落盘；失败返回 null、沿用旧凭据。
+   */
+  async refreshLogin(): Promise<ProviderCredentials | null> {
+    const creds = this.credentials as unknown as Partial<QQCredentials> | null
+    if (!creds?.authst || !creds?.uin) return null
+    const refreshed = await qqRefreshCredential(creds as QQCredentials)
+    // code=0 却没给 musickey 的畸形响应不能覆盖掉还能用的旧凭据
+    if (!refreshed?.authst) return null
+    const next = { ...refreshed } as unknown as ProviderCredentials
+    this.credentials = next
+    return next
   }
 
   /** 登录后拉「我的歌单」：自建 + 收藏（移植 QQProvider.getUserPlaylist，去掉推荐位装饰）。 */

@@ -48,10 +48,18 @@ export async function fetchMediaUrl(
       quality: qualityId,
       authst
     }
-  }).catch((error) => { log.error('取链请求失败', error, { source: item.type, qualityId }); return null })
+  }).catch((error) => {
+    log.error('取链请求失败', error, { source: item.type, qualityId })
+    return null
+  })
 
   if (!resp || resp.code !== 200 || !resp.url) {
-    log.warn('取链未成功', { source: item.type, qualityId, status: resp?.code, reason: resp?.message })
+    log.warn('取链未成功', {
+      source: item.type,
+      qualityId,
+      status: resp?.code,
+      reason: resp?.message
+    })
     return {
       source: item.type,
       playUrl: '',

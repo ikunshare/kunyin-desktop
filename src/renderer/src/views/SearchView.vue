@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { useSearchStore, supportedSearchTypes, SEARCH_TYPES } from '../stores/search'
 import { usePlayerStore } from '../stores/player'
 import { useArtistStore } from '../stores/artist'
+import { useSongSelection } from '../composables/useSongSelection'
 import {
   PLATFORMS,
   PLATFORM_NAMES,
@@ -17,6 +18,8 @@ import BaseBtn from '../components/BaseBtn.vue'
 import SongRow from '../components/SongRow.vue'
 import AppTabs from '../components/AppTabs.vue'
 import AppIcon from '../components/AppIcon.vue'
+import ListAddDialog from '../components/ListAddDialog.vue'
+import QualityDialog from '../components/QualityDialog.vue'
 import { coverUrl } from '../utils/cover'
 
 defineOptions({ name: 'SearchView' })
@@ -78,6 +81,49 @@ const showBlank = computed(
     !artistResults.value.length
 )
 
+// ============ 单曲结果多选批量操作（与「我的列表」/ 排行榜一致） ============
+const { selectedCount, selectedItems, isSelected, clearSelection, onRowSelect } =
+  useSongSelection(results)
+/** 批量「播放」：所选歌曲组成临时队列，首曲记入试听列表（同专辑/歌手页点单曲） */
+function playSelected(): void {
+  const items = selectedItems.value
+  if (!items.length) return
+  player.playItem(items[0], items, {
+    trackTrial: true,
+    source: { kind: 'search', name: `搜索「${keyword.value}」` }
+  })
+}
+const addDialog = ref(false)
+const qualityDialog = ref(false)
+function onAdded(): void {
+  showToast(`已添加 ${selectedItems.value.length} 首到列表`)
+  clearSelection()
+}
+function onDownloadAdded(): void {
+  showToast(`已加入下载 ${selectedItems.value.length} 首`)
+  clearSelection()
+}
+// 新一轮检索（loading 只在重置搜索时为真）/ 结果被清空 / 切换类型：已选失效
+watch(loading, (v) => {
+  if (v) clearSelection()
+})
+watch(
+  () => results.value.length,
+  (n) => {
+    if (!n) clearSelection()
+  }
+)
+watch(searchType, clearSelection)
+
+// ============ 轻提示 ============
+const toast = ref('')
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+function showToast(msg: string): void {
+  toast.value = msg
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => (toast.value = ''), 3600)
+}
+
 onMounted(() => {
   if (!results.value.length && !keyword.value) void searchStore.loadHot()
 })
@@ -113,7 +159,9 @@ watch(source, () => {
             :item="item"
             :index="i"
             :active="isActive(item)"
+            :selected="isSelected(item)"
             @play="player.playInTrial(item)"
+            @select="onRowSelect($event, i)"
           />
         </div>
         <div v-else-if="keyword" class="empty">未找到「{{ keyword }}」相关歌曲</div>
@@ -223,6 +271,43 @@ watch(source, () => {
         </dl>
       </div>
     </div>
+
+    <!-- 批量操作栏（Ctrl / Shift 单击选中单曲结果后出现） -->
+    <Transition name="batchbar">
+      <div v-if="searchType === 'song' && selectedCount" class="batch-bar">
+        <span class="batch-count">已选 {{ selectedCount }} 首</span>
+        <button class="batch-btn" @click="playSelected">
+          <AppIcon name="play" :size="14" /><span>播放</span>
+        </button>
+        <button class="batch-btn" @click="addDialog = true">
+          <AppIcon name="plus" :size="14" /><span>添加到列表</span>
+        </button>
+        <button class="batch-btn" @click="qualityDialog = true">
+          <AppIcon name="download" :size="14" /><span>下载</span>
+        </button>
+        <button class="batch-btn ghost" @click="clearSelection">
+          <AppIcon name="close" :size="14" /><span>取消</span>
+        </button>
+      </div>
+    </Transition>
+
+    <ListAddDialog
+      v-if="addDialog"
+      :items="selectedItems"
+      @added="onAdded"
+      @close="addDialog = false"
+    />
+    <QualityDialog
+      v-if="qualityDialog"
+      :items="selectedItems"
+      :list-name="keyword"
+      @added="onDownloadAdded"
+      @close="qualityDialog = false"
+    />
+
+    <Transition name="toast">
+      <div v-if="toast" class="toast">{{ toast }}</div>
+    </Transition>
   </div>
 </template>
 
@@ -376,5 +461,80 @@ watch(source, () => {
 }
 .chip:active {
   background-color: var(--color-button-background-active);
+}
+
+/* ---------- 批量操作栏（与「我的列表」同款） ---------- */
+.batch-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 15px 14px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: var(--color-content-background);
+  border: 1px solid var(--color-primary-light-100-alpha-700);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+.batch-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-primary-font);
+  margin-right: 4px;
+}
+.batch-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--color-font);
+  transition: background 0.15s ease;
+}
+.batch-btn:hover {
+  background: var(--color-primary-background-hover);
+}
+.batch-btn.ghost {
+  margin-left: auto;
+  color: var(--color-font-label);
+}
+.batchbar-enter-active,
+.batchbar-leave-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+.batchbar-enter-from,
+.batchbar-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+/* ---------- 轻提示 ---------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--height-player) + 20px);
+  transform: translateX(-50%);
+  z-index: 80;
+  padding: 10px 18px;
+  border-radius: 20px;
+  font-size: 13px;
+  color: #fff;
+  background: rgba(40, 40, 40, 0.92);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(6px);
+}
+.toast-enter-active,
+.toast-leave-active {
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+}
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 8px);
 }
 </style>

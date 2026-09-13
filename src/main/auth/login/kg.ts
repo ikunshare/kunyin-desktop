@@ -11,6 +11,7 @@ import {
   kgAnonymousCreds,
   kgGenerateDeviceId,
   kgRequest,
+  kgStr,
   type KgCreds
 } from '../../providers/kg/thirdsso'
 
@@ -62,9 +63,9 @@ export async function kgCreateQRCode(): Promise<KgQRCodeInfo | null> {
     { url_code: '1001' }
   )
   if (resp?.error_code !== 0) return null
-  const url = resp.data?.qrcode
-  const ticket = resp.data?.ticket
-  if (typeof url !== 'string' || typeof ticket !== 'string' || !url || !ticket) return null
+  const url = kgStr(resp.data?.qrcode)
+  const ticket = kgStr(resp.data?.ticket)
+  if (!url || !ticket) return null
 
   session = { creds, ticket, attempts: 0 }
   return { url, ticket }
@@ -91,11 +92,9 @@ export async function kgPollQRCode(ticket: string): Promise<KgPollResult> {
   )
   if (resp?.error_code !== 0) return { status: 'waiting' }
 
-  const userid = resp.data?.userid
-  const token = resp.data?.token
-  if (typeof userid !== 'string' || typeof token !== 'string' || !userid || !token) {
-    return { status: 'waiting' }
-  }
+  const userid = kgStr(resp.data?.userid)
+  const token = kgStr(resp.data?.token)
+  if (!userid || !token) return { status: 'waiting' }
 
   const credentials: KgCreds = { ...session.creds, userid, token }
   session = null

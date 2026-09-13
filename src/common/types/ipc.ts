@@ -23,7 +23,8 @@ import type {
   MvQuality,
   MvUrlResult,
   PlayListInfoResult,
-  PlaylistSearchResult
+  PlaylistSearchResult,
+  UserInfo
 } from './provider'
 import type { ChartInfo, PlaylistCategory } from './provider'
 import type { AppSettings, AuthState, CacheKind, CacheStats, ProxyStatus } from './settings'
@@ -174,7 +175,18 @@ export const IpcChannels = {
   ACCOUNT_QQ_QR_START: 'account:qqQrStart', // qq 扫码：申请二维码并起 WS 监听
   ACCOUNT_QQ_QR_STOP: 'account:qqQrStop', // qq 扫码：停止监听
   ACCOUNT_QQ_QR_EVENT: 'account:qqQrEvent', // 主 → 渲染：qq 扫码状态事件
+  ACCOUNT_QQ_WEB_OPEN: 'account:qqWebOpen', // qq 网页登录：打开 y.qq.com 登录窗
+  ACCOUNT_QQ_WEB_FINISH: 'account:qqWebFinish', // qq 网页登录：从登录窗 cookie 提取凭据
+  ACCOUNT_QQ_WEB_CLOSE: 'account:qqWebClose', // qq 网页登录：关闭登录窗
+  ACCOUNT_QQ_WEB_EVENT: 'account:qqWebEvent', // 主 → 渲染：qq 网页登录结果
   ACCOUNT_CHANGED: 'account:changed', // 主 → 渲染 事件（登录态变更）
+
+  // 平台「我的歌单」（缓存优先、后台刷新）
+  PLATFORM_SECTIONS: 'platform:sections',
+  PLATFORM_REFRESH: 'platform:refresh',
+  PLATFORM_SONGS: 'platform:songs',
+  PLATFORM_SONGS_PROGRESS: 'platform:songsProgress', // 主 → 渲染 事件（整单后台补齐的逐页推送）
+  PLATFORM_CHANGED: 'platform:changed', // 主 → 渲染 事件
 
   // LX 同步
   SYNC_STATUS: 'sync:status', // 当前状态快照
@@ -372,6 +384,56 @@ export interface QQQRStatusEvent {
   qrcodeId: string
   status: 'waiting' | 'scanned' | 'confirmed' | 'timeout' | 'refused' | 'error'
   message: string
+}
+
+/** qq 网页登录结果（主 → 渲染）：success 时凭据已保存；closed = 登录窗关了但没拿到登录态 */
+export interface QQWebLoginEvent {
+  status: 'success' | 'closed'
+  message?: string
+}
+
+/** 某个登录平台的「我的歌单」区块（对应 Android PlatformSection） */
+export interface PlatformSection {
+  source: AccountProvider
+  displayName: string
+  /** 缓存的用户信息；还没刷新到时为 null */
+  userInfo: UserInfo | null
+  playlists: PlayListInfoResult[]
+  /** 正在后台刷新 */
+  loading: boolean
+}
+
+/**
+ * 平台歌单曲目快照（`platform.songs` 的返回值）。
+ * 首页到手就返回，余页由主进程后台补齐并经 PLATFORM_SONGS_PROGRESS 逐页推送。
+ */
+export interface PlatformSongsSnapshot {
+  source: AccountProvider
+  id: string
+  /** 本次拉取批次号：切歌单 / 重新拉取会换号，渲染层据此丢弃过期推送；来自完整缓存时为 0 */
+  runId: number
+  /** 目前已拿到的曲目（累计） */
+  songs: MusicItem[]
+  /** 远端总曲数（接口没给时缺省） */
+  total?: number
+  /** 已拉完（或来自完整缓存） */
+  complete: boolean
+  /** 拉取失败的提示；songs 为失败前已拿到的部分 */
+  error?: string
+}
+
+/** 平台歌单后台补齐的逐页推送（主 → 渲染） */
+export interface PlatformSongsProgress {
+  source: AccountProvider
+  id: string
+  runId: number
+  /** 这一页新到的曲目（已按 key 去重，直接追加到列表末尾） */
+  added: MusicItem[]
+  /** 累计已加载曲数 */
+  loaded: number
+  total?: number
+  complete: boolean
+  error?: string
 }
 
 /**
@@ -688,7 +750,32 @@ export interface WindowApi {
     qqQrStop(): Promise<void>
     /** 订阅 qq 扫码事件 */
     onQQEvent(cb: (e: QQQRStatusEvent) => void): Unsubscribe
+    /** qq 网页登录：打开 y.qq.com 登录窗（结果经 onQQWebEvent 推送；用户关窗时自动尝试提取） */
+    qqWebOpen(): Promise<void>
+    /** qq 网页登录：立即从登录窗提取凭据；成功返回 true（已保存并关窗），失败保留窗口 */
+    qqWebFinish(): Promise<boolean>
+    /** qq 网页登录：放弃并关窗（关闭登录弹窗时调用） */
+    qqWebClose(): Promise<void>
+    /** 订阅 qq 网页登录结果 */
+    onQQWebEvent(cb: (e: QQWebLoginEvent) => void): Unsubscribe
     /** 订阅登录态变更（主进程广播） */
+    onChange(cb: () => void): Unsubscribe
+  }
+
+  /** 各平台「我的歌单」（缓存优先；对应 Android PlatformPlaylistStore + PlaylistsViewModel） */
+  platform: {
+    /** 登录平台的用户信息 + 歌单列表（只读缓存，立即返回） */
+    sections(): Promise<PlatformSection[]>
+    /** 后台刷新（不传 source 刷新全部；60s 内重复调用会被跳过，force 强制） */
+    refresh(source?: AccountProvider, force?: boolean): Promise<void>
+    /**
+     * 某歌单曲目：有完整缓存直接给；否则首页到手就返回（complete=false），
+     * 余页主进程后台补齐、经 onSongsProgress 逐页推送，拉齐后落缓存。force 忽略缓存重拉。
+     */
+    songs(source: AccountProvider, id: string, force?: boolean): Promise<PlatformSongsSnapshot>
+    /** 订阅整单后台补齐的逐页推送 */
+    onSongsProgress(cb: (p: PlatformSongsProgress) => void): Unsubscribe
+    /** 订阅缓存 / 加载态变化（主进程广播） */
     onChange(cb: () => void): Unsubscribe
   }
 

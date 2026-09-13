@@ -67,6 +67,9 @@ export const DEFAULT_CREATOR_RULES_ZH_CN: MatchRule[] = [
   /摄影|摄像/,
   /视频|分镜|脚本|导演/,
   /艺术顾问|艺术|顾问/,
+  // [vendor patch] 语言顾问（「俄语顾问 Russian Language Consultant」等）：
+  // 中英并列职务里只靠「顾问」+「Consultant」够不到 exact 模式 50% 覆盖阈值
+  /语言顾问|语顾问|语言/,
   /题字|文案/,
   /翻译|译/,
   /支持|鸣谢|特约嘉宾|指导|承办单位|承办|承办人|单位|业务|策监|经纪/,
@@ -176,6 +179,8 @@ export const DEFAULT_CREATOR_RULES_ZH_CN: MatchRule[] = [
   /巴乌/,
   /葫芦丝/,
   /手风琴|六角手风琴/,
+  // [vendor patch] 巴扬（俄式键钮手风琴），上游缺失
+  /巴扬/,
   /口琴/,
   /特雷门琴/,
   /拇指琴/,
@@ -311,6 +316,8 @@ export const DEFAULT_CREATOR_RULES_EN_US: MatchRule[] = [
   /Photography|Photographer|Photo|Photo\s+by/i,
   /Video|Video\s+by|PV|MV|CG|Director|Directed\s+by|Film|Filmed\s+by|Animation|Animator|Animated\s+by/i,
   /Art\s+Consultant|ArtConsultant|Consultant|Creative\s+Director|Creative\s+Direction/i,
+  // [vendor patch] 与中文「语言顾问」对应，Language 需一并计入覆盖
+  /Language\s+Consultant|LanguageConsultant|Language\s+Coach|Language/i,
   /Inscription|Copywriting|Copywriter/i,
   /Translator|Translation|Translated\s+by/i,
   /Special\s+Thanks|Thanks\s+to|Special\s+Cooperation|SpecialCooperation|Acknowledgments|Credits|Contractor/i,
@@ -412,6 +419,8 @@ export const DEFAULT_CREATOR_RULES_EN_US: MatchRule[] = [
   /Bawu/i,
   /Hulusi/i,
   /Accordion|Concertina/i,
+  // [vendor patch] 与中文「巴扬」对应
+  /Bayan/i,
   /Harmonica/i,
   /Theremin/i,
   /Kalimba|Mbira/i,

@@ -149,7 +149,10 @@ function flush(): void {
   }
   const lines = pending.splice(0)
   try {
-    if (!prune(lines.reduce((sum, line) => sum + Buffer.byteLength(line), 0))) { fileEnabled = false; return }
+    if (!prune(lines.reduce((sum, line) => sum + Buffer.byteLength(line), 0))) {
+      fileEnabled = false
+      return
+    }
     for (const line of lines) {
       const bytes = Buffer.byteLength(line, 'utf-8')
       if (!currentPath || currentDay !== dayStamp(new Date())) rollFile()

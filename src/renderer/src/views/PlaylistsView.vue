@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
+import BaseBtn from '../components/BaseBtn.vue'
 import SongRow from '../components/SongRow.vue'
 import ContextMenu, { type MenuItem } from '../components/ContextMenu.vue'
 import ListAddDialog from '../components/ListAddDialog.vue'
@@ -16,10 +17,11 @@ import { useSettingsStore } from '../stores/settings'
 import { useApi } from '../composables/useApi'
 import {
   getMusicItemKey,
-  type AccountStatus,
   type LocalPlaylist,
   type MusicItem,
   type MusicSource,
+  type PlatformSection,
+  type PlatformSongsProgress,
   type PlayListInfoResult
 } from '@common'
 
@@ -40,30 +42,20 @@ const favorites = computed(() => playlists.value.find((p) => p.systemKind === 'f
 // 用户自建歌单（getPlaylists 已按 sort_order 排好序，此处保持顺序）
 const customPlaylists = computed(() => playlists.value.filter((p) => !p.isSystem))
 
-// 各平台登录后的「我的歌单」
-interface PlatformGroup {
-  source: MusicSource
-  displayName: string
-  playlists: PlayListInfoResult[]
-}
-const platformGroups = ref<PlatformGroup[]>([])
-// 平铺展示（LX 风格：列表项无平台分组标注）
-const platformItems = computed(() =>
-  platformGroups.value.flatMap((g) => g.playlists.map((p) => ({ g, p })))
-)
-let accountUnsub: (() => void) | null = null
+/**
+ * 各平台登录后的「我的歌单」（对应 Android PlatformSection）：
+ * 主进程给的是缓存快照，进入页面立即可见；后台刷新完成经 platform.onChange 推过来。
+ * 按平台分组显示：组头带头像 / 昵称 / 刷新按钮（Android 平台区块的排法）。
+ */
+const platformSections = ref<PlatformSection[]>([])
+let platformUnsub: (() => void) | null = null
 
-async function loadPlatformPlaylists(): Promise<void> {
-  const accounts: AccountStatus[] = await api.account.list()
-  const loggedIn = accounts.filter((a) => a.loggedIn)
-  const groups = await Promise.all(
-    loggedIn.map(async (a) => {
-      const source = a.provider as MusicSource
-      const lists = await api.discover.userPlaylists(source).catch(() => [])
-      return { source, displayName: a.displayName, playlists: lists }
-    })
-  )
-  platformGroups.value = groups.filter((g) => g.playlists.length > 0)
+async function loadPlatformSections(): Promise<void> {
+  platformSections.value = await api.platform.sections().catch(() => [])
+}
+/** 用户主动刷新某平台：强制绕过 60s 节流 */
+async function refreshPlatform(source: MusicSource): Promise<void> {
+  await api.platform.refresh(source as PlatformSection['source'], true).catch(() => {})
 }
 
 // ============ 选中态与右栏歌曲 ============
@@ -91,6 +83,12 @@ function readSavedSelection(): Selection | null {
 }
 const tracks = ref<MusicItem[]>([])
 const loadingTracks = ref(false)
+/** 平台歌单：远端总曲数（接口没给时为空）、是否已拉齐、拉取失败提示 */
+const tracksTotal = ref<number | undefined>()
+const tracksComplete = ref(true)
+const tracksError = ref('')
+/** 正在后台补齐的平台歌单批次；逐页推送按它过滤，切列表 / 重新拉取即失效 */
+let songsRun: { source: MusicSource; id: string; runId: number } | null = null
 const searchText = ref('')
 const searchOpen = ref(false)
 function toggleSearch(): void {
@@ -123,7 +121,7 @@ async function selectLocal(p: LocalPlaylist): Promise<void> {
   clearSelection()
   await loadTracks()
 }
-async function selectPlatform(g: PlatformGroup, p: PlayListInfoResult): Promise<void> {
+async function selectPlatform(g: PlatformSection, p: PlayListInfoResult): Promise<void> {
   selection.value = { kind: 'platform', source: g.source, id: p.id, name: p.name, cover: p.cover }
   saveSelection()
   searchText.value = ''
@@ -131,25 +129,73 @@ async function selectPlatform(g: PlatformGroup, p: PlayListInfoResult): Promise<
   await loadTracks()
 }
 
-async function loadTracks(): Promise<void> {
+/**
+ * 载入右栏曲目。平台歌单走 platform.songs：完整缓存命中立即返回；否则首页到手就先显示，
+ * 余页由主进程后台补齐、经 onSongsProgress 逐页追加（对齐 Android「首页 + 静默补齐」）。
+ *
+ * - force：用户主动「重新拉取」平台歌单，忽略缓存；
+ * - silent：列表已在显示、只是内容变了（删歌 / 排序 / 导入）——原地替换数据，不切「加载中…」占位。
+ *   否则滚动容器会被卸载重挂、滚动位置回到顶部（右键删一首歌就跳回顶部的根因）。
+ */
+async function loadTracks(opts: { force?: boolean; silent?: boolean } = {}): Promise<void> {
   const s = selection.value
   if (!s) {
     tracks.value = []
+    songsRun = null
     return
   }
-  loadingTracks.value = true
+  const silent = !!opts.silent && tracks.value.length > 0
+  if (!silent) loadingTracks.value = true
+  tracksError.value = ''
   const token = selectedKey.value
   try {
-    let list: MusicItem[] = []
     if (s.kind === 'local') {
-      list = await library.playlistSongs(s.id)
+      const list = await library.playlistSongs(s.id)
+      if (token !== selectedKey.value) return // 已切列表则丢弃过期结果
+      tracks.value = list
+      tracksTotal.value = undefined
+      tracksComplete.value = true
+      songsRun = null
     } else {
-      const res = await api.discover.playlistSongs(s.source, s.id, 0, 100)
-      list = res.result
+      const snap = await api.platform.songs(
+        s.source as PlatformSection['source'],
+        s.id,
+        !!opts.force
+      )
+      if (token !== selectedKey.value) return
+      tracks.value = snap.songs
+      tracksTotal.value = snap.total
+      tracksComplete.value = snap.complete
+      tracksError.value = snap.error ?? ''
+      songsRun = snap.complete ? null : { source: snap.source, id: snap.id, runId: snap.runId }
     }
-    if (token === selectedKey.value) tracks.value = list // 已切列表则丢弃过期结果
+  } catch (e) {
+    if (token === selectedKey.value)
+      tracksError.value = e instanceof Error ? e.message : '歌单加载失败'
   } finally {
-    if (token === selectedKey.value) loadingTracks.value = false
+    if (token === selectedKey.value && !silent) loadingTracks.value = false
+  }
+}
+
+/** 主进程后台补齐的一页到了：追加到右栏；若正在播放的就是这个列表，同步补进播放队列 */
+function onSongsProgress(p: PlatformSongsProgress): void {
+  const run = songsRun
+  if (!run || p.runId !== run.runId || p.source !== run.source || p.id !== run.id) return
+  if (p.added.length) {
+    const keys = new Set(tracks.value.map(getMusicItemKey))
+    const fresh = p.added.filter((t) => !keys.has(getMusicItemKey(t)))
+    if (fresh.length) {
+      tracks.value.push(...fresh)
+      // 队列 = 所见列表；有搜索过滤时队列是过滤后的子集，不往里塞未过滤的新歌
+      const src = playSource()
+      if (src && !searchText.value.trim()) player.appendToQueue(fresh, src)
+    }
+  }
+  if (p.total) tracksTotal.value = p.total
+  if (p.error) tracksError.value = p.error
+  if (p.complete) {
+    tracksComplete.value = true
+    songsRun = null
   }
 }
 
@@ -286,7 +332,7 @@ function onSongImported(item: MusicItem): void {
   const target = idAddTarget.value
   showToast(`已导入：${item.title}`)
   if (target && selection.value?.kind === 'local' && selection.value.id === target.id) {
-    void loadTracks()
+    void loadTracks({ silent: true })
   }
 }
 
@@ -420,12 +466,68 @@ async function onMenuSelect(key: string): Promise<void> {
   }
 }
 
+// ============ 平台歌单右键菜单 ============
+// 对应 Android 平台歌单项的操作：重新拉取（绕过缓存）、创建本地副本（copyPlatformPlaylistToLocal）、详情页
+interface PlatformMenuState {
+  x: number
+  y: number
+  section: PlatformSection
+  playlist: PlayListInfoResult
+}
+const platformMenu = ref<PlatformMenuState | null>(null)
+const platformMenuItems: MenuItem[] = [
+  { key: 'play', label: '播放', icon: 'play' },
+  { key: 'reload', label: '重新拉取', icon: 'refresh', divider: true },
+  { key: 'copy', label: '创建本地副本', icon: 'copy' },
+  { key: 'detail', label: '歌单详情页', icon: 'library' }
+]
+function openPlatformMenu(e: MouseEvent, section: PlatformSection, p: PlayListInfoResult): void {
+  closeMenu()
+  platformMenu.value = { x: e.clientX, y: e.clientY, section, playlist: p }
+}
+async function onPlatformMenuSelect(key: string): Promise<void> {
+  const m = platformMenu.value
+  platformMenu.value = null
+  if (!m) return
+  if (key === 'play') {
+    await selectPlatform(m.section, m.playlist)
+    playAll()
+  } else if (key === 'reload') {
+    await selectPlatform(m.section, m.playlist)
+    await loadTracks({ force: true })
+    if (tracksError.value) showToast(tracksError.value)
+    else if (tracksComplete.value)
+      showToast(`已重新拉取「${m.playlist.name}」：${tracks.value.length} 首`)
+    else showToast(`正在重新拉取「${m.playlist.name}」，余下歌曲会陆续补齐`)
+  } else if (key === 'copy') {
+    void copyPlatformToLocal(m.section, m.playlist)
+  } else if (key === 'detail') {
+    void router.push({
+      name: 'playlist',
+      params: { playlistId: m.playlist.id },
+      query: { source: m.section.source, title: m.playlist.name, cover: m.playlist.cover ?? '' }
+    })
+  }
+}
+/** 创建本地副本：复用 importRemote（绑定远端来源，之后可「更新」/「启动时自动补充新曲」） */
+async function copyPlatformToLocal(section: PlatformSection, p: PlayListInfoResult): Promise<void> {
+  showToast(`正在创建「${p.name}」的本地副本…`)
+  try {
+    const id = await api.library.importRemote(section.source, p.id, p.name)
+    await library.refresh().catch(() => {})
+    const created = playlists.value.find((pl) => pl.id === id)
+    showToast(`已创建本地副本「${created?.name ?? p.name}」`)
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '创建本地副本失败')
+  }
+}
+
 // ============ 排序歌曲 / 重复歌曲 弹窗 ============
 const sortTarget = ref<LocalPlaylist | null>(null)
 const dupTarget = ref<LocalPlaylist | null>(null)
 function onSorted(): void {
   showToast('已重新排序')
-  if (selection.value?.kind === 'local') void loadTracks()
+  if (selection.value?.kind === 'local') void loadTracks({ silent: true })
 }
 
 // ============ 添加本地歌曲 ============
@@ -517,13 +619,17 @@ function onDragEnd(): void {
 
 // ============ 生命周期 ============
 let libraryUnsub: (() => void) | null = null
+let progressUnsub: (() => void) | null = null
 onMounted(async () => {
   await library.refresh().catch(() => {})
-  void loadPlatformPlaylists()
-  accountUnsub = api.account.onChange(() => void loadPlatformPlaylists())
-  // 曲库变更（收藏/删歌/排序）时刷新右栏；playlists 列表由 App 层全局订阅刷新
+  // 先显示缓存快照，再让主进程后台刷新（60s 节流，频繁进出页面不会反复打接口）
+  void loadPlatformSections()
+  void api.platform.refresh().catch(() => {})
+  platformUnsub = api.platform.onChange(() => void loadPlatformSections())
+  progressUnsub = api.platform.onSongsProgress(onSongsProgress)
+  // 曲库变更（收藏/删歌/排序）时静默刷新右栏，保住滚动位置；playlists 列表由 App 层全局订阅刷新
   libraryUnsub = api.library.onChange(() => {
-    if (selection.value?.kind === 'local') void loadTracks()
+    if (selection.value?.kind === 'local') void loadTracks({ silent: true })
   })
   // 恢复上次选中的列表；本地列表校验仍存在（可能已被删除/重命名），失效回落「我的收藏」
   const saved = readSavedSelection()
@@ -542,8 +648,9 @@ onMounted(async () => {
   if (!selection.value && favorites.value) void selectLocal(favorites.value)
 })
 onUnmounted(() => {
-  accountUnsub?.()
+  platformUnsub?.()
   libraryUnsub?.()
+  progressUnsub?.()
 })
 </script>
 
@@ -650,28 +757,59 @@ onUnmounted(() => {
           </button>
         </template>
 
-        <button
-          v-for="{ g, p } in platformItems"
-          :key="`platform:${g.source}:${p.id}`"
-          class="list-item"
-          :class="{ active: selectedKey === `platform:${g.source}:${p.id}` }"
-          @click="selectPlatform(g, p)"
-        >
-          <AppIcon
-            v-if="selectedKey === `platform:${g.source}:${p.id}`"
-            name="chevron-right"
-            :size="12"
-            class="li-mark"
-          />
-          <span class="li-name ellipsis">{{ p.name }}</span>
-          <AppIcon
-            v-if="playingKey === `platform:${g.source}:${p.id}`"
-            name="headphone"
-            :size="13"
-            class="li-playing"
-            title="正在播放此列表"
-          />
-        </button>
+        <!-- 平台「我的歌单」：按平台分组，组头 = 头像 + 昵称 + 刷新（Android PlatformSection） -->
+        <template v-for="sec in platformSections" :key="`section:${sec.source}`">
+          <div class="section-head">
+            <img
+              v-if="sec.userInfo?.avatar"
+              :src="sec.userInfo.avatar"
+              class="sec-avatar"
+              alt=""
+              referrerpolicy="no-referrer"
+            />
+            <span v-else class="sec-avatar sec-avatar-empty"></span>
+            <span class="sec-name ellipsis">
+              {{ sec.userInfo?.nickname || sec.displayName }}
+            </span>
+            <span class="sec-tag">{{ sec.displayName }}</span>
+            <button
+              class="sec-refresh"
+              :class="{ spinning: sec.loading }"
+              :disabled="sec.loading"
+              :title="sec.loading ? '正在刷新…' : '刷新歌单列表'"
+              @click.stop="refreshPlatform(sec.source)"
+            >
+              <AppIcon name="refresh" :size="13" />
+            </button>
+          </div>
+          <div v-if="!sec.playlists.length" class="sec-empty">
+            {{ sec.loading ? '正在获取歌单…' : '没有歌单' }}
+          </div>
+          <button
+            v-for="p in sec.playlists"
+            :key="`platform:${sec.source}:${p.id}`"
+            class="list-item"
+            :class="{ active: selectedKey === `platform:${sec.source}:${p.id}` }"
+            @click="selectPlatform(sec, p)"
+            @contextmenu.prevent.stop="openPlatformMenu($event, sec, p)"
+          >
+            <AppIcon
+              v-if="selectedKey === `platform:${sec.source}:${p.id}`"
+              name="chevron-right"
+              :size="12"
+              class="li-mark"
+            />
+            <span class="li-name ellipsis">{{ p.name }}</span>
+            <span v-if="p.total" class="li-count">{{ p.total }}</span>
+            <AppIcon
+              v-if="playingKey === `platform:${sec.source}:${p.id}`"
+              name="headphone"
+              :size="13"
+              class="li-playing"
+              title="正在播放此列表"
+            />
+          </button>
+        </template>
 
         <!-- 新建列表输入行：位于列表末尾（LX） -->
         <div v-if="creating" class="create-row">
@@ -749,6 +887,10 @@ onUnmounted(() => {
         </div>
 
         <div v-if="loadingTracks" class="detail-hint">加载中…</div>
+        <div v-else-if="tracksError && !tracks.length" class="detail-hint" role="alert">
+          <span>{{ tracksError }}</span>
+          <BaseBtn min @click="loadTracks({ force: true })">重试</BaseBtn>
+        </div>
         <div v-else-if="!filteredTracks.length" class="detail-hint">
           {{ searchText ? '没有匹配的歌曲' : '这个列表还没有歌曲' }}
         </div>
@@ -764,6 +906,19 @@ onUnmounted(() => {
             @play="play(t)"
             @select="onRowSelect($event, i)"
           />
+          <!-- 平台歌单：首页已显示，余下页由主进程后台补齐中 -->
+          <div v-if="!tracksComplete" class="list-foot">
+            正在加载余下歌曲… 已加载 {{ tracks.length }}
+            <template v-if="tracksTotal">/ {{ tracksTotal }}</template> 首
+          </div>
+          <div
+            v-else-if="tracksError && selection.kind === 'platform'"
+            class="list-foot"
+            role="alert"
+          >
+            <span>{{ tracksError }}（已加载 {{ tracks.length }} 首）</span>
+            <BaseBtn min @click="loadTracks({ force: true })">重新拉取</BaseBtn>
+          </div>
         </div>
 
         <!-- 批量操作栏 -->
@@ -798,6 +953,16 @@ onUnmounted(() => {
       :items="menuItems"
       @select="onMenuSelect"
       @close="closeMenu"
+    />
+
+    <!-- 平台歌单右键菜单 -->
+    <ContextMenu
+      v-if="platformMenu"
+      :x="platformMenu.x"
+      :y="platformMenu.y"
+      :items="platformMenuItems"
+      @select="onPlatformMenuSelect"
+      @close="platformMenu = null"
     />
 
     <!-- 排序歌曲弹窗 -->
@@ -959,6 +1124,74 @@ onUnmounted(() => {
   min-width: 0;
   font-size: 13px;
 }
+.li-count {
+  flex: none;
+  font-size: 11px;
+  color: var(--color-font-label);
+}
+
+/* 平台分组头（头像 + 昵称 + 平台名 + 刷新） */
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  margin-top: 6px;
+  padding: 0 10px;
+  border-top: var(--color-list-header-border-bottom);
+}
+.sec-avatar {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--color-primary-background);
+}
+.sec-avatar-empty {
+  display: inline-block;
+}
+.sec-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--color-font);
+}
+.sec-tag {
+  flex: none;
+  font-size: 10px;
+  color: var(--color-font-label);
+}
+.sec-refresh {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--form-radius);
+  color: var(--color-font-label);
+  transition:
+    color 0.18s ease,
+    background 0.18s ease;
+}
+.sec-refresh:hover:not(:disabled) {
+  color: var(--color-primary);
+  background: var(--color-button-background-hover);
+}
+.sec-refresh.spinning :deep(svg) {
+  animation: sec-spin 1s linear infinite;
+}
+@keyframes sec-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.sec-empty {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--color-font-label);
+}
 
 /* 新建/重命名输入行（LX editing 态） */
 .create-row {
@@ -988,6 +1221,20 @@ onUnmounted(() => {
   padding: 40px 0;
   text-align: center;
   font-size: 13px;
+  color: var(--color-font-label);
+}
+.detail-hint,
+.list-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+/* 列表尾部：后台补齐进度 / 失败重试 */
+.list-foot {
+  padding: 16px 0 8px;
+  font-size: 12px;
   color: var(--color-font-label);
 }
 

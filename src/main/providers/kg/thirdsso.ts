@@ -34,6 +34,16 @@ export function kgGenerateDeviceId(): string {
   return randomUUID().replace(/-/g, '')
 }
 
+/**
+ * 取字符串字段：thirdsso 的 userid / ticket 等可能以数字下发。Android 侧用 Gson 的
+ * `asString`，数字也能转；这里对齐，别因为 `typeof !== 'string'` 把有效响应当成没登录。
+ */
+export function kgStr(v: unknown): string | undefined {
+  if (typeof v === 'string') return v || undefined
+  if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+  return undefined
+}
+
 // —— 三个签名（KgCrypto.cpp 的 JNI 导出）——
 
 export function kgIdentity(body: string): string {
@@ -185,7 +195,7 @@ export async function kgRefreshToken(creds: KgCreds): Promise<KgCreds | null> {
   if (!resp.data.refresh) return creds
   return {
     ...creds,
-    userid: resp.data.userid ?? creds.userid,
-    token: resp.data.token ?? creds.token
+    userid: kgStr(resp.data.userid) ?? creds.userid,
+    token: kgStr(resp.data.token) ?? creds.token
   }
 }

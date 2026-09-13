@@ -2,15 +2,21 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import QRCode from 'qrcode'
 import { useApi } from '../composables/useApi'
-import type { AccountProvider, QQQRStatusEvent } from '@common'
+import type { AccountProvider, QQQRStatusEvent, QQWebLoginEvent } from '@common'
 
 const props = defineProps<{ provider: AccountProvider }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'done'): void }>()
 
 const api = useApi()
 
-// 三家均走扫码；kg 另留一个手填凭据入口（扫码不通时的兜底）
-const mode = ref<'qr' | 'manual'>('qr')
+/**
+ * 登录方式（对齐 Android 各平台的入口）：
+ * - wy：只有扫码，打开即出码；
+ * - qq：先选「扫码 / 网页登录」（QQLoginMethodDialog），网页登录开独立窗口，凭据从 cookie 提取；
+ * - kg：先选「扫码 / 手动填写」（KgLoginMethodDialog）。
+ */
+type Mode = 'choose' | 'qr' | 'web' | 'manual'
+const mode = ref<Mode>(props.provider === 'wy' ? 'qr' : 'choose')
 
 const qrImage = ref('') // 二维码图片 data URL
 const statusText = ref('')
@@ -21,6 +27,8 @@ let wyTimer: ReturnType<typeof setInterval> | null = null
 let kgTimer: ReturnType<typeof setInterval> | null = null
 let qqUnsub: (() => void) | null = null
 let qqActive = false
+let qqWebUnsub: (() => void) | null = null
+let qqWebActive = false
 
 function clearWy(): void {
   if (wyTimer) {
@@ -40,6 +48,14 @@ async function clearQq(): Promise<void> {
   if (qqActive) {
     qqActive = false
     await api.account.qqQrStop()
+  }
+}
+async function clearQqWeb(): Promise<void> {
+  qqWebUnsub?.()
+  qqWebUnsub = null
+  if (qqWebActive) {
+    qqWebActive = false
+    await api.account.qqWebClose()
   }
 }
 
@@ -129,15 +145,51 @@ async function startQqQR(): Promise<void> {
   statusText.value = '请使用 QQ 音乐 App 扫码'
 }
 
+/** qq 网页登录：开独立登录窗；用户关窗时主进程自动提取一次并推送结果 */
+async function startQqWeb(): Promise<void> {
+  await clearQqWeb()
+  statusText.value = ''
+  qqWebUnsub = api.account.onQQWebEvent((e: QQWebLoginEvent) => {
+    if (e.status === 'success') {
+      qqWebActive = false
+      void clearQqWeb()
+      emit('done')
+    } else {
+      qqWebActive = false
+      statusText.value = e.message || '登录窗已关闭，未检测到登录态'
+    }
+  })
+  qqWebActive = true
+  await api.account.qqWebOpen()
+}
+
+/** 「完成登录」：从登录窗提取凭据；没登录态则保留窗口继续 */
+async function finishQqWeb(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const ok = await api.account.qqWebFinish()
+    if (ok) {
+      qqWebActive = false
+      await clearQqWeb()
+      emit('done')
+    } else {
+      statusText.value = '尚未检测到登录态，请先在登录窗口完成登录'
+    }
+  } finally {
+    busy.value = false
+  }
+}
+
 async function refreshQR(): Promise<void> {
   if (props.provider === 'wy') await startWyQR()
   else if (props.provider === 'qq') await startQqQR()
   else await startKgQR()
 }
 
-// 打开即启动二维码流程（卸载时的清理见 onBeforeUnmount）
+// wy 打开即出码；qq/kg 先选方式
 onMounted(() => {
-  void refreshQR()
+  if (mode.value === 'qr') void refreshQR()
 })
 
 /** 切到手填：停掉二维码轮询，免得后台继续打接口 */
@@ -150,6 +202,19 @@ async function switchToManual(): Promise<void> {
 async function switchToQR(): Promise<void> {
   mode.value = 'qr'
   await refreshQR()
+}
+async function switchToWeb(): Promise<void> {
+  mode.value = 'web'
+  await clearQq()
+  await startQqWeb()
+}
+/** 回到方式选择（qq/kg） */
+async function backToChoose(): Promise<void> {
+  mode.value = 'choose'
+  statusText.value = ''
+  clearKg()
+  await clearQq()
+  await clearQqWeb()
 }
 
 // —— kg 手动 ——
@@ -179,6 +244,7 @@ onBeforeUnmount(() => {
   clearWy()
   clearKg()
   void clearQq()
+  void clearQqWeb()
   if (props.provider === 'kg') void api.account.kgQrStop()
 })
 
@@ -194,8 +260,15 @@ const title =
         <button class="close" @click="emit('close')">✕</button>
       </div>
 
+      <!-- 登录方式选择（qq：扫码 / 网页；kg：扫码 / 手动填写） -->
+      <div v-if="mode === 'choose'" class="body choose-body">
+        <button class="btn" @click="switchToQR">扫码登录</button>
+        <button v-if="provider === 'qq'" class="btn" @click="switchToWeb">网页登录</button>
+        <button v-else class="btn" @click="switchToManual">手动填写</button>
+      </div>
+
       <!-- 扫码 -->
-      <div v-if="mode === 'qr'" class="body qr-body">
+      <div v-else-if="mode === 'qr'" class="body qr-body">
         <div class="qr-box">
           <img v-if="qrImage" :src="qrImage" alt="二维码" class="qr-img" />
           <div v-else class="qr-loading">生成中…</div>
@@ -205,6 +278,21 @@ const title =
         <button v-if="provider === 'kg'" class="link" @click="switchToManual">
           扫码不可用？手动填写凭据
         </button>
+        <button v-else-if="provider === 'qq'" class="link" @click="switchToWeb">
+          扫码不可用？改用网页登录
+        </button>
+      </div>
+
+      <!-- qq 网页登录：登录在独立窗口里完成，这里只留操作按钮 -->
+      <div v-else-if="mode === 'web'" class="body web-body">
+        <p class="tip">已打开 QQ 音乐网页登录窗口，请在窗口中完成登录后点击「完成登录」。</p>
+        <p class="tip">直接关闭登录窗口也会自动读取登录态。</p>
+        <p class="status">{{ statusText }}</p>
+        <button class="btn primary" :disabled="busy" @click="finishQqWeb">
+          {{ busy ? '读取中…' : '完成登录' }}
+        </button>
+        <button class="link" @click="startQqWeb">重新打开登录窗口</button>
+        <button class="link" @click="backToChoose">返回</button>
       </div>
 
       <!-- kg 手填凭据（兜底） -->
@@ -306,6 +394,26 @@ const title =
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.choose-body {
+  display: flex;
+  gap: 10px;
+}
+.choose-body .btn {
+  flex: 1;
+  padding: 12px 0;
+}
+.web-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.tip {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-font-label);
+  text-align: center;
 }
 .field {
   display: flex;

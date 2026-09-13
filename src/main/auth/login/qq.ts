@@ -7,7 +7,7 @@
  */
 import WebSocket from 'ws'
 import { requestJson } from '../../net/request'
-import { qqComm, qqLoginType } from '../../providers/qq/comm'
+import { qqComm } from '../../providers/qq/comm'
 import {
   buildConnectPacket,
   buildSubscribePacket,
@@ -115,10 +115,21 @@ async function mobileLogin(
   return parseCredentialResponse(resp)
 }
 
-/** 刷新 QQ 凭据，失败返回 null。 */
+/**
+ * 凭据的登录方式（1:1 对应 QQCredentials.loginType）：`Q_H_L` 前缀 → QQ(2)，`W_X_` → 微信(1)，
+ * 其余 0。与 comm.ts 的 qqLoginType（对齐后端、非微信一律按 2）刻意不同：续期接口按 Android
+ * 原样把未识别前缀当 0 发，别自作主张猜成 QQ。
+ */
+function credLoginType(authst: string): number {
+  if (authst.startsWith('Q_H_L')) return 2
+  if (authst.startsWith('W_X_')) return 1
+  return 0
+}
+
+/** 刷新 QQ 凭据（对应 MobileQRLogin.refreshCredential），失败返回 null。 */
 export async function qqRefreshCredential(creds: QQCredentials): Promise<QQCredentials | null> {
   try {
-    const lt = qqLoginType(creds.authst)
+    const lt = credLoginType(creds.authst)
     const param: Record<string, unknown> =
       lt === 1
         ? {

@@ -28,9 +28,10 @@ const SPECTRUM_BAR_COUNT = 20
  * - platform 在线歌单/专辑/歌手（id 统一为 `source:id`）
  * - trial   试听列表（搜索点单曲）
  * - single  单曲临时队列（重复歌曲弹窗等）
+ * - search  搜索结果多选后「播放」的临时队列（name 为关键词）
  */
 export interface QueueSource {
-  kind: 'local' | 'platform' | 'trial' | 'single'
+  kind: 'local' | 'platform' | 'trial' | 'single' | 'search'
   id?: string
   name?: string
 }
@@ -649,7 +650,12 @@ export const usePlayerStore = defineStore('player', () => {
             (await withTimeout(window.api.player.stream(JSON.parse(JSON.stringify(target)), q)))
           if (stale()) return false
           if (!res.ok) {
-            log.warn('音质取流失败', { source: target.type, id: target.id, quality: q, reason: res.reason })
+            log.warn('音质取流失败', {
+              source: target.type,
+              id: target.id,
+              quality: q,
+              reason: res.reason
+            })
             error.value = res.reason ?? '解析失败'
             continue
           }
@@ -700,7 +706,13 @@ export const usePlayerStore = defineStore('player', () => {
           return true
         } catch (e) {
           if (stale()) return false
-          log.warn('音频加载或播放失败', { error: e, source: target.type, id: target.id, quality: q, mediaError: audio.error?.code })
+          log.warn('音频加载或播放失败', {
+            error: e,
+            source: target.type,
+            id: target.id,
+            quality: q,
+            mediaError: audio.error?.code
+          })
           audio.pause()
           error.value = e instanceof Error ? e.message : '播放失败'
         }

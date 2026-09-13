@@ -140,11 +140,18 @@ export class KgProvider extends BaseProvider {
   }
 
   /**
-   * 歌单信息：`id_123` / 歌单网页链接 / 纯数字按公开歌单（specialid）处理，
-   * 其余交给登录态「我的歌单」路径（thirdsso 不提供单独的信息接口，此处返回 null 由前端保留路由携带的标题）。
+   * 歌单信息。thirdsso 没有单独的歌单信息接口，「我的歌单」的信息只能从列表里找；而它的
+   * playlist_id 是纯数字，与公开歌单 specialid 形态相同——登录态下**先按我的歌单匹配**，
+   * 找不到再当公开歌单（`id_123` / 歌单网页链接 / 纯数字 specialid）处理。
+   * 发现页给的是 `id_123` 形态，不会落到这层歧义。
    */
   async getPlayListInfo(input: string): Promise<PlayListInfoResult | null> {
-    const specialId = parseKgSpecialId(input)
+    const raw = String(input ?? '').trim()
+    if (/^\d+$/.test(raw) && this.kgCreds()) {
+      const mine = (await this.getUserPlaylist()).find((p) => p.id === raw)
+      if (mine) return mine
+    }
+    const specialId = parseKgSpecialId(raw)
     if (!specialId) return null
     const special = await fetchKgSpecial(specialId)
     if (!special) return null
@@ -163,14 +170,17 @@ export class KgProvider extends BaseProvider {
     if (isKgSpecialRef(playlistId)) return this.getSpecialSongs(playlistId, page, size)
     const creds = this.kgCreds()
     if (!creds) return this.emptyList(page, size)
+    // thirdsso 按 page/size 翻页；Android 端整单拉取用的最大页长是 50（copyPlatformPlaylistToLocal），
+    // 更大的页长没验证过，这里封顶。hasNext 按封顶后的页长算，调用方只管递增 page。
+    const pageSize = Math.min(size, 50)
     const resp = await kgAuthedRequest('favorite/song', creds, {
       playlist_id: playlistId,
       type: 'self',
       page: page + 1,
-      size,
+      size: pageSize,
       filter_local: 1
     }).catch(() => null)
-    if (resp?.error_code !== 0) return this.emptyList(page, size)
+    if (resp?.error_code !== 0) return this.emptyList(page, pageSize)
 
     const items = ((resp.data?.songs ?? []) as any[])
       .map((s) => parseKgPlaylistSong(s))
@@ -179,9 +189,9 @@ export class KgProvider extends BaseProvider {
     const total = num(resp.data?.total, 0)
     return {
       source: this.source,
-      hasNext: (page + 1) * size < total,
+      hasNext: (page + 1) * pageSize < total,
       page,
-      size,
+      size: pageSize,
       result: items
     }
   }

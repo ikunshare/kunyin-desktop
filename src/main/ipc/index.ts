@@ -12,6 +12,7 @@ import { registerLibraryHandlers } from './handlers/library'
 import { registerDiscoverHandlers } from './handlers/discover'
 import { registerDownloadHandlers } from './handlers/download'
 import { registerAccountHandlers } from './handlers/account'
+import { registerPlatformHandlers } from './handlers/platform'
 import { registerRedirectHandlers } from './handlers/redirect'
 import { registerShellHandlers } from './handlers/shell'
 import { registerLogHandlers } from './handlers/log'
@@ -28,6 +29,7 @@ export function registerIpc(): void {
   registerDiscoverHandlers()
   registerDownloadHandlers()
   registerAccountHandlers()
+  registerPlatformHandlers()
   registerRedirectHandlers()
   registerShellHandlers()
   registerLogHandlers()

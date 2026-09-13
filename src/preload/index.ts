@@ -7,7 +7,9 @@ import {
   type AppSettings,
   type DesktopLyricState,
   type MediaCommand,
+  type PlatformSongsProgress,
   type QQQRStatusEvent,
+  type QQWebLoginEvent,
   type SyncStatusSnapshot,
   type UpdaterEvent,
   type WindowApi
@@ -253,11 +255,40 @@ const api: WindowApi = {
         ipcRenderer.off(IpcChannels.ACCOUNT_QQ_QR_EVENT, listener)
       }
     },
+    qqWebOpen: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_QQ_WEB_OPEN),
+    qqWebFinish: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_QQ_WEB_FINISH),
+    qqWebClose: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_QQ_WEB_CLOSE),
+    onQQWebEvent: (cb) => {
+      const listener = (_e: Electron.IpcRendererEvent, evt: QQWebLoginEvent): void => cb(evt)
+      ipcRenderer.on(IpcChannels.ACCOUNT_QQ_WEB_EVENT, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.ACCOUNT_QQ_WEB_EVENT, listener)
+      }
+    },
     onChange: (cb) => {
       const listener = (): void => cb()
       ipcRenderer.on(IpcChannels.ACCOUNT_CHANGED, listener)
       return () => {
         ipcRenderer.off(IpcChannels.ACCOUNT_CHANGED, listener)
+      }
+    }
+  },
+  platform: {
+    sections: () => ipcRenderer.invoke(IpcChannels.PLATFORM_SECTIONS),
+    refresh: (source, force) => ipcRenderer.invoke(IpcChannels.PLATFORM_REFRESH, source, force),
+    songs: (source, id, force) => ipcRenderer.invoke(IpcChannels.PLATFORM_SONGS, source, id, force),
+    onSongsProgress: (cb) => {
+      const listener = (_e: Electron.IpcRendererEvent, p: PlatformSongsProgress): void => cb(p)
+      ipcRenderer.on(IpcChannels.PLATFORM_SONGS_PROGRESS, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.PLATFORM_SONGS_PROGRESS, listener)
+      }
+    },
+    onChange: (cb) => {
+      const listener = (): void => cb()
+      ipcRenderer.on(IpcChannels.PLATFORM_CHANGED, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.PLATFORM_CHANGED, listener)
       }
     }
   },

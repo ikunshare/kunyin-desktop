@@ -83,13 +83,12 @@ const shortcutLabel = computed(() =>
   <dt id="developer">开发者</dt>
 
   <dd>
-    <h3 id="developer_devtools">
-      开发者工具<span class="hint">正式版同样可用</span>
-    </h3>
+    <h3 id="developer_devtools">开发者工具<span class="hint">正式版同样可用</span></h3>
     <div>
       <p class="p">
         在任意窗口按 <b>{{ shortcutLabel }}</b> 开/关开发者工具（主窗口与桌面歌词窗口都支持，
-        以独立窗口打开；如未显示 Console，请选择 Console 标签）。反馈问题时，把控制台里红色的报错一并截图能省下大量来回确认。
+        以独立窗口打开；如未显示 Console，请选择 Console
+        标签）。反馈问题时，把控制台里红色的报错一并截图能省下大量来回确认。
       </p>
       <div class="gap-top">
         <BaseCheckbox
@@ -131,7 +130,9 @@ const shortcutLabel = computed(() =>
       </div>
       <p class="p gap-top dim">
         目录：{{ fileInfo?.dir || '—' }}<br />
-        占用：{{ fileInfo ? `${fmtSize(fileInfo.totalBytes)}（${fileInfo.fileCount} 个文件）` : '统计中…' }}
+        占用：{{
+          fileInfo ? `${fmtSize(fileInfo.totalBytes)}（${fileInfo.fileCount} 个文件）` : '统计中…'
+        }}
       </p>
       <div class="p gap-top btns">
         <BaseBtn min @click="openDir">打开日志目录</BaseBtn>

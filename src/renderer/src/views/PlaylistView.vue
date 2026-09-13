@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import DetailHeader from '../components/DetailHeader.vue'
 import SongRow from '../components/SongRow.vue'
@@ -90,6 +90,45 @@ async function load(more = false): Promise<void> {
   }
 }
 watch(identity, () => void load(), { immediate: true })
+/** 「已加载 N / 总数 首」（接口没给总数时只报已加载数） */
+const loadedHint = computed(() =>
+  info.value.total
+    ? `已加载 ${tracks.value.length} / ${info.value.total} 首`
+    : `已加载 ${tracks.value.length} 首`
+)
+
+// ============ 滚动到底自动加载下一页（列表末尾放一个哨兵，进入视口就翻页） ============
+const sentinelEl = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
+function maybeLoadMore(): void {
+  if (!hasNext.value || loading.value || busy.value || error.value) return
+  void load(true)
+}
+/** 重新 observe 一次：IntersectionObserver 只在相交状态变化时回调，一页没填满视口时哨兵一直可见不会再触发 */
+function rearmSentinel(): void {
+  const el = sentinelEl.value
+  if (!observer || !el) return
+  observer.unobserve(el)
+  observer.observe(el)
+}
+watch(sentinelEl, (el) => {
+  observer?.disconnect()
+  observer = null
+  if (!el) return
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((e) => e.isIntersecting)) maybeLoadMore()
+    },
+    // 滚动容器是 MainLayout 的 main.scroll；提前 320px 预载，滚到底前下一页已在路上
+    { root: el.closest('.scroll'), rootMargin: '0px 0px 320px 0px' }
+  )
+  observer.observe(el)
+})
+watch(loading, (v) => {
+  if (!v) void nextTick(rearmSentinel)
+})
+onBeforeUnmount(() => observer?.disconnect())
+
 function playSource(): QueueSource {
   const id = String(route.params.playlistId)
   return source.value
@@ -99,20 +138,25 @@ function playSource(): QueueSource {
 function play(item: MusicItem): void {
   player.playItem(item, tracks.value, { source: playSource() })
 }
+/**
+ * 播放全部：先用已加载的部分立即开播，余下页在后台继续翻、逐页补进播放队列
+ * （对齐 LX playSongListDetail / 排行榜「播放」），不再等整单拉完才出声。
+ */
 async function playAll(): Promise<void> {
-  if (busy.value || loading.value) return
-  busy.value = true
+  if (busy.value || loading.value || !tracks.value.length) return
   const key = identity.value
+  const src = playSource()
+  play(tracks.value[0])
+  if (!hasNext.value) return
+  busy.value = true
   try {
     while (hasNext.value && page.value < 99) {
+      const before = tracks.value.length
       await load(true)
       if (identity.value !== key || error.value) return
+      // load 按 key 去重后追加，新到的歌都在末尾
+      if (!player.appendToQueue(tracks.value.slice(before), src)) return // 队列已被切走
     }
-    if (hasNext.value) {
-      error.value = '歌单过大，请先选择歌曲播放'
-      return
-    }
-    if (identity.value === key && tracks.value.length) play(tracks.value[0])
   } finally {
     if (identity.value === key) busy.value = false
   }
@@ -151,7 +195,7 @@ async function collect(): Promise<void> {
       <BaseBtn v-if="source" :disabled="busy || loading" @click="collect">
         {{ busy ? '正在处理…' : '收藏到我的歌单' }}</BaseBtn
       ><span v-if="message" role="status">{{ message }}</span
-      ><span v-if="hasNext">已加载 {{ tracks.length }} 首，播放全部会加载完整歌单</span>
+      ><span v-if="hasNext">{{ loadedHint }}，滚动到底自动加载更多</span>
     </div>
     <div v-if="error" class="hint" role="alert">
       {{ error }}
@@ -167,6 +211,8 @@ async function collect(): Promise<void> {
         @play="play(item)"
       />
     </div>
+    <!-- 自动翻页哨兵：常驻列表末尾，是否真的翻页由 maybeLoadMore 判断 -->
+    <div ref="sentinelEl" class="sentinel" aria-hidden="true"></div>
     <div v-if="loading" class="hint">加载中…</div>
     <div v-else-if="hasNext" class="hint">
       <BaseBtn :disabled="busy" @click="load(true)">加载更多</BaseBtn>
@@ -187,6 +233,9 @@ async function collect(): Promise<void> {
 .list {
   display: flex;
   flex-direction: column;
+}
+.sentinel {
+  height: 1px;
 }
 .hint {
   padding: 20px;
