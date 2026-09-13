@@ -45,7 +45,7 @@
     "electron": "^44.0.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
-    "eslint": "^10.8.0",
+    "eslint": "^10.10.0",
     "eslint-plugin-vue": "^10.6.2",
     "gl-matrix": "^4.0.0-beta.2",
     "lodash-es": "^4.18.1",
