@@ -4,10 +4,18 @@
  * 存于 `userData/data/settings.json`。敏感凭据不走这里，后续用 safeStorage 单独加密。
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { app } from 'electron'
 import { DEFAULT_SETTINGS, type AppSettings, type DeepPartial } from '@common'
 import { appDataPath } from '../core/paths'
 
 let cache: AppSettings | null = null
+let volumeTimer: ReturnType<typeof setTimeout> | null = null
+app.on('before-quit', () => {
+  if (!volumeTimer || !cache) return
+  clearTimeout(volumeTimer)
+  volumeTimer = null
+  persist(cache)
+})
 
 function filePath(): string {
   return appDataPath('settings.json')
@@ -68,7 +76,26 @@ export function getSettings(): AppSettings {
 }
 
 export function updateSettings(patch: DeepPartial<AppSettings>): AppSettings {
-  cache = deepMerge(getSettings(), patch) as AppSettings
-  persist(cache)
+  const next = deepMerge(getSettings(), patch) as AppSettings
+  if (volumeTimer) clearTimeout(volumeTimer)
+  volumeTimer = null
+  const onlyVolume =
+    Object.keys(patch).length === 1 &&
+    patch.player &&
+    Object.keys(patch.player).every((key) => key === 'volume' || key === 'muted')
+  if (onlyVolume) {
+    cache = next
+    volumeTimer = setTimeout(() => {
+      volumeTimer = null
+      try {
+        persist(getSettings())
+      } catch (e) {
+        console.error('[settings] 无法保存音量', e)
+      }
+    }, 300)
+  } else {
+    persist(next)
+    cache = next
+  }
   return cache
 }

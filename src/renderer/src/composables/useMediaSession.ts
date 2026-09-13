@@ -1,6 +1,8 @@
 import { watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { usePlayerStore } from '../stores/player'
+import { useSettingsStore } from '../stores/settings'
+import { useLibraryStore } from '../stores/library'
 import { coverUrl } from '../utils/cover'
 
 /**
@@ -75,7 +77,7 @@ export function useMediaSession(): void {
         position: Math.min(Math.max(currentTime.value / 1000, 0), dur),
         // 恒为 1：playbackRate 传 0 会被 Chromium 判为非法（TypeError）。
         // 暂停时不外推进度靠 playbackState='paused' 表达，故先同步播放态再报进度。
-        playbackRate: 1
+        playbackRate: useSettingsStore().settings.player.playbackRate
       })
     } catch {
       /* setPositionState 对非法值抛错，忽略 */
@@ -106,6 +108,15 @@ export function useMediaSession(): void {
     if (cmd === 'playpause') player.toggle()
     else if (cmd === 'next') player.next()
     else if (cmd === 'prev') player.prev()
+    else if (cmd === 'volumeUp') player.setVolume(player.volume + 0.04)
+    else if (cmd === 'volumeDown') player.setVolume(player.volume - 0.04)
+    else if (cmd === 'mute') player.toggleMute()
+    else if (cmd === 'seekForward') player.seek(player.currentTime + 5000)
+    else if (cmd === 'seekBackward') player.seek(Math.max(0, player.currentTime - 5000))
+    else if (cmd === 'favorite' && player.current)
+      void useLibraryStore().toggleFavorite(player.current)
+    else if (cmd === 'desktopLyric')
+      void window.api.desktopLyric.toggle(!useSettingsStore().settings.lyrics.desktopEnabled)
   })
 
   watch(current, updateMetadata, { immediate: true })
@@ -121,6 +132,7 @@ export function useMediaSession(): void {
     { immediate: true }
   )
   watch(duration, updatePositionState)
+  watch(() => useSettingsStore().settings.player.playbackRate, updatePositionState)
   // 进度大跳变（seek）时同步一次；平稳播放交给系统外推，避免高频调用
   let last = 0
   watch(currentTime, (t) => {

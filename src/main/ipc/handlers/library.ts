@@ -11,11 +11,15 @@ import {
 } from '@common'
 import { handle, sendToRenderer } from '../helpers'
 import * as library from '../../store/library'
+import { importRemotePlaylist, refreshRemotePlaylist } from '../../modules/playlist-refresh'
 import { parseLocalSong, pickLocalSongs } from '../../modules/local-music'
 
 let wired = false
 
 export function registerLibraryHandlers(): void {
+  handle(IpcChannels.LIBRARY_AUTO_REFRESH, library.setAutoRefresh)
+  handle(IpcChannels.LIBRARY_REFRESH_REMOTE, refreshRemotePlaylist)
+  handle(IpcChannels.LIBRARY_IMPORT_REMOTE, importRemotePlaylist)
   library.initLibrary()
 
   // 变更广播（等价 Android 的 playlistsFlow / favoritesFlow）

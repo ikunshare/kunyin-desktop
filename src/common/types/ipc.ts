@@ -7,6 +7,7 @@
  *
  * 各域方法随分阶段实施逐步补齐；Phase 0 先立骨架（app/settings 真实实现，search/player 占位）。
  */
+import type { LogEntry, LogFileInfo } from './log'
 import type { KgLyricCandidate, Lyric, MusicItem, MusicSource } from './music'
 import type {
   AlbumInfoResult,
@@ -16,6 +17,7 @@ import type {
   ArtistMvResult,
   ArtistSearchResult,
   AudioStreamResult,
+  CommentResult,
   MediaInfoResult,
   MusicListResult,
   MvQuality,
@@ -23,9 +25,16 @@ import type {
   PlayListInfoResult,
   PlaylistSearchResult
 } from './provider'
+import type { ChartInfo, PlaylistCategory } from './provider'
 import type { AppSettings, AuthState, CacheKind, CacheStats, ProxyStatus } from './settings'
 import type { LocalPlaylist } from './library'
 import type { AddDownloadInput, DownloadTask } from './download'
+
+/** QQ 听歌上报事件（渲染层 → 主进程） */
+export type QQReportEvent =
+  | { kind: 'listening'; item: MusicItem; playTimeMs: number; playList: number[] }
+  | { kind: 'recently'; item: MusicItem }
+  | { kind: 'stream'; item: MusicItem; playTimeSec: number }
 
 export const IpcChannels = {
   // 应用
@@ -62,6 +71,12 @@ export const IpcChannels = {
   PLAYER_STREAM: 'player:stream',
   PLAYER_LYRIC: 'player:lyric',
   PLAYER_URL_INVALIDATE: 'player:urlInvalidate',
+  PLAYER_QQ_REPORT: 'player:qqReport',
+
+  // 歌曲评论
+  COMMENT_NEW: 'comment:new',
+  COMMENT_HOT: 'comment:hot',
+  COMMENT_SUPPORTED: 'comment:supported',
 
   // 卡密激活
   AUTH_GET: 'auth:get',
@@ -75,6 +90,9 @@ export const IpcChannels = {
   LIBRARY_DELETE_PLAYLIST: 'library:deletePlaylist',
   LIBRARY_RENAME_PLAYLIST: 'library:renamePlaylist',
   LIBRARY_ADD_TO_PLAYLIST: 'library:addToPlaylist',
+  LIBRARY_AUTO_REFRESH: 'library:autoRefresh',
+  LIBRARY_REFRESH_REMOTE: 'library:refreshRemote',
+  LIBRARY_IMPORT_REMOTE: 'library:importRemote',
   LIBRARY_REMOVE_FROM_PLAYLIST: 'library:removeFromPlaylist',
   LIBRARY_MOVE_SONG: 'library:moveSong',
   LIBRARY_MOVE_PLAYLIST: 'library:movePlaylist',
@@ -96,6 +114,10 @@ export const IpcChannels = {
 
   // 发现（走 Provider：歌单/专辑/歌手 详情 + 搜索）
   DISCOVER_PLAYLIST_INFO: 'discover:playlistInfo',
+  DISCOVER_CHARTS: 'discover:charts',
+  DISCOVER_CHART_SONGS: 'discover:chartSongs',
+  DISCOVER_CATEGORIES: 'discover:categories',
+  DISCOVER_PLAYLISTS: 'discover:playlists',
   DISCOVER_PLAYLIST_SONGS: 'discover:playlistSongs',
   DISCOVER_ALBUM_INFO: 'discover:albumInfo',
   DISCOVER_ALBUM_SONGS: 'discover:albumSongs',
@@ -114,6 +136,7 @@ export const IpcChannels = {
 
   // 系统媒体控制（主 → 渲染 命令：全局媒体键/托盘触发）
   MEDIA_COMMAND: 'media:command',
+  MEDIA_SHORTCUT_STATUS: 'media:shortcutStatus',
   /** 渲染 → 主：推送播放状态（用于更新任务栏缩略图工具栏的播放/暂停按钮） */
   MEDIA_SET_STATE: 'media:setState',
 
@@ -122,6 +145,8 @@ export const IpcChannels = {
   DESKTOP_LYRIC_PUSH: 'desktopLyric:push', // 主窗口 → 主：推送歌词/进度/播放态
   DESKTOP_LYRIC_STATE: 'desktopLyric:state', // 主 → 歌词窗口：转发状态
   DESKTOP_LYRIC_SET_LOCK: 'desktopLyric:setLock', // 歌词窗口 → 主：锁定（点击穿透）
+  DESKTOP_LYRIC_SEEK: 'desktopLyric:seek', // 歌词窗口 → 主：点击歌词行请求跳转（ms）
+  DESKTOP_LYRIC_SEEK_REQUEST: 'desktopLyric:seekRequest', // 主 → 主窗口：执行跳转（ms）
 
   // 下载
   DOWNLOAD_ADD: 'download:add',
@@ -141,6 +166,9 @@ export const IpcChannels = {
   ACCOUNT_LIST: 'account:list', // 各平台登录态
   ACCOUNT_LOGOUT: 'account:logout',
   ACCOUNT_KG_SAVE: 'account:kgSave', // 酷狗手动填凭据
+  ACCOUNT_KG_QR_CREATE: 'account:kgQrCreate', // kg 扫码：申请二维码
+  ACCOUNT_KG_QR_POLL: 'account:kgQrPoll', // kg 扫码：轮询状态
+  ACCOUNT_KG_QR_STOP: 'account:kgQrStop', // kg 扫码：放弃当前二维码会话
   ACCOUNT_WY_QR_CREATE: 'account:wyQrCreate', // wy 扫码：申请二维码
   ACCOUNT_WY_QR_POLL: 'account:wyQrPoll', // wy 扫码：轮询状态
   ACCOUNT_QQ_QR_START: 'account:qqQrStart', // qq 扫码：申请二维码并起 WS 监听
@@ -165,6 +193,14 @@ export const IpcChannels = {
   BACKUP_PICK_SAVE: 'backup:pickSave', // 选保存路径（返回路径或 null）
   BACKUP_PICK_OPEN: 'backup:pickOpen', // 选打开文件（返回路径或 null）
 
+  // 日志 / 开发者工具（Release 包同样可用，用于线上排查）
+  LOG_WRITE: 'log:write', // 渲染 → 主：转发一条渲染层日志（send，不等回执）
+  LOG_INFO: 'log:info', // 日志文件概况
+  LOG_RECENT: 'log:recent', // 内存里最近若干条
+  LOG_DUMP: 'log:dump', // 导出最近日志为独立文件，返回路径
+  LOG_OPEN_DIR: 'log:openDir', // 在文件管理器中打开日志目录
+  DEVTOOLS_TOGGLE: 'devtools:toggle', // 开/关当前窗口的开发者工具
+
   // 自动更新
   UPDATER_CHECK: 'updater:check',
   UPDATER_DOWNLOAD: 'updater:download',
@@ -181,7 +217,17 @@ export type DeepPartial<T> = T extends object ? { [K in keyof T]?: DeepPartial<T
 export type Unsubscribe = () => void
 
 /** 系统媒体命令（全局媒体键 / 托盘 → 渲染层播放器） */
-export type MediaCommand = 'playpause' | 'next' | 'prev'
+export type MediaCommand =
+  | 'playpause'
+  | 'next'
+  | 'prev'
+  | 'volumeUp'
+  | 'volumeDown'
+  | 'mute'
+  | 'seekForward'
+  | 'seekBackward'
+  | 'favorite'
+  | 'desktopLyric'
 
 /** 歌单内排序字段（LX 排序歌曲） */
 export type PlaylistSortField = 'title' | 'artist' | 'album' | 'duration' | 'source'
@@ -291,6 +337,17 @@ export interface KgManualCreds {
   dfid?: string
 }
 
+/** kg 扫码二维码信息（内容为一串 URL，图片由渲染层生成） */
+export interface KgQRCode {
+  url: string
+  ticket: string
+}
+
+/** kg 扫码轮询结果 */
+export interface KgQRPoll {
+  status: 'waiting' | 'success' | 'expired' | 'error'
+}
+
 /** wy 扫码二维码信息 */
 export interface WyQRCode {
   unikey: string
@@ -357,6 +414,22 @@ export interface WindowApi {
     clear(kind: CacheKind): Promise<CacheStats>
   }
 
+  /** 日志与开发者工具（Release 包同样可用） */
+  log: {
+    /** 把一条渲染层日志送到主进程统一落盘（fire-and-forget） */
+    write(entry: LogEntry): void
+    /** 日志目录与占用概况 */
+    info(): Promise<LogFileInfo>
+    /** 内存里最近若干条（新→旧） */
+    recent(limit?: number): Promise<LogEntry[]>
+    /** 导出最近日志为独立文件，返回路径；失败为 null */
+    dump(): Promise<string | null>
+    /** 在系统文件管理器中打开日志目录 */
+    openDir(): Promise<void>
+    /** 开/关当前主窗口的开发者工具（等效 Ctrl+F12） */
+    toggleDevTools(): Promise<void>
+  }
+
   search: {
     songs(
       source: MusicSource,
@@ -376,6 +449,23 @@ export interface WindowApi {
     lyric(item: MusicItem): Promise<Lyric>
     /** 播放失败时上报，使该曲该音质的 URL 缓存失效（下次重新解析） */
     invalidateUrl(item: MusicItem, qualityId: string): Promise<void>
+    /**
+     * QQ 音乐听歌上报（仅 QQ 曲目、已登录、设置开启时有效；失败静默）。
+     * - listening：听歌记录，playTimeMs 为当前播放位置，playList 为队列里 QQ 曲目 id
+     * - recently：同步到 QQ 音乐客户端「最近播放」
+     * - stream：播放流水，playTimeSec 为本段实际播放秒数
+     */
+    qqReport(event: QQReportEvent): Promise<boolean>
+  }
+
+  /** 歌曲评论（播放页评论面板） */
+  comment: {
+    /** 该音源是否支持评论（不支持时面板显示占位） */
+    supported(source: MusicSource): Promise<boolean>
+    /** 最新评论 */
+    latest(item: MusicItem, page?: number, limit?: number): Promise<CommentResult>
+    /** 热门评论 */
+    hot(item: MusicItem, page?: number, limit?: number): Promise<CommentResult>
   }
 
   /** 卡密激活（authst） */
@@ -399,6 +489,15 @@ export interface WindowApi {
     deletePlaylist(playlistId: number): Promise<void>
     renamePlaylist(playlistId: number, newName: string): Promise<void>
     addToPlaylist(playlistId: number, item: MusicItem): Promise<void>
+    setAutoRefresh(playlistId: number, enabled: boolean): Promise<void>
+    refreshRemote(playlistId: number): Promise<number>
+    importRemote(
+      source: MusicSource,
+      id: string,
+      name: string,
+      chart?: boolean,
+      period?: string
+    ): Promise<number>
     removeFromPlaylist(playlistId: number, item: MusicItem): Promise<void>
     moveSong(playlistId: number, item: MusicItem, newPosition: number): Promise<void>
     /** 重排自建歌单顺序（左栏拖拽）；targetIndex 为在自建歌单序列中的目标位置 */
@@ -434,6 +533,22 @@ export interface WindowApi {
 
   /** 发现：走 Provider 的歌单/专辑/歌手 详情与搜索 */
   discover: {
+    charts(source: MusicSource): Promise<ChartInfo[]>
+    chartSongs(
+      source: MusicSource,
+      id: string,
+      page: number,
+      size: number,
+      period?: string
+    ): Promise<MusicListResult>
+    categories(source: MusicSource): Promise<PlaylistCategory[]>
+    playlists(
+      source: MusicSource,
+      category: string,
+      order: string,
+      page: number,
+      size: number
+    ): Promise<PlaylistSearchResult>
     playlistInfo(source: MusicSource, input: string): Promise<PlayListInfoResult | null>
     playlistSongs(
       source: MusicSource,
@@ -506,6 +621,7 @@ export interface WindowApi {
 
   /** 系统媒体控制（接收主进程的全局媒体键/托盘命令） */
   media: {
+    shortcutStatus(): Promise<Record<string, string>>
     /** 订阅播放命令（playpause/next/prev），返回取消订阅 */
     onCommand(cb: (cmd: MediaCommand) => void): Unsubscribe
     /** 推送播放状态给主进程（更新任务栏缩略图工具栏的播放/暂停按钮） */
@@ -522,6 +638,10 @@ export interface WindowApi {
     onState(cb: (state: DesktopLyricState) => void): Unsubscribe
     /** 悬浮窗设置锁定（点击穿透）（歌词窗口用） */
     setLock(locked: boolean): void
+    /** 悬浮窗点击歌词行请求跳转到指定毫秒（歌词窗口用） */
+    seek(ms: number): void
+    /** 主窗口订阅悬浮窗发来的跳转请求，返回取消订阅（主窗口用） */
+    onSeekRequest(cb: (ms: number) => void): Unsubscribe
   }
 
   /** 下载队列 */
@@ -550,8 +670,14 @@ export interface WindowApi {
     /** 各平台登录态（含昵称/头像） */
     list(): Promise<AccountStatus[]>
     logout(provider: AccountProvider): Promise<void>
-    /** 酷狗手动填凭据（桌面无 native 签名库，仅支持手填） */
+    /** 酷狗手动填凭据（扫码之外的兜底入口） */
     kgSave(creds: KgManualCreds): Promise<void>
+    /** kg 扫码：申请二维码 */
+    kgQrCreate(): Promise<KgQRCode | null>
+    /** kg 扫码：轮询状态（success 时凭据已保存） */
+    kgQrPoll(ticket: string): Promise<KgQRPoll>
+    /** kg 扫码：放弃当前二维码会话（关窗时调用） */
+    kgQrStop(): Promise<void>
     /** wy 扫码：申请二维码 */
     wyQrCreate(): Promise<WyQRCode | null>
     /** wy 扫码：轮询状态（success 时凭据已保存） */

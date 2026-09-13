@@ -14,6 +14,7 @@ import {
   type ArtistMvItem,
   type ArtistMvResult,
   type ArtistSearchResult,
+  type CommentResult,
   type Lyric,
   type MusicItem,
   type MusicListResult,
@@ -26,10 +27,10 @@ import {
 import { BaseProvider } from '../base'
 import { requestJson } from '../../net/request'
 import { num, parseTrackInfo, stripEm } from './item'
+import { qqComm } from './comm'
 import { zzcSign } from './sign'
 import { decodeLegacyLyric, isLyricEmpty, parseTxLyric } from './lyric'
-
-const GUID = '1F70E520B2EAA7D25E11760783C53CA9'
+import { qqGetComment, qqGetHotComment } from './comment'
 
 function pcSearchId(): string {
   const uuid = randomUUID().replace(/-/g, '').toUpperCase()
@@ -68,50 +69,16 @@ export class QqProvider extends BaseProvider {
   readonly source = 'qq' as const
   readonly displayName = 'QQ音乐'
 
-  private authComm(base: any): any {
-    const creds = this.credentials as any
-    if (!creds) return base
-    return { ...base, uin: creds.uin ?? '0', authst: creds.authst ?? '' }
-  }
-  private stdComm(): any {
-    return this.authComm({
-      ct: '11',
-      cv: '14090508',
-      v: '14090508',
-      tmeAppID: 'qqmusic',
-      uin: '0',
-      authst: ''
-    })
-  }
-  private wkComm(): any {
-    return this.authComm({
-      format: 'json',
-      ct: 20,
-      cv: 2151,
-      platform: 'wk_v17',
-      uid: '6660007954',
-      guid: GUID
-    })
-  }
-
   async search(keyword: string, page = 0, size = 20): Promise<MusicListResult> {
     // 源码走 musicu.fcg 的 music.search.SearchCgiService（旧 client_search_cp 端点对数据中心 IP 常年空）。
     const req = {
-      comm: this.authComm({
-        _channelid: '0',
-        _os_version: '6.2.9200-2',
-        ct: '19',
-        cv: '2151',
-        guid: GUID,
-        patch: '118',
+      comm: qqComm('search', this.credentials, {
         psrf_access_token_expiresAt: 0,
         psrf_qqaccess_token: '',
         psrf_qqopenid: '',
         psrf_qqunionid: '',
-        tmeAppID: 'qqmusic',
         tmeLoginType: 0,
-        uin: '0',
-        wid: '7223299733393904640'
+        uin: '0'
       }),
       'music.search.SearchCgiService': {
         module: 'music.search.SearchCgiService',
@@ -141,7 +108,7 @@ export class QqProvider extends BaseProvider {
 
   async getHotSearch(): Promise<string[]> {
     const req = {
-      comm: { ct: 19, cv: 1803, uin: 0 },
+      comm: qqComm('hotkey'),
       hotkey: {
         module: 'tencent_musicsoso_hotkey.HotkeyService',
         method: 'GetHotkeyForQQMusicPC',
@@ -157,7 +124,7 @@ export class QqProvider extends BaseProvider {
 
   async getSearchTip(keyword: string): Promise<string[]> {
     const req = {
-      comm: { ct: 20, cv: 1859, uin: '0', format: 'json', platform: 'yqq' },
+      comm: qqComm('smartbox'),
       req: {
         module: 'tencent_music_soso_smartbox_cgi.SmartBoxCgi',
         method: 'GetSmartBoxResultForXiaomi',
@@ -173,21 +140,7 @@ export class QqProvider extends BaseProvider {
 
   async searchAlbum(keyword: string, page = 0, size = 20): Promise<AlbumSearchResult> {
     const req = {
-      comm: this.authComm({
-        _channelid: '0',
-        _os_version: '6.2.9200-2',
-        ct: '19',
-        cv: '2111',
-        guid: GUID,
-        patch: '118',
-        psrf_access_token_expiresAt: 0,
-        psrf_qqaccess_token: '',
-        psrf_qqopenid: '',
-        psrf_qqunionid: '',
-        tmeAppID: 'qqmusic',
-        tmeLoginType: 0,
-        wid: '7192224010323313664'
-      }),
+      comm: qqComm('searchAlbum', this.credentials),
       'music.search.SearchCgiService': {
         module: 'music.search.SearchCgiService',
         method: 'DoSearchForQQMusicDesktop',
@@ -214,16 +167,7 @@ export class QqProvider extends BaseProvider {
 
   async searchArtist(keyword: string, page = 0, size = 20): Promise<ArtistSearchResult> {
     const req = {
-      comm: this.authComm({
-        _channelid: '0',
-        _os_version: '6.2.9200-2',
-        ct: '19',
-        cv: '2151',
-        guid: GUID,
-        patch: '118',
-        tmeAppID: 'qqmusic',
-        wid: '7223299733393904640'
-      }),
+      comm: qqComm('search', this.credentials),
       'music.search.SearchCgiService': {
         module: 'music.search.SearchCgiService',
         method: 'DoSearchForQQMusicDesktop',
@@ -252,7 +196,7 @@ export class QqProvider extends BaseProvider {
     const dissId = this.extractDissId(input)
     if (!dissId) return null
     const req = {
-      comm: this.stdComm(),
+      comm: qqComm('asset', this.credentials),
       req: {
         module: 'music.srfDissInfo.DissInfo',
         method: 'CgiGetDiss',
@@ -288,7 +232,7 @@ export class QqProvider extends BaseProvider {
 
   async getPlayListSongs(playListId: string, page = 0, size = 30): Promise<MusicListResult> {
     const req = {
-      comm: this.stdComm(),
+      comm: qqComm('asset', this.credentials),
       req: {
         module: 'music.srfDissInfo.DissInfo',
         method: 'CgiGetDiss',
@@ -345,7 +289,7 @@ export class QqProvider extends BaseProvider {
 
   async getArtistInfo(singerMid: string): Promise<ArtistInfoResult | null> {
     const req = {
-      comm: this.wkComm(),
+      comm: qqComm('wk', this.credentials),
       req_0: {
         module: 'music.musichallSinger.SingerInfoInter',
         method: 'GetSingerDetail',
@@ -401,7 +345,7 @@ export class QqProvider extends BaseProvider {
 
   async getArtistAlbums(singerMid: string, page = 0, size = 30): Promise<AlbumSearchResult> {
     const req = {
-      comm: this.wkComm(),
+      comm: qqComm('wk', this.credentials),
       req_0: {
         module: 'music.musichallAlbum.AlbumListServer',
         method: 'GetAlbumList',
@@ -432,7 +376,7 @@ export class QqProvider extends BaseProvider {
 
   async getArtistMvs(singerMid: string, page = 0, size = 40): Promise<ArtistMvResult> {
     const req = {
-      comm: this.wkComm(),
+      comm: qqComm('wk', this.credentials),
       req_1: {
         module: 'MvService.MvInfoProServer',
         method: 'GetSingerMvList',
@@ -479,16 +423,7 @@ export class QqProvider extends BaseProvider {
 
   async getArtistSongs(singerMid: string, page = 0, size = 30): Promise<MusicListResult> {
     const req = {
-      comm: this.authComm({
-        g_tk: 5381,
-        uin: 0,
-        format: 'json',
-        ct: 20,
-        cv: 2151,
-        platform: 'wk_v17',
-        uid: '6660007954',
-        guid: GUID
-      }),
+      comm: qqComm('wkSongs', this.credentials),
       req_0: {
         module: 'music.musichallSong.SongListInter',
         method: 'GetSingerSongList',
@@ -507,7 +442,7 @@ export class QqProvider extends BaseProvider {
 
   async getUserInfo(): Promise<UserInfo | null> {
     const req = {
-      comm: this.stdComm(),
+      comm: qqComm('asset', this.credentials),
       req: {
         module: 'music.UnifiedHomepage.UnifiedHomepageSrv',
         method: 'GetHomepageHeader',
@@ -528,14 +463,7 @@ export class QqProvider extends BaseProvider {
     if (!euin) return []
 
     const reqData = {
-      comm: {
-        ct: '11',
-        cv: '14090508',
-        v: '14090508',
-        tmeAppID: 'qqmusic',
-        uin: creds.uin,
-        authst: creds.authst ?? ''
-      },
+      comm: qqComm('asset', creds),
       req1: {
         module: 'music.musicasset.PlaylistBaseRead',
         method: 'GetPlaylistByUin',
@@ -583,13 +511,7 @@ export class QqProvider extends BaseProvider {
   // —— MV ——（移植 QQProvider.getMvQualities/getMvUrl，走签名 musics.fcg）
   private async fetchQqMvMp4Array(vid: string): Promise<any[] | null> {
     const req = {
-      comm: this.authComm({
-        ct: 11,
-        cv: '21030600',
-        v: '1003006',
-        tmeAppID: 'qqmusiclight',
-        tmeLoginType: '2'
-      }),
+      comm: qqComm('mv', this.credentials),
       request: {
         module: 'gosrf.Stream.MvUrlProxy',
         method: 'GetMvUrls',
@@ -662,7 +584,7 @@ export class QqProvider extends BaseProvider {
   }
   private async fetchSongDetail(songId: number, songMid: string): Promise<QQMusicItem | null> {
     const req = {
-      comm: { ct: '19', cv: '1859', uin: '0' },
+      comm: qqComm('songDetail'),
       req: {
         module: 'music.pf_song_detail_svr',
         method: 'get_song_detail_yqq',
@@ -688,7 +610,7 @@ export class QqProvider extends BaseProvider {
 
   private async fetchQqLyric(songId: number): Promise<Lyric> {
     const req = {
-      comm: this.authComm({ ct: 19, cv: 1, uin: 0 }),
+      comm: qqComm('lyric', this.credentials),
       req: {
         method: 'GetPlayLyricInfo',
         module: 'music.musichallSong.PlayLyricInfo',
@@ -735,16 +657,7 @@ export class QqProvider extends BaseProvider {
   // —— 私有 ——
   private async fetchAlbumPayload(albumMid: string): Promise<any | null> {
     const req = {
-      comm: this.authComm({
-        g_tk: 5381,
-        uin: 0,
-        format: 'json',
-        ct: 20,
-        cv: 2111,
-        platform: 'wk_v17',
-        uid: '6660007954',
-        guid: GUID
-      }),
+      comm: qqComm('wkAlbum', this.credentials),
       req_1: {
         module: 'music.musichallAlbum.AlbumInfoServer',
         method: 'GetAlbumDetail',
@@ -795,5 +708,16 @@ export class QqProvider extends BaseProvider {
       if (m) return m[1]
     }
     return null
+  }
+
+  // —— 评论 ——
+  supportsComment(): boolean {
+    return true
+  }
+  async getComment(item: MusicItem, page = 1, limit = 20): Promise<CommentResult> {
+    return qqGetComment(item, page, limit)
+  }
+  async getHotComment(item: MusicItem, page = 1, limit = 20): Promise<CommentResult> {
+    return qqGetHotComment(item, page, limit)
   }
 }

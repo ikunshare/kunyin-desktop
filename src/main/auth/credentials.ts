@@ -104,6 +104,23 @@ export function getCredential(key: CredProviderKey): ProviderCredentials | null 
   return store.get(key) ?? null
 }
 
+/**
+ * 启动后静默续期各平台登录态（对应 Android SoundApplication 的启动刷新）。
+ * 酷狗 token 会过期，续期失败不清凭据——可能只是暂时没网。
+ */
+export function scheduleLoginRefresh(delayMs = 5000): void {
+  setTimeout(() => {
+    for (const key of loggedInKeys()) {
+      void getProvider(key)
+        ?.refreshLogin()
+        .then((refreshed) => {
+          if (refreshed) saveCredential(key, refreshed)
+        })
+        .catch(() => {})
+    }
+  }, delayMs).unref()
+}
+
 /** 已登录的平台 key 列表。 */
 export function loggedInKeys(): CredProviderKey[] {
   ensureLoaded()

@@ -7,6 +7,11 @@ import App from './App.vue'
 import { router, getLastRoute } from './router'
 import { applyTheme, initTheme, setCustomThemes } from './theme/apply'
 import { applyAppFont } from './composables/useFonts'
+import { createLogger, installGlobalErrorHandlers } from './utils/logger'
+
+// 尽可能早：入口脚本本身出错也要留下记录。此刻设置未载入，先按默认 info 级别，
+// settings store 载入后会调 setRendererLogLevel 校准。
+installGlobalErrorHandlers()
 
 // OS class + 语言（驱动字体栈），并同步注入主题变量（首屏无闪烁）。
 // preload 已同步读取 settings.json 的外观段；读不到时回退默认绿色。
@@ -36,9 +41,22 @@ if (initialAppearance) {
   initTheme('green')
 }
 
+const log = createLogger('vue')
 const app = createApp(App).use(createPinia()).use(router)
+
+// Vue 组件内抛出的错误默认只在控制台留一行，Release 下等于没有；统一进日志文件
+app.config.errorHandler = (err, _instance, info) => {
+  log.error('组件错误', err, { hook: info })
+}
+app.config.warnHandler = (msg, _instance, trace) => {
+  log.warn('组件警告', { msg, trace: trace.slice(0, 600) })
+}
+router.onError((err, to) => {
+  log.error('路由跳转失败', err, { to: to.fullPath })
+})
 
 // 恢复上次停留的页面（在挂载前排队导航，router.isReady 会以它为准）
 const lastRoute = getLastRoute()
 if (lastRoute) void router.replace(lastRoute)
 app.mount('#app')
+log.info('渲染层已挂载', { route: lastRoute ?? '/', zoom: initialAppearance?.fontSize ?? 16 })

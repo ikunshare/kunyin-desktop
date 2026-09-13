@@ -152,3 +152,43 @@ export function parseMusicPayItem(s: any): KuwoMusicItem | null {
     )
   }
 }
+
+/**
+ * 排行榜 `bang_info` 与歌单 `pl.svc` 的曲目（两者字段基本一致，只是 minfo 键名大小写不同）。
+ * duration 为秒；封面字段可能缺失，由调用方 fetchCovers 补。
+ */
+export function parseKwListSong(o: any): KuwoMusicItem | null {
+  const id = num(String(o?.id ?? o?.musicrid ?? '').replace('MUSIC_', ''), 0)
+  if (!id) return null
+  const name = o.name ?? o.songname
+  if (!name) return null
+  const minfo = o.n_minfo ?? o.N_MINFO ?? o.minfo ?? o.MINFO
+  if (!minfo) return null
+  const qualities = parseMinfo(unescapeXml(String(minfo)))
+  if (!Object.keys(qualities).length) return null
+  const artist = unescapeXml(String(o.artist ?? ''))
+  const singers = splitSingers(
+    artist,
+    o.allartistid != null
+      ? String(o.allartistid)
+      : o.artistid != null
+        ? String(o.artistid)
+        : undefined
+  )
+  const albumId = o.albumId ?? o.albumid
+  const pic = o.pic ?? o.albumPic ?? o.pic120 ?? ''
+  const vid = o.mvid ?? o.vid
+  return {
+    type: 'kw',
+    id,
+    title: unescapeXml(String(name)),
+    artist,
+    album: unescapeXml(String(o.album ?? '')),
+    albumId: albumId != null && String(albumId) !== '0' ? String(albumId) : undefined,
+    cover: pic ? String(pic).replace('albumcover/120', 'albumcover/500') : '',
+    duration: num(o.duration, 0) * 1000,
+    qualities,
+    singers: singers.length ? singers : undefined,
+    mvid: vid && String(vid) !== '0' ? String(vid) : undefined
+  }
+}

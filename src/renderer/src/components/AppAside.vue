@@ -6,6 +6,8 @@ import AppIcon from './AppIcon.vue'
 // components/layout/Aside/{index.vue, NavBar.vue}：文字 logo + 满宽近方形导航项。
 const navItems = [
   { name: 'search', label: '搜索', icon: 'search' },
+  { name: 'discover', label: '发现歌单', icon: 'compass' },
+  { name: 'charts', label: '排行榜', icon: 'chart' },
   { name: 'playlists', label: '歌单', icon: 'library' },
   { name: 'download', label: '下载', icon: 'download' },
   { name: 'settings', label: '设置', icon: 'settings' }

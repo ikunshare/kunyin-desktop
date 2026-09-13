@@ -215,3 +215,42 @@ export const FONT_SIZE_LIST: readonly { id: number; name: string }[] = [
   { id: 18, name: '更大' },
   { id: 19, name: '非常大' }
 ] as const
+
+// ============ 发现（排行榜 / 热门歌单） ============
+
+/** 支持排行榜与热门歌单的平台（对齐 LX：kw/kg/tx/wy；咪咕不做） */
+export const DISCOVER_SOURCES: readonly MusicSource[] = ['wy', 'qq', 'kg', 'kw'] as const
+
+export interface PlaylistSortOption {
+  id: string
+  name: string
+}
+
+/** 热门歌单排序项（各平台 id 直接对应其接口参数，取自 LX 各 songList.sortList） */
+export const PLAYLIST_SORTS: Partial<Record<MusicSource, PlaylistSortOption[]>> = {
+  // 网易云 playlist/list 的 order=new 实测返回空列表（LX 也只保留了最热）
+  wy: [{ id: 'hot', name: '最热' }],
+  qq: [
+    { id: '5', name: '最热' },
+    { id: '2', name: '最新' }
+  ],
+  kg: [
+    { id: '5', name: '推荐' },
+    { id: '6', name: '最热' },
+    { id: '7', name: '最新' },
+    { id: '3', name: '热藏' },
+    { id: '8', name: '飙升' }
+  ],
+  kw: [
+    { id: 'hot', name: '最热' },
+    { id: 'new', name: '最新' }
+  ]
+}
+
+/** 选了分类后排序仍然生效的平台（QQ/酷我的分类接口没有排序参数） */
+export const PLAYLIST_CATEGORY_SORTABLE: Partial<Record<MusicSource, boolean>> = {
+  wy: true,
+  qq: false,
+  kg: true,
+  kw: false
+}

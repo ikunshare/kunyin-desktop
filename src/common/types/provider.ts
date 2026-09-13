@@ -21,6 +21,8 @@ export interface MusicListResult {
   page: number
   size: number
   result: MusicItem[]
+  /** 已知总曲数（排行榜/歌单分页用；接口不给时缺省） */
+  total?: number
   /** 同步/导入场景：跳过的本地歌曲数 */
   skippedLocalSongs?: number
 }
@@ -111,8 +113,22 @@ export interface PlaylistSearchResult {
   source: MusicSource
   hasNext: boolean
   page: number
+  /** 实际每页条数（酷狗由服务端决定，可能与请求值不同） */
   size: number
+  /** 已知总数（用于分页条；接口不给时缺省） */
+  total?: number
   result: PlayListInfoResult[]
+}
+
+export interface PlaylistCategory {
+  id: string
+  name: string
+  group: string
+}
+
+export interface ChartInfo extends PlayListInfoResult {
+  period?: string
+  updateFrequency?: string
 }
 
 export interface AlbumSearchResult {
@@ -181,4 +197,39 @@ export interface UserInfo {
   nickname: string
   avatar?: string
   vipType?: string
+}
+
+/**
+ * 一条评论（对应 LX 的 comment 结构，各音源在 Provider 内归一化到此形状）。
+ *
+ * 「楼层」结构：wy/kg 把「被回复的原评论」提成父级、把本条塞进 reply；
+ * qq/kw 则本就是「主评论 + 子评论」。渲染层按 reply 递归即可，无需区分音源。
+ */
+export interface CommentItem {
+  id: string
+  text: string
+  /** 发布时间（毫秒），未知为 0 */
+  time: number
+  /** 已格式化的时间文案，空串表示不显示 */
+  timeStr: string
+  userName: string
+  avatar?: string
+  userId?: string
+  /** IP 归属地，无则不显示 */
+  location?: string
+  /** 点赞数；null 表示该条不展示点赞（如被回复的原评论占位） */
+  likedCount: number | null
+  /** 评论配图 */
+  images?: string[]
+  reply: CommentItem[]
+}
+
+/** 评论分页结果 */
+export interface CommentResult {
+  source: MusicSource
+  comments: CommentItem[]
+  total: number
+  page: number
+  limit: number
+  maxPage: number
 }

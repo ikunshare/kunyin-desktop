@@ -1,3 +1,5 @@
+import { createLogger } from '../../core/logger'
+const log = createLogger('download')
 /**
  * 下载队列管理（1:1 移植自 Android manager/DownloadManager.kt，去掉 Android SAF/DocumentFile，
  * 用 Node fs）。
@@ -567,7 +569,7 @@ async function executeDownload(taskKey: string): Promise<void> {
         ...(embedLyricText ? { lyrics: embedLyricText } : {})
       })
     } catch (e) {
-      console.warn(`[download] 标签写入失败（非致命）: ${finalPath}`, e)
+      log.warn('标签写入失败（非致命）', e)
     }
 
     // 保存 .lrc 歌词文件（按设置的编码 utf8/gbk 写出）
@@ -607,6 +609,7 @@ async function executeDownload(taskKey: string): Promise<void> {
     if (controller.signal.aborted) {
       // 暂停/取消导致的中断，不标记为失败（状态已由 pause/cancel 设定）
     } else {
+      log.error('下载失败', e, { taskKey })
       patchTask(taskKey, {
         status: 'failed',
         speedBytesPerSec: 0,

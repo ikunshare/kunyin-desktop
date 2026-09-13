@@ -210,6 +210,11 @@ export function useLyricPlayer(): {
   credits: ShallowRef<LyricCredit[]>
   /** 是否在歌词末尾展示制作人信息（默认关闭；桌面歌词等紧凑宿主保持关闭） */
   setCreditsVisible: (visible: boolean) => void
+  /**
+   * 订阅「点击歌词行」——回调收到的是该行对应的**播放时钟**毫秒（已扣掉歌词偏移），
+   * 宿主可直接拿去 seek 音频。返回取消订阅。
+   */
+  onLineSeek: (cb: (ms: number) => void) => () => void
 } {
   const base = new BaseLyricPlayer()
   const dom = new DomLyricPlayer(base)
@@ -427,6 +432,35 @@ export function useLyricPlayer(): {
   base.event.add('play', onEnginePlay)
   base.event.add('pause', onEnginePause)
 
+  /** 点击行 → 跳转时间的订阅者 */
+  const lineSeekSubs = new Set<(ms: number) => void>()
+
+  /**
+   * 引擎的 lineClick 携带的是**内容时间**（歌词自己的时间轴）。
+   * 播放时钟要扣掉当前生效的偏移（全局 + meta + 临时），convertContentTime 就是干这个的，
+   * 否则设了歌词偏移后点击会跳偏一个偏移量。
+   */
+  const onLineClick = (line: Lyric.Parsed.ParsedLine): void => {
+    const start = Lyric.Parsed.getParsedLineTime(line)?.start
+    if (typeof start !== 'number' || !Number.isFinite(start)) return
+    const ms = Math.max(0, base.convertContentTime(start))
+    for (const cb of [...lineSeekSubs]) {
+      try {
+        cb(ms)
+      } catch (e) {
+        console.error('[lyric] 行点击跳转回调异常', e)
+      }
+    }
+  }
+  dom.event.add('lineClick', onLineClick)
+
+  function onLineSeek(cb: (ms: number) => void): () => void {
+    lineSeekSubs.add(cb)
+    return () => {
+      lineSeekSubs.delete(cb)
+    }
+  }
+
   function clear(): void {
     credits.value = []
     applyCredits()
@@ -537,6 +571,8 @@ export function useLyricPlayer(): {
   onUnmounted(() => {
     base.event.remove('play', onEnginePlay)
     base.event.remove('pause', onEnginePause)
+    dom.event.remove('lineClick', onLineClick)
+    lineSeekSubs.clear()
     dom.destroy()
   })
 
@@ -554,6 +590,7 @@ export function useLyricPlayer(): {
     relayout,
     playing,
     credits,
-    setCreditsVisible
+    setCreditsVisible,
+    onLineSeek
   }
 }

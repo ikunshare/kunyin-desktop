@@ -9,6 +9,7 @@ import {
   type ArtistInfoResult,
   type ArtistMvResult,
   type ArtistSearchResult,
+  type CommentResult,
   type Lyric,
   type MediaInfoResult,
   type MusicItem,
@@ -73,6 +74,13 @@ export abstract class BaseProvider {
   async getUserInfo(): Promise<UserInfo | null> {
     return null
   }
+  /**
+   * 续期登录态（对应 Android refreshLogin）。返回非 null 表示凭据有更新、
+   * 调用方应持久化；默认无操作。
+   */
+  async refreshLogin(): Promise<ProviderCredentials | null> {
+    return null
+  }
 
   // —— 专辑 / 歌手 ——
   async getAlbumInfo(_id: string): Promise<AlbumInfoResult | null> {
@@ -128,7 +136,24 @@ export abstract class BaseProvider {
     return null
   }
 
+  // —— 评论 ——
+  /** 是否支持评论（决定播放页评论面板是否可用） */
+  supportsComment(): boolean {
+    return false
+  }
+  /** 最新评论 */
+  async getComment(_item: MusicItem, page = 1, limit = 20): Promise<CommentResult> {
+    return this.emptyComment(page, limit)
+  }
+  /** 热门评论 */
+  async getHotComment(_item: MusicItem, page = 1, limit = 20): Promise<CommentResult> {
+    return this.emptyComment(page, limit)
+  }
+
   // —— helpers ——
+  protected emptyComment(page = 1, limit = 20): CommentResult {
+    return { source: this.source, comments: [], total: 0, page, limit, maxPage: 1 }
+  }
   protected emptyList(page = 0, size = 20): MusicListResult {
     return { source: this.source, hasNext: false, page, size, result: [] }
   }

@@ -6,6 +6,10 @@
   padding-bottom: 6px;
   gap: 12px;
 
+  // [vendor patch] 行 wrapper 是 pointer-events:none，正常行靠 .normal 收回来；
+  // 间奏行上游漏了这一步，导致点不到。补上后点间奏可跳到间奏起点。
+  pointer-events: auto;
+
   transform: scale(0.8);
   transform-origin: build-line-variable('position') center;
 

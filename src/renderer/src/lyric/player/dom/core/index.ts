@@ -203,6 +203,9 @@ export class DomLyricPlayer {
   private handleLineClick = (index: number, event: MouseEvent) => {
     const line = this.resolveLine(index)
     if (line) {
+      // [vendor patch] 点击行即视为结束滚轮浏览：否则 ScrollManager 的浏览态要等 3 秒超时，
+      // 期间布局锁在浏览位置，跳转后的激活行不会回到视图中央。
+      this.scrollManager.clear()
       this.event.emit('lineClick', line, index, event)
     }
   }

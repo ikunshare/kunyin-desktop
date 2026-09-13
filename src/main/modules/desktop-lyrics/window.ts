@@ -12,7 +12,7 @@ import { IpcChannels, type AppSettings, type DesktopLyricState } from '@common'
 import { getSettings, updateSettings } from '../../store/settings'
 import { getMainWindow } from '../../windows/main'
 import { appEvent } from '../../core/events'
-import { sendToAllRenderers } from '../../ipc/helpers'
+import { sendToAllRenderers, sendToRenderer } from '../../ipc/helpers'
 
 let lyricWindow: BrowserWindow | null = null
 /** 增量帧合并出的完整状态，新窗口打开时立即回灌 */
@@ -251,6 +251,12 @@ export function registerDesktopLyricModule(): void {
   // 保留独立锁定通道兼容旧歌词窗；新工具栏也会直接更新 settings。
   ipcMain.on(IpcChannels.DESKTOP_LYRIC_SET_LOCK, (_e, locked: boolean) => {
     commitLyricSettings({ desktopLocked: locked })
+  })
+
+  // 歌词窗点击歌词行 → 转给主窗口执行跳转（音频只在主窗口里播）
+  ipcMain.on(IpcChannels.DESKTOP_LYRIC_SEEK, (_e, ms: number) => {
+    if (typeof ms !== 'number' || !Number.isFinite(ms)) return
+    sendToRenderer(IpcChannels.DESKTOP_LYRIC_SEEK_REQUEST, Math.max(0, ms))
   })
 
   appEvent.on('settings-updated', syncDesktopLyricWindow)

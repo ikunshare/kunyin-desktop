@@ -38,13 +38,17 @@ withDefaults(defineProps<{ min?: boolean; outline?: boolean; disabled?: boolean 
 .btn.outline {
   background-color: transparent;
 }
-.btn:hover {
+.btn:hover:not(:disabled) {
   background-color: var(--color-button-background-hover);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
 }
-.btn:active {
+.btn:active:not(:disabled) {
   background-color: var(--color-button-background-active);
+}
+.btn:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-alpha-800);
 }
 .min {
   min-height: 30px;

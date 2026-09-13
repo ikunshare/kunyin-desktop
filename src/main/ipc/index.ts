@@ -6,6 +6,7 @@ import { registerWindowHandlers } from './handlers/window'
 import { registerSettingsHandlers } from './handlers/settings'
 import { registerSearchHandlers } from './handlers/search'
 import { registerPlayerHandlers } from './handlers/player'
+import { registerCommentHandlers } from './handlers/comment'
 import { registerAuthHandlers } from './handlers/auth'
 import { registerLibraryHandlers } from './handlers/library'
 import { registerDiscoverHandlers } from './handlers/discover'
@@ -13,6 +14,7 @@ import { registerDownloadHandlers } from './handlers/download'
 import { registerAccountHandlers } from './handlers/account'
 import { registerRedirectHandlers } from './handlers/redirect'
 import { registerShellHandlers } from './handlers/shell'
+import { registerLogHandlers } from './handlers/log'
 
 export function registerIpc(): void {
   registerAppHandlers()
@@ -20,6 +22,7 @@ export function registerIpc(): void {
   registerSettingsHandlers()
   registerSearchHandlers()
   registerPlayerHandlers()
+  registerCommentHandlers()
   registerAuthHandlers()
   registerLibraryHandlers()
   registerDiscoverHandlers()
@@ -27,4 +30,5 @@ export function registerIpc(): void {
   registerAccountHandlers()
   registerRedirectHandlers()
   registerShellHandlers()
+  registerLogHandlers()
 }

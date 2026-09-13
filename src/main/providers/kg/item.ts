@@ -236,3 +236,153 @@ export function parseKgAuthorSong(o: any): KugouMusicItem | null {
           : undefined
   }
 }
+
+/**
+ * thirdsso `favorite/song` 的歌单曲目。
+ *
+ * 这套接口不给各档位的 hash，只给一个主 hash 与 `support_quality` 码表；
+ * 文件大小也要另外走 `song/infos` 补（见 KgProvider.enrichWithSongInfos）。
+ */
+export function parseKgPlaylistSong(o: any): KugouMusicItem | null {
+  const hash = o.hash
+  if (!hash) return null
+  const q = buildQualitiesFromSupport(String(o.support_quality ?? ''))
+  if (!Object.keys(q).length) return null
+
+  const audioId = String(o.song_id ?? '')
+  const id = num(audioId, 0)
+  const artist = limitSingers(cleanText(o.singer_name ?? ''))
+  const rawSingers: any[] | undefined = Array.isArray(o.singers) ? o.singers : undefined
+  return {
+    type: 'kg',
+    id,
+    title: cleanText(o.song_name ?? ''),
+    artist,
+    album: o.album_name ?? '',
+    albumId: o.album_id != null ? String(o.album_id) : undefined,
+    cover: o.album_img_medium ?? '',
+    duration: num(o.duration, 0),
+    qualities: q,
+    hash,
+    allHash: [hash],
+    audioId,
+    mixsongmid: id,
+    singers: toSingersWithId(
+      artist,
+      rawSingers?.map((s) => ({ name: s?.singer_name, id: s?.singer_id }))
+    ),
+    mvid: o.mv_id && String(o.mv_id) !== '0' ? String(o.mv_id) : undefined
+  }
+}
+
+/** `support_quality` 码表 → 音质档（大小为 0，之后由 song/infos 回填） */
+function buildQualitiesFromSupport(support: string): Record<string, Quality> {
+  const codes = support.split(',').map((c) => c.trim())
+  const q: Record<string, Quality> = {}
+  const has = (...want: string[]): boolean => want.some((w) => codes.includes(w))
+  if (has('LQ', 'HQ')) addQ(q, '128k', '普通音质 128K', 128, 0)
+  if (has('SQ', 'PQ')) addQ(q, '320k', '高品音质 320K', 320, 0)
+  if (has('VCQ')) addQ(q, 'flac', '无损音质 FLAC', 2000, 0)
+  if (has('TQ')) addQ(q, 'hires', '无损音质 HiRes', 4000, 0)
+  if (has('AQ')) addQ(q, 'master', '蝰蛇超清', 20900, 0)
+  return q
+}
+
+/** song/infos 回填各档位大小（键名对齐 Android enrichWithSongInfos） */
+export function applyKgSongSizes(item: KugouMusicItem, s: any): void {
+  const set = (id: string, bytes: number): void => {
+    const q = item.qualities[id]
+    if (!q || bytes <= 0) return
+    item.qualities[id] = { ...q, filesize: bytes, displaySize: formatSize(bytes) }
+  }
+  set('128k', num(s.song_size, 0))
+  set('320k', num(s.song_size_hq, 0))
+  set('flac', num(s.song_size_sq, 0))
+  set('hires', num(s.song_size_vcq, 0))
+  set('master', num(s.song_size_aq, 0))
+}
+
+/** 排行榜 `api/v3/rank/song` 曲目（平铺；duration 为秒） */
+export function parseKgRankSong(o: any): KugouMusicItem | null {
+  const hash = o?.hash
+  if (!hash) return null
+  const { q, allHash } = buildFromHashes(
+    hash,
+    o['320hash'],
+    o.sqhash,
+    o.hash_high,
+    num(o.filesize, 0),
+    num(o['320filesize'], 0),
+    num(o.sqfilesize, 0),
+    num(o.filesize_high, 0)
+  )
+  if (!Object.keys(q).length) return null
+  const audioId = String(o.album_audio_id ?? o.audio_id ?? '')
+  const id = num(audioId, 0)
+  const authors: any[] = Array.isArray(o.authors) ? o.authors : []
+  const rawArtist = authors.length
+    ? authors
+        .map((a) => a?.author_name ?? '')
+        .filter(Boolean)
+        .join('、')
+    : String(o.singername ?? o.filename ?? '').split(' - ')[0]
+  const artist = limitSingers(cleanText(rawArtist))
+  const unionCover = o.trans_param?.union_cover ?? o.album_sizable_cover
+  return {
+    type: 'kg',
+    id,
+    title: cleanText(o.songname ?? ''),
+    artist,
+    album: cleanText(o.remark ?? o.album_name ?? ''),
+    albumId: o.album_id != null && String(o.album_id) !== '0' ? String(o.album_id) : undefined,
+    cover: unionCover ? String(unionCover).replace('{size}', '480') : '',
+    duration: num(o.duration, 0) * 1000,
+    qualities: q,
+    hash,
+    allHash,
+    audioId,
+    mixsongmid: id,
+    singers: toSingersWithId(artist, authors)
+  }
+}
+
+/** `gateway.kugou.com/v2/album_audio/audio` 批量详情（公开歌单用；timelength 为毫秒） */
+export function parseKgAudioInfo(o: any): KugouMusicItem | null {
+  const ai = o?.audio_info ?? {}
+  const hash = ai.hash ?? ai.hash_128
+  if (!hash) return null
+  const { q, allHash } = buildFromHashes(
+    hash,
+    ai.hash_320,
+    ai.hash_flac,
+    ai.hash_high,
+    num(ai.filesize ?? ai.filesize_128, 0),
+    num(ai.filesize_320, 0),
+    num(ai.filesize_flac, 0),
+    num(ai.filesize_high, 0)
+  )
+  if (!Object.keys(q).length) return null
+  const base = o.base ?? {}
+  const album = o.album_info ?? {}
+  const audioId = String(base.album_audio_id ?? ai.album_audio_id ?? ai.audio_id ?? '')
+  const id = num(audioId, 0)
+  const artist = limitSingers(cleanText(o.author_name ?? base.author_name ?? ''))
+  const cover = album.sizable_cover ?? album.cover
+  return {
+    type: 'kg',
+    id,
+    title: cleanText(o.songname ?? base.audio_name ?? o.ori_audio_name ?? ''),
+    artist,
+    album: cleanText(album.album_name ?? ''),
+    albumId:
+      album.album_id != null && String(album.album_id) !== '0' ? String(album.album_id) : undefined,
+    cover: cover ? String(cover).replace('{size}', '480') : '',
+    duration: num(ai.timelength ?? ai.duration, 0),
+    qualities: q,
+    hash,
+    allHash,
+    audioId,
+    mixsongmid: id,
+    singers: toSingersWithId(artist, o.authors)
+  }
+}

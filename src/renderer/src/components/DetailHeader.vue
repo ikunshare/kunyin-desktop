@@ -48,7 +48,6 @@ const cachedCover = computed(() => coverUrl(props.cover))
           <AppIcon name="download" :size="16" />
           <span>下载全部</span>
         </button>
-        <button class="fav" title="收藏"><AppIcon name="heart" :size="18" /></button>
       </div>
     </div>
   </div>

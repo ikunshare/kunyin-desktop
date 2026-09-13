@@ -11,6 +11,7 @@
  *   data/download_tasks.json    下载任务
  *   data/lx_sync_session.json   LX 同步会话
  *   data/wy_device.txt          网易设备指纹
+ *   data/qq_device.json         QQ 设备指纹 + QIMEI（听歌上报用）
  *   data/cache/*.json           业务 LRU 缓存（播放地址/歌词）
  *
  * 业务缓存目录在 data/ 下可以放心叫 `cache`：不再与 Chromium 的 `Cache` 同层，

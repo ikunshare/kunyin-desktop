@@ -88,6 +88,17 @@ export function useDesktopLyricBridge(): void {
     }
   }
 
+  /**
+   * 悬浮窗点击歌词行 → 主窗口执行跳转。
+   * 接在桥里而非 PlayerView：桥全程运行，播放页没打开时点击桌面歌词也要能跳。
+   * 跳完由 currentTime watcher 把新进度推回悬浮窗，歌词引擎在那侧对齐。
+   */
+  const seekUnsub = window.api.desktopLyric.onSeekRequest((ms) => {
+    if (!current.value) return
+    const total = player.duration || current.value.duration || 0
+    player.seek(total > 0 ? Math.min(ms, total) : ms)
+  })
+
   watch(current, () => void loadLyric())
   watch(playing, push)
   // 频谱开启时由 80ms 定时器连同进度一起推；关闭时沿用 <audio> timeupdate（约 4/s）。
@@ -107,5 +118,6 @@ export function useDesktopLyricBridge(): void {
 
   onUnmounted(() => {
     if (spectrumTimer) clearInterval(spectrumTimer)
+    seekUnsub()
   })
 }

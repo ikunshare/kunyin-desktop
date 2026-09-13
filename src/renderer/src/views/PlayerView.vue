@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import SleepTimerDialog from '../components/SleepTimerDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { QUALITY_IDS, QUALITY_NAMES, blockedQualityIds, type QualityId } from '@common'
 import AppIcon from '../components/AppIcon.vue'
 import AmllBackground from '../components/AmllBackground.vue'
+import CommentDialog from '../components/CommentDialog.vue'
 import QualityDialog from '../components/QualityDialog.vue'
 import { usePlayerStore } from '../stores/player'
 import { useLibraryStore } from '../stores/library'
@@ -67,6 +69,7 @@ function fmt(ms: number): string {
 
 // 播放模式（与 PlayerBar 同一套图标/文案）
 const PLAY_MODE_META: Record<string, { icon: string; label: string }> = {
+  order: { icon: 'list', label: '顺序播放' },
   listLoop: { icon: 'repeat', label: '列表循环' },
   singleLoop: { icon: 'repeat-one', label: '单曲循环' },
   random: { icon: 'shuffle', label: '随机播放' }
@@ -130,6 +133,9 @@ async function toggleLyricPanel(): Promise<void> {
     lyric.relayout()
   }
 }
+
+// ============ 评论弹窗 ============
+const showComment = ref(false)
 const showTrans = computed(() => settings.settings.lyrics.showTranslation)
 function toggleTrans(): void {
   void settings.update({ lyrics: { showTranslation: !showTrans.value } })
@@ -137,6 +143,16 @@ function toggleTrans(): void {
 
 // ============ 更多菜单（收藏 / 下载 / 播放音质） ============
 const moreOpen = ref(false)
+const showSleepTimer = ref(false)
+const moreButton = ref<HTMLButtonElement>()
+function openSleepTimer(): void {
+  moreOpen.value = false
+  showSleepTimer.value = true
+}
+function closeSleepTimer(): void {
+  showSleepTimer.value = false
+  void nextTick(() => moreButton.value?.focus())
+}
 const showQualityDialog = ref(false)
 const dialogItems = computed(() => (track.value ? [track.value] : []))
 // 当前曲可用音质（高 → 低；被屏蔽的 AI 音质不列出）
@@ -224,6 +240,26 @@ async function loadLyric(): Promise<void> {
   }
 }
 
+/**
+ * 点击歌词行 → 跳到该行开头。
+ *
+ * 只驱动音频：歌词引擎的重对齐统一交给下方 currentTime 的跳变 watcher，
+ * 避免这里和 watcher 各 play 一次导致逐字动画重启两遍。
+ * 但 lastTime 必须在这里先对齐——点击的行离当前位置可能不到 800ms 阈值，
+ * watcher 会跳过重对齐，引擎就还停在原处，得手动补一次。
+ */
+function seekToLyricLine(ms: number): void {
+  if (!current.value) return
+  // displayDuration 与 lyric 时间同为毫秒；时长未知时不做上限裁剪
+  const total = displayDuration.value
+  const target = Math.max(0, total > 0 ? Math.min(ms, total) : ms)
+  player.seek(target)
+  if (hasLyric.value && Math.abs(target - lastTime) <= 800) {
+    if (playing.value) lyric.play(target)
+    else lyric.seekMs(target)
+  }
+}
+
 function applyAnnotationVisible(): void {
   const ly = settings.settings.lyrics
   lyric.setAnnotationVisible({
@@ -236,6 +272,8 @@ function applyLyricFont(): void {
   lyric.setFontFamily(settings.settings.lyrics.font)
 }
 
+let unsubscribeLineSeek: (() => void) | null = null
+
 onMounted(() => {
   syncPlayerFullscreen()
   unsubscribeFullscreen = api.window.onFullscreenChange(applyPlayerFullscreen)
@@ -243,6 +281,8 @@ onMounted(() => {
   lyricHost.value?.appendChild(lyric.element.value)
   // 制作人信息作为歌词流的收尾展示（跟着最后一行滚动）
   lyric.setCreditsVisible(true)
+  // 点击歌词行跳到该行时间；引擎侧重对齐交给下面的 currentTime 跳变 watcher
+  unsubscribeLineSeek = lyric.onLineSeek(seekToLyricLine)
   applyAnnotationVisible()
   applyLyricFont()
   loadLyric()
@@ -250,6 +290,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   unsubscribeFullscreen?.()
+  unsubscribeLineSeek?.()
   window.removeEventListener('resize', syncPlayerFullscreen)
 })
 
@@ -356,7 +397,7 @@ watch(currentTime, (t) => {
             <button class="abtn" :title="modeMeta.label" @click="player.cyclePlayMode()">
               <AppIcon :name="modeMeta.icon" :size="20" />
             </button>
-            <button class="abtn" title="评论（开发中）" disabled>
+            <button class="abtn" title="评论" @click="showComment = true">
               <AppIcon name="comment" :size="20" />
             </button>
             <button
@@ -377,12 +418,28 @@ watch(currentTime, (t) => {
               <AppIcon name="translate" :size="20" />
             </button>
             <div class="more-wrap">
-              <button class="abtn" title="更多" @click="moreOpen = !moreOpen">
+              <button
+                ref="moreButton"
+                class="abtn"
+                title="更多"
+                :aria-expanded="moreOpen"
+                @click="moreOpen = !moreOpen"
+              >
                 <AppIcon name="more" :size="20" />
               </button>
               <template v-if="moreOpen">
                 <div class="more-mask" @click="moreOpen = false" />
                 <div class="more-menu">
+                  <button class="mitem sleep-menu-item" @click="openSleepTimer">
+                    <AppIcon name="clock" :size="16" />
+                    <span
+                      >定时暂停<small v-if="player.sleepRemaining || player.stopAfterTrack">{{
+                        player.stopAfterTrack
+                          ? '本曲播完暂停'
+                          : `${Math.ceil(player.sleepRemaining / 60)} 分钟后暂停`
+                      }}</small></span
+                    >
+                  </button>
                   <button class="mitem" :class="{ liked }" :disabled="!track" @click="likeFromMenu">
                     <AppIcon :name="liked ? 'heart-filled' : 'heart'" :size="16" />
                     <span>{{ liked ? '已收藏' : '收藏' }}</span>
@@ -420,6 +477,9 @@ watch(currentTime, (t) => {
           <div v-if="!hasLyric" class="no-lyric">纯音乐，请欣赏</div>
         </div>
       </div>
+
+      <CommentDialog v-if="showComment" :track="track" @close="showComment = false" />
+      <SleepTimerDialog v-if="showSleepTimer" @close="closeSleepTimer" />
 
       <QualityDialog
         v-if="showQualityDialog"
@@ -694,6 +754,12 @@ watch(currentTime, (t) => {
   opacity: 0.45;
   cursor: default;
 }
+.sleep-menu-item small {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.65;
+}
 .mitem.liked {
   color: #ff5c7a;
 }
@@ -731,9 +797,10 @@ watch(currentTime, (t) => {
   position: absolute;
   inset: 0;
 }
-/* 主词与翻译/音译分层 */
+/* 主词与翻译/音译分层；点击整行跳到该行时间（hover 高亮由引擎自带） */
 .lyric-host :deep([data-role='line-normal']) {
   row-gap: 14px !important;
+  cursor: pointer;
 }
 /*
  * 逐字音译的溢出与行高问题已在引擎侧修掉（annotation-row 改 width:max-content + min-height:auto，

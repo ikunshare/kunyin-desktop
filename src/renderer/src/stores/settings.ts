@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { DEFAULT_SETTINGS, WINDOW_SIZE_LIST, type AppSettings, type DeepPartial } from '@common'
 import { applyTheme, setCustomThemes } from '../theme/apply'
 import { applyAppFont } from '../composables/useFonts'
+import { setRendererLogLevel } from '../utils/logger'
 
 /** 界面字体大小 → #app 整体缩放（本应用样式以 px 为主，html font-size 无效，用 zoom 实现 LX 的字体大小档位）。
  * 只写 --app-zoom 变量，实际 zoom 与尺寸反向补偿由 base.css 的 #app 规则处理，避免背景图溢出/底部露白。 */
@@ -29,24 +30,42 @@ function applyAppearance(s: AppSettings): void {
 /** 同 lx-music-desktop 的 disableAnimation：关闭后即时停用全局 CSS 动画与过渡。 */
 function applyBehavior(s: AppSettings): void {
   document.documentElement.classList.toggle('disable-animation', !s.behavior.showAnimation)
+  // 渲染层日志阈值跟随设置；主进程侧由 main/index.ts 监听 settings-updated 同步
+  setRendererLogLevel(s.developer.logLevel)
 }
 
 export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<AppSettings>(structuredClone(DEFAULT_SETTINGS))
   let unsubscribe: (() => void) | null = null
+  /**
+   * 首次加载的 in-flight promise。
+   * 其他 store（如 player 取音量/播放模式）要等设置到位才能读，会各自 await load()；
+   * 缓存住可让并发调用共享同一次 IPC，而非各拉一遍。
+   */
+  let loaded: Promise<void> | null = null
 
-  /** 启动加载：拉取主进程设置、应用主题与字体，并订阅变更广播 */
-  async function load(): Promise<void> {
-    settings.value = await window.api.settings.get()
-    applyAppearance(settings.value)
-    applyBehavior(settings.value)
-    if (!unsubscribe) {
-      unsubscribe = window.api.settings.onChange((next) => {
-        settings.value = next
-        applyAppearance(next)
-        applyBehavior(next)
-      })
-    }
+  /** 启动加载：拉取主进程设置、应用主题与字体，并订阅变更广播。并发/重复调用共享首次结果。 */
+  function load(): Promise<void> {
+    if (loaded) return loaded
+    loaded = (async () => {
+      try {
+        settings.value = await window.api.settings.get()
+        applyAppearance(settings.value)
+        applyBehavior(settings.value)
+        if (!unsubscribe) {
+          unsubscribe = window.api.settings.onChange((next) => {
+            settings.value = next
+            applyAppearance(next)
+            applyBehavior(next)
+          })
+        }
+      } catch (e) {
+        // 失败不缓存，留给下次调用重试（settings 保持默认值，UI 仍可用）
+        loaded = null
+        throw e
+      }
+    })()
+    return loaded
   }
 
   /** 局部更新（持久化在主进程完成） */

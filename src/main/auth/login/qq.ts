@@ -7,6 +7,7 @@
  */
 import WebSocket from 'ws'
 import { requestJson } from '../../net/request'
+import { qqComm, qqLoginType } from '../../providers/qq/comm'
 import {
   buildConnectPacket,
   buildSubscribePacket,
@@ -47,16 +48,7 @@ async function apiCall(
   commonOverrides?: Record<string, string>
 ): Promise<any> {
   const reqKey = `${module}.${method}`
-  const comm: Record<string, unknown> = {
-    ct: '11',
-    cv: '13020508',
-    v: '13020508',
-    tmeAppID: 'qqmusic',
-    format: 'json',
-    inCharset: 'utf-8',
-    outCharset: 'utf-8',
-    ...commonOverrides
-  }
+  const comm = qqComm('login', null, commonOverrides)
   const body = {
     comm,
     [reqKey]: { module, method, param }
@@ -123,17 +115,10 @@ async function mobileLogin(
   return parseCredentialResponse(resp)
 }
 
-/** loginType：Q_H_L→2(QQ)，W_X_→1(微信)，其余 0。 */
-function loginTypeOf(authst: string): number {
-  if (authst.startsWith('Q_H_L')) return 2
-  if (authst.startsWith('W_X_')) return 1
-  return 0
-}
-
 /** 刷新 QQ 凭据，失败返回 null。 */
 export async function qqRefreshCredential(creds: QQCredentials): Promise<QQCredentials | null> {
   try {
-    const lt = loginTypeOf(creds.authst)
+    const lt = qqLoginType(creds.authst)
     const param: Record<string, unknown> =
       lt === 1
         ? {

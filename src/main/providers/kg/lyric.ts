@@ -169,7 +169,9 @@ export async function getKgFallbackLyric(
   artist: string,
   durationMs: number
 ): Promise<Lyric> {
-  const candidates = await searchCandidates(title, artist, durationMs)
+  const keyword = buildSimplifiedKeyword(title, artist)
+  if (!keyword) return { ...EMPTY_LYRIC }
+  const candidates = await searchKgLyricCandidates(keyword, durationMs, undefined, undefined, true)
   return downloadFirstAvailable(candidates)
 }
 

@@ -1,7 +1,12 @@
+import { createLogger } from '../utils/logger'
+const log = createLogger('player')
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
-import type { MusicItem, PlayMode, QualityId } from '@common'
+import { ref, watch } from 'vue'
+import { PlaybackQueue } from '../utils/playbackQueue'
+import { useAudioDevices } from '../composables/useAudioDevices'
+import type { AudioStreamResult, MusicItem, MusicSource, PlayMode, QualityId } from '@common'
 import {
+  DEFAULT_SETTINGS,
   blockedQualityIds,
   getMusicItemKey,
   qualityFallbackOrder,
@@ -30,6 +35,17 @@ export interface QueueSource {
   name?: string
 }
 
+/**
+ * 播放事件（供听歌上报等旁路逻辑订阅，不参与播放控制）：
+ * - loaded：某曲目加载完成并开始播放/待播
+ * - ended：曲目自然播完（切歌前触发）
+ * - seek：用户拖动进度
+ */
+export type PlayerTrackEvent =
+  | { type: 'loaded'; item: MusicItem }
+  | { type: 'ended'; item: MusicItem }
+  | { type: 'seek'; item: MusicItem; positionMs: number }
+
 /** 把 MediaError 翻成人话（网络类错误多半是代理不可用，直接点出来省得用户猜） */
 function describeMediaError(err: MediaError | null): string {
   switch (err?.code) {
@@ -53,20 +69,130 @@ export const usePlayerStore = defineStore('player', () => {
   /** 当前播放队列的来源列表（null 表示队列无来源，如恢复旧存档） */
   const queueSource = ref<QueueSource | null>(null)
   const playing = ref(false)
+  /** 播放模式（初值为占位，真实值由 hydrateFromSettings 在设置到位后灌入） */
   const playMode = ref<PlayMode>('listLoop')
   const currentTime = ref(0)
   const duration = ref(0)
   const loading = ref(false)
   /** 播放地址解析失败原因（如卡密缺失） */
   const error = ref('')
-  /** 音量 0..1（初值取设置项，随后本地持久化回设置） */
-  const volume = ref(useSettingsStore().settings.player.volume)
+  /**
+   * 音量 0..1。
+   *
+   * 初值只能是默认值：本 store 在 setup 阶段构建，而 settings 是异步 IPC 拉取的
+   * （App.vue 的 `void settings.load()`），此刻 settings store 里还是 DEFAULT_SETTINGS。
+   * 真实值由 hydrateFromSettings 在设置到位后灌入。
+   */
+  const volume = ref(DEFAULT_SETTINGS.player.volume)
   const muted = ref(false)
 
   const audio = new Audio()
   // kunyin:// 响应带 Access-Control-Allow-Origin；anonymous 让 captureStream 可旁路采样。
   audio.crossOrigin = 'anonymous'
   audio.volume = volume.value
+  const { devices, deviceError, refreshDevices } = useAudioDevices(audio, () => pause())
+
+  const randomQueue = new PlaybackQueue()
+  const failedKeys = new Set<string>()
+  const trackListeners = new Set<(e: PlayerTrackEvent) => void>()
+  function emitTrackEvent(e: PlayerTrackEvent): void {
+    for (const cb of trackListeners) {
+      try {
+        cb(e)
+      } catch {
+        /* 旁路逻辑不得影响播放 */
+      }
+    }
+  }
+  /** 订阅播放事件，返回取消函数 */
+  function onTrackEvent(cb: (e: PlayerTrackEvent) => void): () => void {
+    trackListeners.add(cb)
+    return () => trackListeners.delete(cb)
+  }
+  let skipTimer: ReturnType<typeof setTimeout> | null = null
+  let forcedNext: string | null = null
+  const sleepRemaining = ref(0)
+  const sleepWaitForEnd = ref(false)
+  let sleepInterval: ReturnType<typeof setInterval> | null = null
+  const stopAfterTrack = ref(false)
+
+  function cancelSleep(): void {
+    if (sleepInterval) clearInterval(sleepInterval)
+    sleepInterval = null
+    sleepRemaining.value = 0
+    stopAfterTrack.value = false
+  }
+  function setSleep(minutes: number, waitForEnd = false): void {
+    cancelSleep()
+    if (!Number.isFinite(minutes) || minutes <= 0) return
+    sleepWaitForEnd.value = waitForEnd
+    const deadline = Date.now() + Math.min(minutes, 1440) * 60000
+    sleepRemaining.value = Math.ceil((deadline - Date.now()) / 1000)
+    sleepInterval = setInterval(() => {
+      sleepRemaining.value = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+      if (sleepRemaining.value) return
+      cancelSleep()
+      if (waitForEnd && !audio.paused) stopAfterTrack.value = true
+      else pause()
+    }, 500)
+  }
+  function isDisliked(item: MusicItem): boolean {
+    const normalize = (v: string): string => v.trim().toLocaleLowerCase()
+    return useSettingsStore()
+      .settings.player.dislikeRules.split('\n')
+      .some((rule) => {
+        const value = normalize(rule)
+        if (!value) return false
+        return value.startsWith('@')
+          ? item.artist.split(/[、,，/&]/).some((artist) => normalize(artist) === value.slice(1))
+          : normalize(item.title) === value
+      })
+  }
+  function eligibleQueue(): MusicItem[] {
+    return queue.value.filter((item) => !isDisliked(item) && !failedKeys.has(getMusicItemKey(item)))
+  }
+  async function dislike(item: MusicItem, artist = false): Promise<void> {
+    const store = useSettingsStore()
+    const rules = store.settings.player.dislikeRules.split('\n').filter(Boolean)
+    const added = artist
+      ? item.artist
+          .split(/[、,，/&]/)
+          .map((name) => '@' + name.trim())
+          .filter((name) => name.length > 1)
+      : [item.title.trim()]
+    try {
+      await store.update({
+        player: { dislikeRules: [...new Set([...rules, ...added])].join('\n') }
+      })
+      if (current.value && isDisliked(current.value)) next()
+    } catch {
+      error.value = '无法保存不喜欢设置，请重试'
+    }
+  }
+  function reportFailure(reason: string): void {
+    audio.pause()
+    loading.value = false
+    playing.value = false
+    error.value = reason
+    if (!current.value || !useSettingsStore().settings.player.autoSkipOnError) return
+    failedKeys.add(getMusicItemKey(current.value))
+    if (!eligibleQueue().length) {
+      error.value = '队列中的歌曲均无法播放，请检查网络或更换音源'
+      return
+    }
+    if (skipTimer) clearTimeout(skipTimer)
+    skipTimer = setTimeout(() => {
+      skipTimer = null
+      step(1)
+    }, 2000)
+  }
+  watch(
+    () => useSettingsStore().settings.player.playbackRate,
+    (rate) => {
+      audio.playbackRate = Number.isFinite(rate) ? Math.max(0.5, Math.min(2, rate)) : 1
+    },
+    { immediate: true }
+  )
 
   // 桌面歌词实时频谱使用 captureStream 旁路采样，绝不把原 <audio> 改接到
   // MediaElementAudioSourceNode；后者会接管原输出链路，遇到自定义协议/CORS 时可能直接静音。
@@ -246,6 +372,7 @@ export const usePlayerStore = defineStore('player', () => {
     // 进度实时落盘：独立小 key（每次约几十字节，timeupdate ~4 次/s 可忽略），
     // 完整状态含整个队列，高频序列化太贵，仍每 5s 兜底一次
     persistPosition()
+    if (duration.value > 10000 && duration.value - currentTime.value < 10000) void prepareNext()
     if (Date.now() - lastPersistAt > 5000) persistState()
   })
   audio.addEventListener('durationchange', () => {
@@ -265,6 +392,7 @@ export const usePlayerStore = defineStore('player', () => {
   // play 事件可能早于 captureStream 音轨创建；playing 表示解码输出已真正开始，
   // 此时重新 capture 才能稳定拿到 live audio track。
   audio.addEventListener('playing', () => {
+    failedKeys.clear()
     if (useSettingsStore().settings.lyrics.desktopAudioVisualization) {
       enableAudioSpectrum()
       scheduleSpectrumAttach()
@@ -276,8 +404,22 @@ export const usePlayerStore = defineStore('player', () => {
     playing.value = false
     persistState()
   })
-  audio.addEventListener('ended', () => next())
+  audio.addEventListener('ended', () => {
+    if (current.value) emitTrackEvent({ type: 'ended', item: current.value })
+    if (stopAfterTrack.value) {
+      stopAfterTrack.value = false
+      pause()
+      return
+    }
+    if (forcedNext) next()
+    else if (playMode.value === 'singleLoop' && current.value && !isDisliked(current.value)) {
+      seek(0)
+      void audio.play().catch(() => {})
+    } else if (playMode.value === 'order' && !peekNext()) pause()
+    else next()
+  })
   audio.addEventListener('error', () => {
+    if (loading.value) return
     const item = current.value
     const q = quality.value
     if (!item) return
@@ -286,7 +428,10 @@ export const usePlayerStore = defineStore('player', () => {
     // 走 loadAndPlay 会把 currentTime 清零从头重播，随后的持久化再把 0 写回存档，进度就丢了。
     if (q && !retriedAfterError) {
       retriedAfterError = true
-      void window.api.player.invalidateUrl(JSON.parse(JSON.stringify(item)) as MusicItem, q)
+      void window.api.player.invalidateUrl(
+        JSON.parse(JSON.stringify(actualStreamItem ?? item)) as MusicItem,
+        q
+      )
       void loadForResume(item, currentTime.value, playing.value || !audio.paused, q)
       return
     }
@@ -294,7 +439,7 @@ export const usePlayerStore = defineStore('player', () => {
     // MEDIA_ERR_NETWORK/SRC_NOT_SUPPORTED 最常见的成因是代理不可用或直链被拒
     playing.value = false
     loading.value = false
-    error.value = describeMediaError(audio.error)
+    reportFailure(describeMediaError(audio.error))
   })
 
   // ============ 播放状态持久化（记住歌曲/队列/进度/静音） ============
@@ -390,100 +535,234 @@ export const usePlayerStore = defineStore('player', () => {
     return !!c && c.id === item.id && c.type === item.type
   }
 
-  async function loadAndPlay(item: MusicItem): Promise<void> {
-    // 每次加载自增：错误重试与用户切歌都会 fire-and-forget 地调本函数，
-    // 只靠 isCurrent 挡不住两个实例并发（那只在 await 返回后判一次，
-    // 两边都可能通过），结果各自注册一路 kunyin:// 流、各自抢着设 audio.src——
-    // DevTools 里就会看到同一首歌冒出多个 token 和一串「已取消」。
-    const token = ++loadToken
-    const stale = (): boolean => token !== loadToken || !isCurrent(item)
+  let preload: { key: string; result: AudioStreamResult } | null = null
+  let preloadKey = ''
+  let actualStreamItem: MusicItem | null = null
+  let cancelMetadata: (() => void) | null = null
+  const warmAudio = new Audio()
+  warmAudio.muted = true
+  warmAudio.preload = 'auto'
+  function clearPreload(): void {
+    preload = null
+    preloadKey = ''
+    warmAudio.removeAttribute('src')
+    warmAudio.load()
+  }
+  async function withTimeout<T>(promise: Promise<T>, ms = 20000): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('加载超时')), ms)
+        })
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  function peekNext(): MusicItem | undefined {
+    const items = eligibleQueue()
+    const key = current.value ? getMusicItemKey(current.value) : ''
+    if (forcedNext) return items.find((item) => getMusicItemKey(item) === forcedNext)
+    if (playMode.value === 'singleLoop') return current.value ?? undefined
+    if (playMode.value === 'random') {
+      const nextKey = randomQueue.peek(items.map(getMusicItemKey), key)
+      return items.find((item) => getMusicItemKey(item) === nextKey)
+    }
+    for (let offset = 1; offset <= queue.value.length; offset++) {
+      if (playMode.value === 'order' && index.value + offset >= queue.value.length) return undefined
+      const item = queue.value[(index.value + offset) % queue.value.length]
+      if (items.includes(item)) return item
+    }
+    return undefined
+  }
+  async function prepareNext(): Promise<void> {
+    if (!useSettingsStore().settings.player.preloadNext || loading.value) return
+    const item = peekNext()
+    if (!item || isCurrent(item)) return
+    const q = qualityOrder(item)[0]
+    const key = getMusicItemKey(item) + ':' + q
+    if (preloadKey === key) return
+    clearPreload()
+    preloadKey = key
+    try {
+      const result = await withTimeout(
+        window.api.player.stream(JSON.parse(JSON.stringify(item)), q)
+      )
+      if (preloadKey !== key || !result.ok) return
+      preload = { key, result }
+      warmAudio.src = result.url
+      warmAudio.load()
+    } catch {
+      /* 正式播放时重试 */
+    }
+  }
+  watch(
+    () => [
+      useSettingsStore().settings.player.preferredQuality,
+      useSettingsStore().settings.player.preloadNext,
+      useSettingsStore().settings.player.dislikeRules,
+      playMode.value,
+      queue.value.map(getMusicItemKey).join('|')
+    ],
+    clearPreload
+  )
 
+  async function loadTrack(
+    item: MusicItem,
+    positionMs: number,
+    autoplay: boolean,
+    preferQuality = ''
+  ): Promise<void> {
+    log.info('开始加载歌曲', { source: item.type, id: item.id, preferQuality, autoplay })
+    const token = ++loadToken
+    const deadline = Date.now() + 60000
+    const stale = (): boolean => token !== loadToken || !isCurrent(item)
+    cancelMetadata?.()
+    if (skipTimer) clearTimeout(skipTimer)
+    skipTimer = null
+    audio.pause()
     loading.value = true
     error.value = ''
-    currentTime.value = 0
+    currentTime.value = positionMs
     duration.value = item.duration
-    // 过 IPC 需普通对象（Pinia 响应式 Proxy 无法被 structuredClone）
-    const plain = JSON.parse(JSON.stringify(item)) as MusicItem
-    try {
-      let lastReason = ''
-      for (const q of qualityOrder(item)) {
-        const res = await window.api.player.stream(plain, q)
-        if (stale()) return
-        if (res.ok) {
-          quality.value = q
+    const tryItem = async (target: MusicItem): Promise<boolean> => {
+      const order = qualityOrder(target)
+      if (preferQuality && order.includes(preferQuality))
+        order.unshift(...order.splice(order.indexOf(preferQuality), 1))
+      for (const q of order) {
+        if (stale()) return false
+        if (Date.now() >= deadline) {
+          error.value = '加载超时'
+          return false
+        }
+        try {
+          const key = getMusicItemKey(target) + ':' + q
+          const cached =
+            preload?.key === key &&
+            (!preload.result.expire || preload.result.expire > Date.now() + 5000)
+              ? preload.result
+              : null
+          const res =
+            cached ??
+            (await withTimeout(window.api.player.stream(JSON.parse(JSON.stringify(target)), q)))
+          if (stale()) return false
+          if (!res.ok) {
+            log.warn('音质取流失败', { source: target.type, id: target.id, quality: q, reason: res.reason })
+            error.value = res.reason ?? '解析失败'
+            continue
+          }
+          quality.value = res.quality || q
+          actualStreamItem = target
+          let cleanup = (): void => {}
+          const ready = new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              cleanup()
+              reject(new Error('音频加载超时'))
+            }, 25000)
+            const done = (): void => {
+              cleanup()
+              resolve()
+            }
+            const fail = (): void => {
+              cleanup()
+              reject(new Error(describeMediaError(audio.error)))
+            }
+            cancelMetadata = done
+            cleanup = (): void => {
+              clearTimeout(timer)
+              audio.removeEventListener('loadedmetadata', done)
+              audio.removeEventListener('error', fail)
+              if (cancelMetadata === done) cancelMetadata = null
+            }
+            audio.addEventListener('loadedmetadata', done)
+            audio.addEventListener('error', fail)
+          })
           setAudioSource(res.url)
           audio.volume = muted.value ? 0 : volume.value
-          await audio.play().catch(() => {})
-          if (stale()) return
-          loading.value = false
-          return
+          try {
+            await ready
+          } finally {
+            cleanup()
+          }
+          if (stale()) return false
+          clearPreload()
+          if (positionMs > 0)
+            audio.currentTime = Math.min(
+              positionMs / 1000,
+              Number.isFinite(audio.duration) ? audio.duration : positionMs / 1000
+            )
+          if (autoplay) await withTimeout(audio.play(), 25000)
+          if (stale()) return false
+          error.value = ''
+          emitTrackEvent({ type: 'loaded', item: target })
+          return true
+        } catch (e) {
+          if (stale()) return false
+          log.warn('音频加载或播放失败', { error: e, source: target.type, id: target.id, quality: q, mediaError: audio.error?.code })
+          audio.pause()
+          error.value = e instanceof Error ? e.message : '播放失败'
         }
-        lastReason = res.reason ?? ''
       }
-      if (stale()) return
-      error.value = lastReason || '无法播放'
-      playing.value = false
+      return false
+    }
+    try {
+      if ((await tryItem(item)) || stale()) return
+      if (item.type !== 'local' && useSettingsStore().settings.player.autoSwitchSource) {
+        const normalize = (value: string): string => value.trim().toLowerCase().replaceAll(' ', '')
+        for (const source of ['wy', 'kg', 'kw', 'qq'] as MusicSource[]) {
+          if (Date.now() >= deadline) break
+          if (source === item.type || stale()) continue
+          error.value = '正在尝试其他音源…'
+          const result = await withTimeout(
+            window.api.search.songs(source, item.title + ' ' + item.artist, 0, 5)
+          ).catch(() => null)
+          if (stale()) return
+          const match = result?.result.find(
+            (candidate) =>
+              normalize(candidate.title) === normalize(item.title) &&
+              normalize(candidate.artist) === normalize(item.artist) &&
+              (!candidate.duration ||
+                !item.duration ||
+                Math.abs(candidate.duration - item.duration) < 5000)
+          )
+          if (match && (await tryItem(match))) return
+        }
+      }
+      if (!stale()) {
+        log.warn('歌曲加载尝试耗尽', { source: item.type, id: item.id, reason: error.value })
+        if (autoplay)
+          reportFailure(
+            error.value === '正在尝试其他音源…' ? '当前歌曲暂无可用音源' : error.value || '无法播放'
+          )
+        else error.value = error.value || '无法恢复上次播放'
+      }
     } finally {
-      // 仅当自己仍是最新一次加载时才清 loading，避免把后继加载的状态覆盖掉
       if (token === loadToken) loading.value = false
     }
   }
-
-  /**
-   * 恢复上次会话：加载音频但不自动播放（依设置 autoPlay 决定是否续播），并 seek 到记忆进度。
-   * @param preferQuality 优先尝试的音质（恢复会话时传上次实际播放档），失败再走常规顺序
-   */
+  async function loadAndPlay(item: MusicItem): Promise<void> {
+    await loadTrack(item, 0, true)
+  }
   async function loadForResume(
     item: MusicItem,
     positionMs: number,
     autoplay: boolean,
     preferQuality = ''
   ): Promise<void> {
-    // 同 loadAndPlay：启动恢复可能与用户点歌并发，用序号保证只有最后一次生效
-    const token = ++loadToken
-    const stale = (): boolean => token !== loadToken || !isCurrent(item)
+    await loadTrack(item, positionMs, autoplay, preferQuality)
+  }
 
-    loading.value = true
-    const plain = JSON.parse(JSON.stringify(item)) as MusicItem
-    const base = qualityOrder(item)
-    // preferQuality 来自上次播放/手动切档，需与 qualityOrder 同样受 AI 音质屏蔽约束
-    const order =
-      preferQuality && base.includes(preferQuality)
-        ? [preferQuality, ...base.filter((q) => q !== preferQuality)]
-        : base
-    try {
-      for (const q of order) {
-        const res = await window.api.player.stream(plain, q)
-        if (stale()) return
-        if (res.ok) {
-          quality.value = q
-          setAudioSource(res.url)
-          audio.volume = muted.value ? 0 : volume.value
-          // 等元数据就绪才能 seek；5s 超时兜底
-          await new Promise<void>((resolve) => {
-            const onMeta = (): void => {
-              audio.removeEventListener('loadedmetadata', onMeta)
-              resolve()
-            }
-            audio.addEventListener('loadedmetadata', onMeta)
-            setTimeout(() => {
-              audio.removeEventListener('loadedmetadata', onMeta)
-              resolve()
-            }, 5000)
-          })
-          if (stale()) return
-          if (positionMs > 0) seek(positionMs)
-          if (autoplay) await audio.play().catch(() => {})
-          if (stale()) return
-          loading.value = false
-          return
-        }
-      }
-      if (stale()) return
-      error.value = '无法恢复上次播放'
-    } finally {
-      if (token === loadToken) loading.value = false
-    }
+  /** 音量和静音独立于播放存档，在设置加载完成后统一恢复。 */
+  async function hydrateFromSettings(): Promise<void> {
+    const settings = useSettingsStore()
+    await settings.load()
+    const p = settings.settings.player
+    volume.value = Math.max(0, Math.min(1, Number.isFinite(p.volume) ? p.volume : 1))
+    muted.value = !!p.muted
+    audio.volume = muted.value ? 0 : volume.value
+    if (PLAY_MODES.includes(p.playMode)) playMode.value = p.playMode
   }
 
   let restored = false
@@ -491,6 +770,13 @@ export const usePlayerStore = defineStore('player', () => {
   async function restore(): Promise<void> {
     if (restored) return
     restored = true
+    try {
+      await hydrateFromSettings()
+    } catch (e) {
+      restored = false
+      throw e
+    }
+    if (current.value) return
     let saved: SavedPlayback | null = null
     try {
       const raw = localStorage.getItem(SAVE_KEY)
@@ -515,7 +801,8 @@ export const usePlayerStore = defineStore('player', () => {
     queue.value = Array.isArray(saved.queue) ? saved.queue : []
     index.value = typeof saved.index === 'number' ? saved.index : -1
     queueSource.value = saved.queueSource ?? null
-    muted.value = !!saved.muted
+    randomQueue.record(getMusicItemKey(saved.item))
+    audio.volume = muted.value ? 0 : volume.value
     current.value = saved.item
     duration.value = saved.item.duration
     // 音质/进度先按记忆值上屏（菜单高亮 + 进度条归位）；解析直链失败也不至于显示回 0:00，
@@ -540,6 +827,20 @@ export const usePlayerStore = defineStore('player', () => {
     opts?: { trackTrial?: boolean; source?: QueueSource }
   ): void {
     if (useSettingsStore().settings.lyrics.desktopAudioVisualization) enableAudioSpectrum()
+    if (isDisliked(item)) {
+      error.value = '该歌曲已在不喜欢列表中，可在播放设置中移除'
+      return
+    }
+    if (skipTimer) clearTimeout(skipTimer)
+    skipTimer = null
+    if (
+      list &&
+      (list.length !== queue.value.length ||
+        list.some((song, i) => getMusicItemKey(song) !== getMusicItemKey(queue.value[i])))
+    )
+      randomQueue.reset()
+    randomQueue.record(getMusicItemKey(item))
+    failedKeys.delete(getMusicItemKey(item))
     current.value = item
     retriedAfterError = false // 用户主动切歌：允许错误重试
     if (list) {
@@ -567,6 +868,11 @@ export const usePlayerStore = defineStore('player', () => {
    * 拉取失败时退化为只放该曲，保证可播。
    */
   async function playInTrial(item: MusicItem): Promise<void> {
+    if (isDisliked(item)) {
+      error.value = '该歌曲已在不喜欢列表中'
+      return
+    }
+    const request = ++loadToken
     if (useSettingsStore().settings.lyrics.desktopAudioVisualization) enableAudioSpectrum()
     // 过 IPC 需普通对象（Pinia 响应式 Proxy 无法被 structuredClone）
     const plain = JSON.parse(JSON.stringify(item)) as MusicItem
@@ -574,7 +880,15 @@ export const usePlayerStore = defineStore('player', () => {
     // 主进程 INSERT OR IGNORE 去重——已存在的歌保持原位，不会被挪到末尾。
     await window.api.library.addToTrial(plain, false).catch(() => {})
     const list = await window.api.library.trialSongs().catch(() => [] as MusicItem[])
+    if (request !== loadToken) return
     const q = list.length ? list : [plain]
+    if (isDisliked(item)) {
+      error.value = '该歌曲已在不喜欢列表中'
+      return
+    }
+    randomQueue.reset()
+    randomQueue.record(getMusicItemKey(item))
+    failedKeys.clear()
     current.value = item
     retriedAfterError = false // 用户主动切歌：允许错误重试
     queue.value = q
@@ -592,8 +906,8 @@ export const usePlayerStore = defineStore('player', () => {
   function toggle(): void {
     if (!current.value) return
     if (useSettingsStore().settings.lyrics.desktopAudioVisualization) enableAudioSpectrum()
-    if (audio.paused) void audio.play().catch(() => {})
-    else audio.pause()
+    if (audio.paused && !loading.value) play()
+    else pause()
   }
 
   /**
@@ -605,11 +919,19 @@ export const usePlayerStore = defineStore('player', () => {
    * 直接按 audio.paused 判断则天然幂等，重复命令是空操作。
    */
   function play(): void {
-    if (!current.value || !audio.paused) return
+    if (!current.value || !audio.paused || loading.value) return
     if (useSettingsStore().settings.lyrics.desktopAudioVisualization) enableAudioSpectrum()
-    void audio.play().catch(() => {})
+    failedKeys.clear()
+    if (error.value || !audio.src) void loadForResume(current.value, currentTime.value, true)
+    else void audio.play().catch(() => {})
   }
   function pause(): void {
+    ++loadToken
+    cancelMetadata?.()
+    if (loading.value) error.value = '加载已暂停'
+    loading.value = false
+    if (skipTimer) clearTimeout(skipTimer)
+    skipTimer = null
     if (!audio.paused) audio.pause()
   }
 
@@ -634,6 +956,9 @@ export const usePlayerStore = defineStore('player', () => {
     }
     q.splice(index.value + 1, 0, item)
     queue.value = q
+    forcedNext = getMusicItemKey(item)
+    clearPreload()
+    schedulePersist()
   }
 
   /**
@@ -641,6 +966,26 @@ export const usePlayerStore = defineStore('player', () => {
    * 删除的是当前播放曲时，立即接播队列「下一首」（队列已空则停止），不再播已删的歌；
    * 删除其他位置的曲只做数组剔除，index 保持指向不变，prev/next 也切不到已删的这首。
    */
+  /**
+   * 向当前队列末尾追加歌曲（按 key 去重）。传入 source 时仅在队列来源仍是它的情况下生效，
+   * 供排行榜「播放全部」先播首页、后台拉完余页再补进队列（对齐 LX playSongListDetail）。
+   * 返回 false 表示队列已被切走、追加被忽略。
+   */
+  function appendToQueue(items: MusicItem[], source?: QueueSource): boolean {
+    if (
+      source &&
+      (queueSource.value?.kind !== source.kind ||
+        (queueSource.value?.id ?? '') !== (source.id ?? ''))
+    )
+      return false
+    const keys = new Set(queue.value.map(getMusicItemKey))
+    const added = items.filter((m) => !keys.has(getMusicItemKey(m)))
+    if (!added.length) return true
+    queue.value = [...queue.value, ...added]
+    schedulePersist()
+    return true
+  }
+
   function removeFromQueue(item: MusicItem): void {
     const key = getMusicItemKey(item)
     const idx = queue.value.findIndex((m) => getMusicItemKey(m) === key)
@@ -648,41 +993,69 @@ export const usePlayerStore = defineStore('player', () => {
     const removingCurrent =
       idx === index.value && !!current.value && getMusicItemKey(current.value) === key
     queue.value.splice(idx, 1)
+    clearPreload()
+    if (removingCurrent) {
+      pause()
+      const target = queue.value
+        .slice(idx)
+        .concat(queue.value.slice(0, idx))
+        .find((song) => !isDisliked(song))
+      if (target) playItem(target, queue.value, { source: queueSource.value ?? undefined })
+      else {
+        current.value = null
+        index.value = -1
+        audio.removeAttribute('src')
+        audio.load()
+        localStorage.removeItem(SAVE_KEY)
+        localStorage.removeItem(POS_KEY)
+      }
+      schedulePersist()
+      return
+    }
     if (idx <= index.value) index.value -= 1
     if (index.value < 0) index.value = queue.value.length ? 0 : -1
     schedulePersist()
-    if (removingCurrent) {
-      if (queue.value.length)
-        step(1) // 删除即切走，忽略 singleLoop 的重播语义
-      else audio.pause()
-    }
   }
 
   function seek(ms: number): void {
-    if (!current.value) return
-    audio.currentTime = Math.max(0, ms) / 1000
-    currentTime.value = Math.max(0, ms)
+    if (!current.value || !Number.isFinite(ms)) return
+    const position = Math.max(0, duration.value > 0 ? Math.min(ms, duration.value) : ms)
+    audio.currentTime = position / 1000
+    currentTime.value = position
+    emitTrackEvent({ type: 'seek', item: current.value, positionMs: position })
     // 暂停态拖进度条后 timeupdate 不跑、pause 也不会再触发，异常退出就会丢掉新位置
     schedulePersist()
   }
 
   function step(delta: number): void {
-    if (!queue.value.length) return
-    const n = queue.value.length
-    let i = index.value + delta
-    if (playMode.value === 'random') i = Math.floor(Math.random() * n)
-    if (i < 0) i = n - 1
-    if (i >= n) i = 0
-    index.value = i
-    // 在队列内切歌不改来源；source 回传保持「正在播放的列表」标记稳定
-    playItem(queue.value[i], queue.value, { source: queueSource.value ?? undefined })
-  }
-  function next(): void {
-    if (playMode.value === 'singleLoop' && current.value) {
-      seek(0)
-      void audio.play().catch(() => {})
+    const items = eligibleQueue()
+    if (!items.length) {
+      pause()
       return
     }
+    let target: MusicItem | undefined
+    if (forcedNext && delta > 0) target = items.find((item) => getMusicItemKey(item) === forcedNext)
+    if (!target && playMode.value === 'random') {
+      const key = randomQueue.move(
+        items.map(getMusicItemKey),
+        current.value ? getMusicItemKey(current.value) : '',
+        delta
+      )
+      target = items.find((item) => getMusicItemKey(item) === key)
+    } else if (!target) {
+      for (let offset = 1; offset <= queue.value.length; offset++) {
+        const i = (index.value + delta * offset + queue.value.length) % queue.value.length
+        if (items.includes(queue.value[i])) {
+          target = queue.value[i]
+          break
+        }
+      }
+    }
+    if (!target) return
+    forcedNext = null
+    playItem(target, queue.value, { source: queueSource.value ?? undefined })
+  }
+  function next(): void {
     step(1)
   }
   function prev(): void {
@@ -691,18 +1064,19 @@ export const usePlayerStore = defineStore('player', () => {
 
   /** 设音量（0..1），实时应用到 audio 并持久化到设置 */
   function setVolume(v: number): void {
-    const clamped = Math.max(0, Math.min(1, v))
+    const clamped = Math.max(0, Math.min(1, Number.isFinite(v) ? v : volume.value))
     volume.value = clamped
     if (clamped > 0) muted.value = false
     audio.volume = muted.value ? 0 : clamped
-    void useSettingsStore().update({ player: { volume: clamped } })
+    void useSettingsStore().update({ player: { volume: clamped, muted: muted.value } })
   }
   function toggleMute(): void {
     muted.value = !muted.value
+    void useSettingsStore().update({ player: { muted: muted.value } })
     audio.volume = muted.value ? 0 : volume.value
   }
 
-  const PLAY_MODES: PlayMode[] = ['listLoop', 'singleLoop', 'random']
+  const PLAY_MODES: PlayMode[] = ['listLoop', 'singleLoop', 'random', 'order']
   function cyclePlayMode(): void {
     const i = PLAY_MODES.indexOf(playMode.value)
     playMode.value = PLAY_MODES[(i + 1) % PLAY_MODES.length]
@@ -718,6 +1092,16 @@ export const usePlayerStore = defineStore('player', () => {
   }
 
   return {
+    devices,
+    deviceError,
+    refreshDevices,
+    sleepRemaining,
+    sleepWaitForEnd,
+    stopAfterTrack,
+    setSleep,
+    cancelSleep,
+    isDisliked,
+    dislike,
     current,
     queue,
     index,
@@ -736,6 +1120,7 @@ export const usePlayerStore = defineStore('player', () => {
     playItem,
     playInTrial,
     playNext,
+    appendToQueue,
     removeFromQueue,
     toggle,
     play,
@@ -747,6 +1132,7 @@ export const usePlayerStore = defineStore('player', () => {
     toggleMute,
     cyclePlayMode,
     changeQuality,
-    restore
+    restore,
+    onTrackEvent
   }
 })

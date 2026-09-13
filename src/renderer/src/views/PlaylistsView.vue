@@ -363,6 +363,12 @@ const menuItems = computed<MenuItem[]>(() => {
     { key: 'addLocal', label: '添加本地歌曲', icon: 'folder' },
     { key: 'addById', label: '通过 ID / MID 添加歌曲', icon: 'plus' },
     { key: 'update', label: '更新', icon: 'refresh', divider: true, disabled: !remote },
+    {
+      key: 'autoRefresh',
+      label: p.autoRefresh ? '关闭启动时自动补充新曲' : '启动时自动补充新曲',
+      icon: 'refresh',
+      disabled: !remote
+    },
     { key: 'detail', label: '歌单详情页', icon: 'library', disabled: !remote },
     { key: 'import', label: '导入', icon: 'download', divider: true },
     { key: 'export', label: '导出', icon: 'upload' },
@@ -379,6 +385,11 @@ async function onMenuSelect(key: string): Promise<void> {
   const p = menu.value?.playlist
   closeMenu()
   if (!p) return
+  if (key === 'autoRefresh') {
+    await api.library.setAutoRefresh(p.id, !p.autoRefresh)
+    showToast(p.autoRefresh ? '已关闭自动更新' : '启动时将自动补充远端新曲，保留本地歌曲')
+    return
+  }
   if (key === 'play') {
     await selectLocal(p)
     playAll()
@@ -433,22 +444,10 @@ async function updateFromRemote(p: LocalPlaylist): Promise<void> {
   updatingId.value = p.id
   showToast(`正在更新「${p.name}」…`)
   try {
-    const source = p.remoteSource as MusicSource
-    const all: MusicItem[] = []
-    // 分页拉全量；100 页 * 100 首上限护栏，防远端 hasNext 异常导致死循环
-    for (let page = 0; page < 100; page++) {
-      const res = await api.discover.playlistSongs(source, p.remoteId, page, 100)
-      all.push(...res.result)
-      if (!res.hasNext || !res.result.length) break
-    }
-    if (!all.length) {
-      showToast('更新失败：远端歌单为空或拉取失败')
-      return
-    }
-    await api.library.replaceSongs(p.id, all)
-    showToast(`已更新「${p.name}」：${all.length} 首`)
-  } catch {
-    showToast('更新失败')
+    const count = await api.library.refreshRemote(p.id)
+    showToast('已更新「' + p.name + '」：' + count + ' 首')
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : '更新失败')
   } finally {
     updatingId.value = null
   }
@@ -735,7 +734,10 @@ onUnmounted(() => {
         <div v-if="showQueueHint" class="queue-hint">
           <AppIcon name="headphone" :size="13" />
           <span class="qh-text ellipsis">
-            正在播放「{{ player.queueSource?.name || '其他列表' }}」的队列（{{ player.queue.length }} 首）——点歌或「播放全部」将切换到本列表
+            正在播放「{{ player.queueSource?.name || '其他列表' }}」的队列（{{
+              player.queue.length
+            }}
+            首）——点歌或「播放全部」将切换到本列表
           </span>
         </div>
 

@@ -5,13 +5,22 @@
  * IPC 传入的原始参数在此统一转发。
  */
 import { BrowserWindow, ipcMain } from 'electron'
+import { createLogger } from '../core/logger'
+const ipcLog = createLogger('ipc')
 import { getMainWindow } from '../windows/main'
 
 export function handle<A extends unknown[], R>(
   channel: string,
   listener: (...args: A) => R | Promise<R>
 ): void {
-  ipcMain.handle(channel, (_event, ...args) => listener(...(args as A)))
+  ipcMain.handle(channel, async (_event, ...args) => {
+    try {
+      return await listener(...(args as A))
+    } catch (error) {
+      if (!channel.startsWith('log:')) ipcLog.error('IPC 调用失败', error, { channel })
+      throw error
+    }
+  })
 }
 
 /** 主动推送事件到渲染层（主窗口） */

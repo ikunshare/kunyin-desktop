@@ -23,8 +23,11 @@ import { readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { getMusicItemKey, type MusicItem } from '@common'
+import { createLogger } from '../core/logger'
 import { appDataPath, DATA_CACHE_SUBDIR } from '../core/paths'
 import { getSettings } from '../store/settings'
+
+const log = createLogger('cache:audio')
 
 /**
  * 块大小 1 MiB：小到切歌时能留下有意义的进度，大到不会让一首歌散成几千个文件
@@ -125,7 +128,8 @@ function ensureLoaded(): void {
     if (Array.isArray(entries)) {
       index = new Map(entries.map(([key, r]) => [key, { ...r, blocks: new Set(r.blocks ?? []) }]))
     }
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') log.warn('音频索引读取失败', error)
     /* 首次或文件损坏：空缓存 */
   }
   recount()
@@ -145,7 +149,8 @@ function writeIndex(): void {
     // 索引只有条目元信息，同步写的代价可忽略
     writeFileSync(tmp, JSON.stringify(stored), 'utf-8')
     renameSync(tmp, path)
-  } catch {
+  } catch (error) {
+    log.warn('音频索引写入失败', error)
     /* 索引写失败：下次启动退化为孤儿目录，由 pruneOrphans 收走 */
   }
 }
@@ -283,6 +288,7 @@ export async function verifyBlock(
     size = -1
   }
   if (size === blockLength(record, blockIndex)) return true
+  log.warn('音频缓存块缺失或大小不符，回源', { blockIndex, size })
   record.blocks.delete(blockIndex)
   totalBytes -= blockLength(record, blockIndex)
   if (totalBytes < 0) totalBytes = 0
@@ -311,7 +317,8 @@ async function commitBlock(
     // 每 MiB 同步写一次会直接卡住播放
     await writeFile(tmp, data)
     await rename(tmp, path)
-  } catch {
+  } catch (error) {
+    log.warn('音频缓存块写入失败', { error, blockIndex })
     void rm(tmp, { force: true }).catch(() => {})
     return
   }

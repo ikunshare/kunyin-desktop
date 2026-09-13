@@ -133,6 +133,9 @@ export class LineManager {
 
       if (Lyric.Parsed.isParsedLineInterlude(line)) {
         const element = new InterludeLineElement(component.context, line.body.value)
+        // [vendor patch] 上游漏设间奏行的 index，留在初始 -1，点击它时 resolveLine 拿不到行、
+        // lineClick 静默丢弃。补上后点间奏也能跳到间奏起点。
+        element.index = currentLineIndex
         newElementMap.set(currentElementIndex, element)
         indexes.push(currentElementIndex)
 

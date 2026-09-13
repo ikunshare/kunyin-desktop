@@ -26,6 +26,18 @@ import {
   verifyBlock,
   type CacheRecord
 } from '../cache/audioCache'
+import { createLogger } from '../core/logger'
+
+const log = createLogger('audio')
+
+/** 日志用：只取主机名。直链的 query 带 vkey/guid，一概不进日志。 */
+function hostOf(raw: string): string {
+  try {
+    return new URL(raw).hostname
+  } catch {
+    return '非法地址'
+  }
+}
 
 export interface AudioStreamSpec {
   /** 远程直链；与 filePath 二选一。完整命中音频缓存时可以不给（全程走本地块）。 */
@@ -66,7 +78,8 @@ function serveLocalFile(filePath: string, range: string | null, contentType?: st
   let size: number
   try {
     size = statSync(filePath).size
-  } catch {
+  } catch (error) {
+    log.warn('本地音频读取失败', error)
     return new Response(null, { status: 404 })
   }
   const mime =
@@ -107,8 +120,13 @@ const registry = new Map<string, AudioStreamSpec>()
  *
  * 没有它的话：上游 CDN 挂住连接却不响应时 net.fetch 的 await 永不落地，
  * handler 永不返回，DevTools 里那条请求就永远停在「待处理」，播放彻底卡死。
+ *
+ * 取值要短：后面还要换主机重试，20s 一档会让首次播放最坏等上一分钟。
  */
-const UPSTREAM_HEADER_TIMEOUT = 20_000
+const UPSTREAM_HEADER_TIMEOUT = 12_000
+
+/** 一路取流最多试几个地址（原地址 + 换路候选） */
+const MAX_UPSTREAM_ATTEMPTS = 3
 
 /**
  * 上游请求 UA：对齐真实浏览器。部分 CDN/WAF 会把裸 `Mozilla/5.0` 当机器人，
@@ -120,11 +138,19 @@ const UPSTREAM_UA =
 /**
  * 快速失败且值得重试的网络错误：多见于 VPN/代理切换节点、Wi-Fi 切换的瞬间，
  * Chromium 会把在飞请求判死（ERR_NETWORK_CHANGED），等网络落定后重发一般就通。
+ *
+ * 也收了「地址不可达/连接超时」一类：IPv6 半通或 CDN 坏节点就长这样，
+ * 现在重试会换到同族的其它主机（见 upstreamAttempts），换路后往往立刻恢复。
  */
 const RETRYABLE_NET_ERRORS = [
   'ERR_NETWORK_CHANGED',
   'ERR_CONNECTION_RESET',
-  'ERR_CONNECTION_CLOSED'
+  'ERR_CONNECTION_CLOSED',
+  'ERR_CONNECTION_TIMED_OUT',
+  'ERR_CONNECTION_FAILED',
+  'ERR_ADDRESS_UNREACHABLE',
+  'ERR_EMPTY_RESPONSE',
+  'ERR_TIMED_OUT'
 ]
 /** 网络抖动重试前的等待（ms）：给系统留出路由/适配器切换完成的时间 */
 const NET_RETRY_DELAY = 800
@@ -176,6 +202,60 @@ function httpsUpgrade(raw: string): string | null {
 }
 
 /**
+ * QQ 音乐 CDN 的同族主机：vkey 与主机无关，同一条 path+query 换台主机照样能取，
+ * 而各主机解析到不同 IP 段。某个节点把连接挂住却不给响应头时（IPv6 半通、坏节点），
+ * 换主机是唯一能自救的手段——原地重试同一个 https 地址必然还是同样结果。
+ */
+const QQ_CDN_TARGETS = [
+  'ws.stream.qqmusic.qq.com',
+  'ws6.stream.qqmusic.qq.com',
+  'isure.stream.qqmusic.qq.com',
+  'dl.stream.qqmusic.qq.com',
+  'aqqmusic.tc.qq.com'
+]
+/** 可识别为 QQ 取流地址的主机（music.tc.qq.com 只作来源、不作换路目标：它本身就常年不通） */
+const QQ_CDN_ORIGINS = new Set([...QQ_CDN_TARGETS, 'music.tc.qq.com'])
+
+/**
+ * 一路取流按顺序要试的地址：原地址 → https 升级 → 同族其它 CDN 主机。
+ * 去重后截断到 MAX_UPSTREAM_ATTEMPTS，避免一首歌卡在重试里出不来。
+ *
+ * 没有换路候选时（非 QQ 音源）补一次原地址重试——网络切换那类抖动重发同一地址就能通。
+ */
+function upstreamAttempts(raw: string): string[] {
+  const out = [raw]
+  const push = (u: string): void => {
+    if (!out.includes(u)) out.push(u)
+  }
+  const https = httpsUpgrade(raw)
+  if (https) push(https)
+  try {
+    const url = new URL(raw)
+    const host = url.hostname.toLowerCase()
+    if (QQ_CDN_ORIGINS.has(host)) {
+      for (const target of QQ_CDN_TARGETS) {
+        if (target === host) continue
+        const alt = new URL(raw)
+        alt.protocol = 'https:'
+        alt.hostname = target
+        push(alt.toString())
+      }
+    }
+  } catch {
+    // 非法 URL：只用原地址，由 net.fetch 报原错误
+  }
+  if (out.length === 1) out.push(raw)
+  return out.slice(0, MAX_UPSTREAM_ATTEMPTS)
+}
+
+/**
+ * 当前在飞的上游取流数。只用于诊断：Chromium 每主机只给 6 个并发额度，
+ * 一旦出现「连上了却等不到响应头」，这个数字能直接分辨是我们漏了连接（数值一路涨）
+ * 还是纯粹上游/线路不通（数值仍是 1、2）。
+ */
+let inFlightUpstreams = 0
+
+/**
  * 单次上游取流，带「等响应头」超时：
  * - rendererSignal（<audio> 的取消）必须联动到上游，否则 seek/换歌后主进程侧连接
  *   继续在后台拉完整个文件，孤儿连接攒满连接池后新请求就发不出去；
@@ -195,6 +275,7 @@ async function fetchUpstreamOnce(
     timedOut = true
     abort.abort()
   }, UPSTREAM_HEADER_TIMEOUT)
+  inFlightUpstreams++
   try {
     // net.fetch 走 Electron 网络栈（遵循代理/证书设置），比全局 fetch 更合适
     return await net.fetch(url, { headers, signal: abort.signal })
@@ -202,6 +283,7 @@ async function fetchUpstreamOnce(
     if (timedOut && !rendererSignal.aborted) throw new HeaderTimeoutError()
     throw e
   } finally {
+    inFlightUpstreams--
     clearTimeout(timer)
   }
 }
@@ -277,56 +359,83 @@ async function fetchUpstream(
   headers: Record<string, string>,
   signal: AbortSignal
 ): Promise<{ ok: true; upstream: Response } | { ok: false; error: Response }> {
-  let upstream: Response
-  try {
-    upstream = await fetchUpstreamOnce(url, headers, signal)
-  } catch (e) {
-    // 取消属正常流程（seek/换歌），不当错误报
-    if (signal.aborted || (e as Error)?.name === 'AbortError') {
-      return { ok: false, error: new Response(null, { status: 499 }) }
-    }
-    if (!isRetryable(e)) {
-      // 别静默吞掉：代理不可达/DNS/证书失败在这里全都长得像一个光秃秃的 502
-      console.error('[audio] 上游取流失败', url, e)
-      return { ok: false, error: new Response(null, { status: 502 }) }
-    }
+  const attempts = upstreamAttempts(url)
+  const aborted = (): { ok: false; error: Response } => ({
+    ok: false,
+    error: new Response(null, { status: 499 })
+  })
+
+  for (let i = 0; i < attempts.length; i++) {
+    const target = attempts[i]
     // 仅重试当前请求。不能 closeAllConnections()：它会把正在播放或刚切换的其他歌曲
     // 一并中止，制造与真实网络故障无关的 net::ERR_ABORTED。
-    // 等响应头超时多为 http CDN 的 IPv6/路由问题（同 music.tc.qq.com 已知故障），
-    // 升级 https 重新选路通常能恢复；其它可重试网络错误仍用原 URL。
-    const retryUrl = e instanceof HeaderTimeoutError ? (httpsUpgrade(url) ?? url) : url
-    if (e instanceof HeaderTimeoutError) {
-      // 「重启才恢复」的典型根因是主机解析器缓存了坏 IP/坏路由：清掉后重试才能重新解析，
-      // 而不是继续连同一个坏地址。仅清 DNS 缓存，不影响正在播放的其它歌曲。
-      await session.defaultSession.clearHostResolverCache().catch(() => {})
-    }
-    console.warn('[audio] 上游取流失败，等待后重试', (e as Error)?.message ?? e, retryUrl)
-    try {
+    if (i > 0) {
       await sleep(NET_RETRY_DELAY)
-      upstream = await fetchUpstreamOnce(retryUrl, headers, signal)
-    } catch (e2) {
-      if (signal.aborted || (e2 as Error)?.name === 'AbortError') {
-        return { ok: false, error: new Response(null, { status: 499 }) }
+      if (signal.aborted) return aborted()
+    }
+    try {
+      const upstream = await fetchUpstreamOnce(target, headers, signal)
+      if (upstream.status >= 400 || !upstream.body) {
+        log.warn('上游拒绝取流', { status: upstream.status, host: hostOf(target) })
+        // 必须主动 cancel：不消费也不取消的响应体会把那条上游连接一直挂在池子里，
+        // 403（直链过期）在播放中途是常态，攒下来的孤儿连接会占满 per-host 连接数，
+        // 之后的取流请求只能排队——表现为切歌越来越慢。
+        void upstream.body?.cancel().catch(() => {})
+        // 4xx/5xx 是上游给出的明确答复（直链过期、鉴权不通），换主机也是同样结果，不再试
+        return {
+          ok: false,
+          error: new Response(null, { status: upstream.status >= 400 ? upstream.status : 502 })
+        }
       }
-      if (e2 instanceof HeaderTimeoutError) {
-        console.error('[audio] 上游响应超时（重试后仍超时）', url)
-        return { ok: false, error: new Response(null, { status: 504 }) }
+      if (i > 0) log.info('换路取流成功', { host: hostOf(target) })
+      return { ok: true, upstream }
+    } catch (e) {
+      // 取消属正常流程（seek/换歌），不当错误报
+      if (signal.aborted || (e as Error)?.name === 'AbortError') return aborted()
+      if (!isRetryable(e)) {
+        // 别静默吞掉：代理不可达/DNS/证书失败在这里全都长得像一个光秃秃的 502
+        log.error('上游取流失败', e, { host: hostOf(target) })
+        return { ok: false, error: new Response(null, { status: 502 }) }
       }
-      console.error('[audio] 上游取流失败（重试后仍失败）', url, e2)
-      return { ok: false, error: new Response(null, { status: 502 }) }
+      if (e instanceof HeaderTimeoutError) {
+        // 「重启才恢复」的典型根因是主机解析器缓存了坏 IP/坏路由：清掉后重试才能重新解析，
+        // 而不是继续连同一个坏地址。仅清 DNS 缓存，不影响正在播放的其它歌曲。
+        await session.defaultSession.clearHostResolverCache().catch(() => {})
+      }
+      const last = i === attempts.length - 1
+      const msg = (e as Error)?.message ?? String(e)
+      if (last) {
+        log.error('上游取流失败（全部候选）', msg, { hosts: attempts.map(hostOf) })
+        return {
+          ok: false,
+          error: new Response(null, { status: e instanceof HeaderTimeoutError ? 504 : 502 })
+        }
+      }
+      log.warn('上游取流失败，换路重试', { error: msg, inFlight: inFlightUpstreams, host: hostOf(attempts[i + 1]) })
     }
   }
-  if (upstream.status >= 400 || !upstream.body) {
-    // 必须主动 cancel：不消费也不取消的响应体会把那条上游连接一直挂在池子里，
-    // 403（直链过期）在播放中途是常态，攒下来的孤儿连接会占满 per-host 连接数，
-    // 之后的取流请求只能排队——表现为切歌越来越慢。
-    void upstream.body?.cancel().catch(() => {})
-    return {
-      ok: false,
-      error: new Response(null, { status: upstream.status >= 400 ? upstream.status : 502 })
-    }
-  }
-  return { ok: true, upstream }
+  // 循环必然在内部返回，这里只为类型完备
+  return { ok: false, error: new Response(null, { status: 502 }) }
+}
+
+/**
+ * 把响应体的生命周期绑到渲染层这条请求上。
+ *
+ * `protocol.handle` 返回的 Response 有可能压根不会被消费——最典型的是 await 上游期间
+ * <audio> 已经 seek/切歌，Electron 直接把这条响应丢掉。此时上游那条连接既没被读、也没被
+ * cancel，会一直挂在 Chromium 的连接池里；每个主机只有 6 个并发额度，攒够了之后新的取流
+ * 只能排队等额度——表现正是「放久了之后每首歌都 upstream header timeout」，且跨主机同时中招。
+ * 绑上 signal 后，请求一取消就 cancel 上游流，连接立刻归还。
+ */
+function bindToRequest(
+  src: ReadableStream<Uint8Array>,
+  signal: AbortSignal
+): ReadableStream<Uint8Array> {
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
+  void src.pipeTo(writable, { signal }).catch(() => {
+    // 取消/断流属正常路径（seek、切歌、网络中断）；错误已经由 readable 侧传给 <audio>
+  })
+  return readable
 }
 
 /** 上游请求头（带上调用方指定的 Range） */
@@ -344,7 +453,7 @@ function decryptedBody(
 ): ReadableStream<Uint8Array> {
   const decryptor = spec.ekey ? createAudioDecryptor(spec.ekey) : null
   if (spec.ekey && !decryptor) {
-    console.warn('[audio] ekey 流暂无解密器，透传（播放将异常）')
+    log.warn('加密流暂无解密器，透传（播放将异常）')
   }
   const body = upstream.body as ReadableStream<Uint8Array>
   return decryptor ? decryptStream(body, decryptor, startOffset) : body
@@ -505,7 +614,7 @@ export function installAudioProtocol(): void {
     if (!spec) {
       // 正在播的流被挤出 registry 时，<audio> 的下一次 Range 请求就会撞到这里，
       // 播放随即中断且没有任何提示——所以命中要刷新 LRU 位置（见下方 touch）。
-      console.warn('[audio] 未知或已失效的流 token', token)
+      log.warn('未知或已失效的音频流')
       return new Response(null, { status: 404 })
     }
     // 命中即提到最新，避免「正在播放但注册得早」的流被后续注册淘汰
@@ -537,7 +646,10 @@ export function installAudioProtocol(): void {
       })
       if (partial) out.set('Content-Range', `bytes ${start}-${end}/${record.size}`)
       const body = streamFrom(assembleRange(spec, key, record, start, end, request.signal))
-      return new Response(body as BodyInit, { status: partial ? 206 : 200, headers: out })
+      return new Response(bindToRequest(body, request.signal) as BodyInit, {
+        status: partial ? 206 : 200,
+        headers: out
+      })
     }
 
     if (!spec.url) return new Response(null, { status: 404 })
@@ -551,6 +663,14 @@ export function installAudioProtocol(): void {
     )
     if (!result.ok) return result.error
     const upstream = result.upstream
+
+    // 等上游响应头这段时间里 <audio> 可能已经 seek/切歌。此时 Electron 会把返回的
+    // Response 直接丢掉，谁也不会去 cancel 它——必须自己收掉，否则这条连接会一直占着
+    // per-host 的并发额度（见 bindToRequest）。
+    if (request.signal.aborted) {
+      void upstream.body?.cancel().catch(() => {})
+      return new Response(null, { status: 499 })
+    }
 
     const contentType = spec.contentType ?? upstream.headers.get('content-type') ?? 'audio/mpeg'
     const out = new Headers()
@@ -573,7 +693,7 @@ export function installAudioProtocol(): void {
       if (fresh) body = tapToBlocks(body, key, fresh, upstreamStart)
     }
 
-    return new Response(body as BodyInit, { status, headers: out })
+    return new Response(bindToRequest(body, request.signal) as BodyInit, { status, headers: out })
   })
 }
 

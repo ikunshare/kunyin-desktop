@@ -1,4 +1,6 @@
 import { net } from 'electron'
+import { createLogger } from '../core/logger'
+const log = createLogger('net')
 
 /**
  * 主进程 HTTP 请求封装（音源用）。
@@ -12,8 +14,8 @@ export interface RequestOptions {
   method?: string
   headers?: Record<string, string>
   query?: Record<string, string | number | boolean | undefined>
-  /** 对象 → JSON；字符串/URLSearchParams 原样发送 */
-  body?: string | URLSearchParams | Record<string, unknown>
+  /** 对象 → JSON；字符串/URLSearchParams/Buffer 原样发送（Buffer 用于 gzip 等二进制体） */
+  body?: string | URLSearchParams | Buffer | Record<string, unknown>
   cookie?: string
   timeout?: number
 }
@@ -36,10 +38,13 @@ export async function requestRaw(url: string, options: RequestOptions = {}): Pro
   const headers: Record<string, string> = { 'User-Agent': DEFAULT_UA, ...options.headers }
   if (options.cookie) headers['Cookie'] = options.cookie
 
-  let body: string | URLSearchParams | undefined
+  let body: string | URLSearchParams | ArrayBuffer | undefined
   if (options.body != null) {
     if (typeof options.body === 'string' || options.body instanceof URLSearchParams) {
       body = options.body
+    } else if (Buffer.isBuffer(options.body)) {
+      // 拷贝成独立 ArrayBuffer（Buffer 可能是池化切片，直接取 .buffer 会带上无关字节）
+      body = new Uint8Array(options.body).buffer as ArrayBuffer
     } else {
       body = JSON.stringify(options.body)
       headers['Content-Type'] ??= 'application/json'
@@ -49,12 +54,17 @@ export async function requestRaw(url: string, options: RequestOptions = {}): Pro
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), options.timeout ?? 15000)
   try {
-    return await net.fetch(buildUrl(url, options.query), {
+    const response = await net.fetch(buildUrl(url, options.query), {
       method: options.method ?? 'GET',
       headers,
       body,
       signal: controller.signal
     })
+    if (!response.ok) log.warn('HTTP 非成功响应', { url, status: response.status })
+    return response
+  } catch (error) {
+    log.error('网络请求失败', error, { url, method: options.method ?? 'GET' })
+    throw error
   } finally {
     clearTimeout(timer)
   }
@@ -79,9 +89,9 @@ export async function requestRawWithHeaders(
   const headers: Record<string, string> = { 'User-Agent': DEFAULT_UA, ...options.headers }
   if (options.cookie) headers['Cookie'] = options.cookie
 
-  let body: string | undefined
+  let body: string | Buffer | undefined
   if (options.body != null) {
-    if (typeof options.body === 'string') {
+    if (typeof options.body === 'string' || Buffer.isBuffer(options.body)) {
       body = options.body
     } else if (options.body instanceof URLSearchParams) {
       body = options.body.toString()
@@ -108,11 +118,13 @@ export async function requestRawWithHeaders(
       })
       res.on('error', (e: Error) => {
         clearTimeout(timer)
+        log.warn('网络响应流失败', { url, error: e })
         reject(e)
       })
     })
     req.on('error', (e: Error) => {
       clearTimeout(timer)
+      log.warn('网络请求失败', { url, error: e })
       reject(e)
     })
     if (body != null) req.write(body)
@@ -122,7 +134,12 @@ export async function requestRawWithHeaders(
 
 export async function requestJson<T>(url: string, options: RequestOptions = {}): Promise<T> {
   const resp = await requestRaw(url, options)
-  return (await resp.json()) as T
+  try {
+    return (await resp.json()) as T
+  } catch (error) {
+    log.warn('JSON 响应解析失败', { url, status: resp.status, error })
+    throw error
+  }
 }
 
 export async function requestText(url: string, options: RequestOptions = {}): Promise<string> {

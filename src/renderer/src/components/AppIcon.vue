@@ -9,6 +9,8 @@ interface IconDef {
 }
 
 const ICONS: Record<string, IconDef> = {
+  compass: { inner: '<circle cx="12" cy="12" r="9"/><path d="m16 8-3 5-5 3 3-5z"/>' },
+  chart: { inner: '<path d="M5 20V10M12 20V4M19 20v-7"/>' },
   search: { inner: '<circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/>' },
   library: {
     inner:

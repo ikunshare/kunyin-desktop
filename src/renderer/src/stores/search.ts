@@ -1,19 +1,30 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { AlbumInfoResult, ArtistInfoResult, MusicItem, MusicSource } from '@common'
+import type {
+  AlbumInfoResult,
+  ArtistInfoResult,
+  MusicItem,
+  MusicSource,
+  PlayListInfoResult
+} from '@common'
 
 /** 搜索类型（对应 Android SearchType；joox 等只支持单曲，UI 按平台隐藏其余 Tab） */
-export type SearchType = 'song' | 'album' | 'artist'
+export type SearchType = 'song' | 'album' | 'artist' | 'playlist'
 
 export const SEARCH_TYPES: readonly { id: SearchType; label: string }[] = [
   { id: 'song', label: '单曲' },
+  { id: 'playlist', label: '歌单' },
   { id: 'album', label: '专辑' },
   { id: 'artist', label: '歌手' }
 ] as const
 
 /** 各平台支持的搜索类型（joox/qqc 只有单曲，与 Android supportedSearchTypes 一致） */
 export function supportedSearchTypes(source: MusicSource): SearchType[] {
-  return source === 'joox' || source === 'qqc' ? ['song'] : ['song', 'album', 'artist']
+  return source === 'joox' || source === 'qqc'
+    ? ['song']
+    : source === 'wy' || source === 'qq'
+      ? ['song', 'playlist', 'album', 'artist']
+      : ['song', 'album', 'artist']
 }
 
 const HISTORY_KEY = 'kunyin:searchHistory'
@@ -36,6 +47,9 @@ export const useSearchStore = defineStore('search', () => {
   const results = ref<MusicItem[]>([])
   const albumResults = ref<AlbumInfoResult[]>([])
   const artistResults = ref<ArtistInfoResult[]>([])
+  const playlistResults = ref<PlayListInfoResult[]>([])
+  const error = ref('')
+  let requestId = 0
   const loading = ref(false)
   const loadingMore = ref(false)
   const page = ref(0)
@@ -69,6 +83,11 @@ export const useSearchStore = defineStore('search', () => {
   }
 
   function clearResults(): void {
+    ++requestId
+    playlistResults.value = []
+    error.value = ''
+    loading.value = false
+    loadingMore.value = false
     results.value = []
     albumResults.value = []
     artistResults.value = []
@@ -78,59 +97,48 @@ export const useSearchStore = defineStore('search', () => {
 
   async function search(reset = true): Promise<void> {
     if (!keyword.value.trim()) return
-    if (reset) addHistory(keyword.value)
     if (reset) {
-      page.value = 0
+      addHistory(keyword.value)
       clearResults()
-      loading.value = true
-    } else {
-      loadingMore.value = true
     }
+    const token = ++requestId
+    const nextPage = reset ? 0 : page.value + 1
+    const type = searchType.value
+    loading.value = reset
+    loadingMore.value = !reset
+    error.value = ''
     try {
-      switch (searchType.value) {
-        case 'album': {
-          const res = await window.api.discover.searchAlbum(
-            source.value,
-            keyword.value,
-            page.value,
-            PAGE_SIZE
-          )
-          albumResults.value = reset ? res.result : [...albumResults.value, ...res.result]
-          hasNext.value = res.hasNext
-          break
-        }
-        case 'artist': {
-          const res = await window.api.discover.searchArtist(
-            source.value,
-            keyword.value,
-            page.value,
-            PAGE_SIZE
-          )
-          artistResults.value = reset ? res.result : [...artistResults.value, ...res.result]
-          hasNext.value = res.hasNext
-          break
-        }
-        default: {
-          const res = await window.api.search.songs(
-            source.value,
-            keyword.value,
-            page.value,
-            PAGE_SIZE
-          )
-          results.value = reset ? res.result : [...results.value, ...res.result]
-          hasNext.value = res.hasNext
-        }
-      }
+      const api = window.api.discover
+      const result =
+        type === 'playlist'
+          ? await api.searchPlaylist(source.value, keyword.value, nextPage, PAGE_SIZE)
+          : type === 'album'
+            ? await api.searchAlbum(source.value, keyword.value, nextPage, PAGE_SIZE)
+            : type === 'artist'
+              ? await api.searchArtist(source.value, keyword.value, nextPage, PAGE_SIZE)
+              : await window.api.search.songs(source.value, keyword.value, nextPage, PAGE_SIZE)
+      if (token !== requestId) return
+      const merge = <T>(old: T[], incoming: T[]): T[] => (reset ? incoming : [...old, ...incoming])
+      if (type === 'playlist')
+        playlistResults.value = merge(playlistResults.value, result.result as PlayListInfoResult[])
+      else if (type === 'album')
+        albumResults.value = merge(albumResults.value, result.result as AlbumInfoResult[])
+      else if (type === 'artist')
+        artistResults.value = merge(artistResults.value, result.result as ArtistInfoResult[])
+      else results.value = merge(results.value, result.result as MusicItem[])
+      page.value = nextPage
+      hasNext.value = result.hasNext
+    } catch (e) {
+      if (token === requestId) error.value = e instanceof Error ? e.message : '搜索失败，请重试'
     } finally {
-      loading.value = false
-      loadingMore.value = false
+      if (token === requestId) {
+        loading.value = false
+        loadingMore.value = false
+      }
     }
   }
-
-  /** 下一页（追加） */
   async function loadMore(): Promise<void> {
     if (loading.value || loadingMore.value || !hasNext.value) return
-    page.value += 1
     await search(false)
   }
 
@@ -184,6 +192,8 @@ export const useSearchStore = defineStore('search', () => {
     results,
     albumResults,
     artistResults,
+    playlistResults,
+    error,
     loading,
     loadingMore,
     page,

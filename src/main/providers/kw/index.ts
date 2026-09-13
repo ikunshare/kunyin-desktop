@@ -12,17 +12,27 @@ import {
   type ArtistMvItem,
   type ArtistMvResult,
   type ArtistSearchResult,
+  type CommentResult,
   type KuwoMusicItem,
   type Lyric,
   type MusicItem,
   type MusicListResult,
   type MvQuality,
-  type MvUrlResult
+  type MvUrlResult,
+  type PlayListInfoResult
 } from '@common'
 import { BaseProvider } from '../base'
 import { requestBuffer, requestText } from '../../net/request'
-import { num, parseMusicElements, parseMusicPayItem, parseSearchItem, unescapeXml } from './item'
+import {
+  num,
+  parseKwListSong,
+  parseMusicElements,
+  parseMusicPayItem,
+  parseSearchItem,
+  unescapeXml
+} from './item'
 import { getKwLyric } from './lyric'
+import { kwGetComment, kwGetHotComment } from './comment'
 
 const UID = '794762570'
 const VER = 'kwplayer_ar_9.2.2.1'
@@ -68,6 +78,11 @@ function kwDate(raw: string | undefined): string | undefined {
   const s = raw?.trim()
   return s && !s.startsWith('0000') ? s : undefined
 }
+
+/** 歌单网页链接：`/playlist/123` 或 `/playlist_detail/123` */
+const KW_PLAYLIST_LINK_RE = /\/playlist(?:_detail)?\/(\d+)/
+/** 发现页歌单 id：`digest-8__123`（8 = 普通歌单、5 = 精选集需先换 pid）；纯数字视作 pid */
+const KW_DIGEST_RE = /^digest-(\d+)__(\d+)$/
 
 export class KwProvider extends BaseProvider {
   readonly source = 'kw' as const
@@ -349,6 +364,11 @@ export class KwProvider extends BaseProvider {
   }
 
   /** 搜索/专辑/歌手歌曲无封面，批量从 musicpay 补 500x500 */
+  /** 供发现模块（排行榜）补封面 */
+  async fillCovers(items: KuwoMusicItem[]): Promise<void> {
+    await this.fetchCovers(items).catch(() => {})
+  }
+
   private async fetchCovers(items: KuwoMusicItem[]): Promise<void> {
     if (!items.length) return
     const ids = items.map((i) => i.id).join(',')
@@ -369,5 +389,81 @@ export class KwProvider extends BaseProvider {
       const c = map.get(it.id)
       if (c) it.cover = c
     }
+  }
+
+  // —— 歌单（nplserver pl.svc，移植自 LX kw/songList.js getListDetailDigest8/5）——
+  private pidCache = new Map<string, string>()
+
+  /** 把各种歌单引用统一成 pl.svc 需要的 pid；精选集（digest 5）要先查 qukudata 换 sourceid */
+  private async resolvePlaylistId(input: string): Promise<string | null> {
+    const s = String(input ?? '').trim()
+    const link = KW_PLAYLIST_LINK_RE.exec(s)
+    if (link) return link[1]
+    const digest = KW_DIGEST_RE.exec(s)
+    if (!digest) return /^\d+$/.test(s) ? s : null
+    const [, kind, id] = digest
+    if (kind !== '5') return id
+    const hit = this.pidCache.get(id)
+    if (hit) return hit
+    const json = this.parseJson(
+      await requestText(
+        `http://qukudata.kuwo.cn/q.k?op=query&cont=ninfo&node=${id}&pn=0&rn=1&fmt=json&src=mbox&level=2`
+      ).catch(() => '')
+    )
+    const pid = json?.child?.[0]?.sourceid != null ? String(json.child[0].sourceid) : null
+    if (pid) this.pidCache.set(id, pid)
+    return pid
+  }
+
+  private async fetchPlaylistPayload(pid: string, page: number, size: number): Promise<any | null> {
+    const url =
+      `http://nplserver.kuwo.cn/pl.svc?op=getlistinfo&pid=${pid}&pn=${page}&rn=${size}` +
+      `&encode=utf8&keyset=pl2012&identity=kuwo&pcmp4=1&vipver=MUSIC_9.0.5.0_W1&newver=1`
+    for (let i = 0; i < 2; i++) {
+      const json = this.parseJson(await requestText(url).catch(() => ''))
+      if (json?.result === 'ok') return json
+    }
+    return null
+  }
+
+  async getPlayListInfo(input: string): Promise<PlayListInfoResult | null> {
+    const pid = await this.resolvePlaylistId(input)
+    if (!pid) return null
+    const json = await this.fetchPlaylistPayload(pid, 0, 1)
+    if (!json) return null
+    return {
+      source: 'kw',
+      id: pid,
+      name: unescapeXml(String(json.title ?? '')),
+      cover: json.pic || undefined,
+      creator: json.uname ? unescapeXml(String(json.uname)) : undefined,
+      description: json.info ? unescapeXml(String(json.info)) : undefined,
+      playCount: num(json.playnum, 0),
+      total: num(json.total, 0)
+    }
+  }
+
+  async getPlayListSongs(playlistId: string, page = 0, size = 30): Promise<MusicListResult> {
+    const pid = await this.resolvePlaylistId(playlistId)
+    if (!pid) return this.emptyList(page, size)
+    const json = await this.fetchPlaylistPayload(pid, page, size)
+    if (!json) return this.emptyList(page, size)
+    const items = ((json.musiclist ?? []) as any[])
+      .map((s) => parseKwListSong(s))
+      .filter((x): x is KuwoMusicItem => !!x)
+    await this.fetchCovers(items.filter((i) => !i.cover))
+    const total = num(json.total, 0)
+    return { source: 'kw', hasNext: (page + 1) * size < total, page, size, total, result: items }
+  }
+
+  // —— 评论 ——
+  supportsComment(): boolean {
+    return true
+  }
+  async getComment(item: MusicItem, page = 1, limit = 20): Promise<CommentResult> {
+    return kwGetComment(item, page, limit)
+  }
+  async getHotComment(item: MusicItem, page = 1, limit = 20): Promise<CommentResult> {
+    return kwGetHotComment(item, page, limit)
   }
 }

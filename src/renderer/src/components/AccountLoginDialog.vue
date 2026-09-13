@@ -9,15 +9,16 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'done'): void }>()
 
 const api = useApi()
 
-// qq/wy 走扫码，kg 无 native 签名库故手填凭据（网页登录已移除）
-const mode = props.provider === 'kg' ? 'manual' : 'qr'
+// 三家均走扫码；kg 另留一个手填凭据入口（扫码不通时的兜底）
+const mode = ref<'qr' | 'manual'>('qr')
 
 const qrImage = ref('') // 二维码图片 data URL
 const statusText = ref('')
 const busy = ref(false)
 
-// wy 轮询与 qq 事件订阅的清理
+// wy/kg 轮询与 qq 事件订阅的清理
 let wyTimer: ReturnType<typeof setInterval> | null = null
+let kgTimer: ReturnType<typeof setInterval> | null = null
 let qqUnsub: (() => void) | null = null
 let qqActive = false
 
@@ -25,6 +26,12 @@ function clearWy(): void {
   if (wyTimer) {
     clearInterval(wyTimer)
     wyTimer = null
+  }
+}
+function clearKg(): void {
+  if (kgTimer) {
+    clearInterval(kgTimer)
+    kgTimer = null
   }
 }
 async function clearQq(): Promise<void> {
@@ -64,6 +71,33 @@ async function startWyQR(): Promise<void> {
   }, 2500)
 }
 
+async function startKgQR(): Promise<void> {
+  clearKg()
+  qrImage.value = ''
+  statusText.value = '正在生成二维码…'
+  const info = await api.account.kgQrCreate()
+  if (!info) {
+    statusText.value = '二维码生成失败，请重试'
+    return
+  }
+  qrImage.value = await QRCode.toDataURL(info.url, { width: 220, margin: 1 })
+  statusText.value = '请使用酷狗音乐 App 扫码'
+  kgTimer = setInterval(async () => {
+    const r = await api.account.kgQrPoll(info.ticket)
+    if (r.status === 'success') {
+      statusText.value = '登录成功'
+      clearKg()
+      emit('done')
+    } else if (r.status === 'expired') {
+      statusText.value = '二维码已过期，请刷新'
+      clearKg()
+    } else if (r.status === 'error') {
+      statusText.value = '登录出错，请刷新重试'
+      clearKg()
+    }
+  }, 2000)
+}
+
 async function startQqQR(): Promise<void> {
   await clearQq()
   qrImage.value = ''
@@ -98,12 +132,25 @@ async function startQqQR(): Promise<void> {
 async function refreshQR(): Promise<void> {
   if (props.provider === 'wy') await startWyQR()
   else if (props.provider === 'qq') await startQqQR()
+  else await startKgQR()
 }
 
-// 扫码平台：打开即启动二维码流程（卸载时的清理见 onBeforeUnmount）
+// 打开即启动二维码流程（卸载时的清理见 onBeforeUnmount）
 onMounted(() => {
-  if (mode === 'qr') void refreshQR()
+  void refreshQR()
 })
+
+/** 切到手填：停掉二维码轮询，免得后台继续打接口 */
+async function switchToManual(): Promise<void> {
+  mode.value = 'manual'
+  clearKg()
+  clearWy()
+  await clearQq()
+}
+async function switchToQR(): Promise<void> {
+  mode.value = 'qr'
+  await refreshQR()
+}
 
 // —— kg 手动 ——
 const kgUserid = ref('')
@@ -130,7 +177,9 @@ async function saveKg(): Promise<void> {
 
 onBeforeUnmount(() => {
   clearWy()
+  clearKg()
   void clearQq()
+  if (props.provider === 'kg') void api.account.kgQrStop()
 })
 
 const title =
@@ -153,9 +202,12 @@ const title =
         </div>
         <p class="status">{{ statusText }}</p>
         <button class="btn" @click="refreshQR">刷新二维码</button>
+        <button v-if="provider === 'kg'" class="link" @click="switchToManual">
+          扫码不可用？手动填写凭据
+        </button>
       </div>
 
-      <!-- kg 手动 -->
+      <!-- kg 手填凭据（兜底） -->
       <div v-else class="body manual-body">
         <label class="field">
           <span>userid</span>
@@ -181,6 +233,7 @@ const title =
         <button class="btn primary" :disabled="busy" @click="saveKg">
           {{ busy ? '保存中…' : '保存' }}
         </button>
+        <button class="link" @click="switchToQR">返回扫码登录</button>
       </div>
     </div>
   </div>

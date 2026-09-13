@@ -4,6 +4,7 @@
  * 采用嵌套对象结构（比 lx-music-desktop 的扁平点分 key 更适合 Pinia/TS）。
  * 敏感凭据不在此，走主进程 safeStorage 单独加密存储。
  */
+import type { LogLevel } from './log'
 import type { QualityId } from './music'
 
 export type PlayMode = 'order' | 'listLoop' | 'singleLoop' | 'random'
@@ -89,6 +90,17 @@ export interface AppSettings {
   player: {
     /** 音量 0..1 */
     volume: number
+    muted: boolean
+    preloadNext: boolean
+    autoSkipOnError: boolean
+    autoSwitchSource: boolean
+    outputDeviceId: string
+    pauseOnDeviceChange: boolean
+    playbackRate: number
+    /** 每行一个歌名；以 @ 开头表示屏蔽歌手。 */
+    dislikeRules: string
+    /** 自定义全局快捷键；空字符串为禁用。 */
+    shortcuts: Record<string, string>
     playMode: PlayMode
     /** 首选音质 */
     preferredQuality: QualityId
@@ -101,6 +113,11 @@ export interface AppSettings {
      * 都不必发；超出上限按 LRU 淘汰最久未播的。比上限还大的单曲不缓存。
      */
     audioCacheBytes: number
+    /**
+     * QQ 音乐听歌上报：登录 QQ 音乐后，播放 QQ 曲目时把听歌记录 / 最近播放 / 播放时长
+     * 同步到 QQ 音乐账号（影响推荐与「最近播放」列表）。
+     */
+    qqListenReport: boolean
   }
 
   /** 音质过滤（播放取流与下载共用） */
@@ -247,6 +264,19 @@ export interface AppSettings {
     /** 启动时自动连接 */
     autoConnect: boolean
   }
+
+  /**
+   * 开发者 / 排查问题相关。这些项在 Release 包里同样生效——线上出问题时
+   * 让用户自己开高级别日志并把文件发回来，比让他装开发版复现现实得多。
+   */
+  developer: {
+    /** 日志级别；silent 为完全关闭 */
+    logLevel: LogLevel
+    /** 把日志写入 userData/data/logs/（关闭后仅保留内存最近若干条） */
+    logToFile: boolean
+    /** 允许 Ctrl+F12 打开开发者工具（默认开启，Release 亦然） */
+    devToolsShortcut: boolean
+  }
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -275,10 +305,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   player: {
     volume: 1,
+    muted: false,
+    preloadNext: true,
+    autoSkipOnError: true,
+    autoSwitchSource: true,
+    outputDeviceId: 'default',
+    pauseOnDeviceChange: true,
+    playbackRate: 1,
+    dislikeRules: '',
+    shortcuts: {},
     playMode: 'listLoop',
     preferredQuality: 'flac',
     autoPlay: false,
-    audioCacheBytes: 4 * 1024 ** 3
+    audioCacheBytes: 4 * 1024 ** 3,
+    qqListenReport: true
   },
   quality: {
     blockAi: true,
@@ -358,6 +398,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     deviceName: 'KunYin Desktop',
     syncMode: 'merge_local_remote',
     autoConnect: false
+  },
+  developer: {
+    logLevel: 'info',
+    logToFile: true,
+    devToolsShortcut: true
   }
 }
 

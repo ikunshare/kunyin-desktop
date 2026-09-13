@@ -1,11 +1,14 @@
 <script setup lang="ts">
 // 轻量下拉选择（原生 select 主题化包装；LX 的 Selection 为自定义弹层，此处用原生控件保持简单可靠）。
-defineProps<{
-  modelValue: string | number
-  /** 选项列表 */
-  list: { id: string | number; label: string }[]
-  disabled?: boolean
-}>()
+withDefaults(
+  defineProps<{
+    modelValue: string | number
+    /** 选项列表 */
+    list?: { id: string | number; label: string }[]
+    disabled?: boolean
+  }>(),
+  { list: () => [] }
+)
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 
 function onChange(e: Event): void {
@@ -15,7 +18,9 @@ function onChange(e: Event): void {
 
 <template>
   <select class="selection" :value="modelValue" :disabled="disabled" @change="onChange">
-    <option v-for="item in list" :key="item.id" :value="item.id">{{ item.label }}</option>
+    <slot
+      ><option v-for="item in list" :key="item.id" :value="item.id">{{ item.label }}</option></slot
+    >
   </select>
 </template>
 
@@ -48,7 +53,8 @@ function onChange(e: Event): void {
   opacity: 0.5;
   cursor: default;
 }
-.selection option {
+.selection :deep(option),
+.selection :deep(optgroup) {
   background-color: var(--color-main-background);
   color: var(--color-font);
 }

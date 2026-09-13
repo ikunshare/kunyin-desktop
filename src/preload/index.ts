@@ -55,6 +55,15 @@ const api: WindowApi = {
     stats: () => ipcRenderer.invoke(IpcChannels.CACHE_STATS),
     clear: (kind) => ipcRenderer.invoke(IpcChannels.CACHE_CLEAR, kind)
   },
+  log: {
+    // send 而非 invoke：日志是高频 fire-and-forget，不该让调用方等回执
+    write: (entry) => ipcRenderer.send(IpcChannels.LOG_WRITE, toPlain(entry)),
+    info: () => ipcRenderer.invoke(IpcChannels.LOG_INFO),
+    recent: (limit) => ipcRenderer.invoke(IpcChannels.LOG_RECENT, limit),
+    dump: () => ipcRenderer.invoke(IpcChannels.LOG_DUMP),
+    openDir: () => ipcRenderer.invoke(IpcChannels.LOG_OPEN_DIR),
+    toggleDevTools: () => ipcRenderer.invoke(IpcChannels.DEVTOOLS_TOGGLE)
+  },
   search: {
     songs: (source, keyword, page, size) =>
       ipcRenderer.invoke(IpcChannels.SEARCH_SONGS, source, keyword, page, size),
@@ -68,7 +77,15 @@ const api: WindowApi = {
       ipcRenderer.invoke(IpcChannels.PLAYER_STREAM, toPlain(item), qualityId),
     lyric: (item) => ipcRenderer.invoke(IpcChannels.PLAYER_LYRIC, toPlain(item)),
     invalidateUrl: (item, qualityId) =>
-      ipcRenderer.invoke(IpcChannels.PLAYER_URL_INVALIDATE, toPlain(item), qualityId)
+      ipcRenderer.invoke(IpcChannels.PLAYER_URL_INVALIDATE, toPlain(item), qualityId),
+    qqReport: (event) => ipcRenderer.invoke(IpcChannels.PLAYER_QQ_REPORT, toPlain(event))
+  },
+  comment: {
+    supported: (source) => ipcRenderer.invoke(IpcChannels.COMMENT_SUPPORTED, source),
+    latest: (item, page, limit) =>
+      ipcRenderer.invoke(IpcChannels.COMMENT_NEW, toPlain(item), page, limit),
+    hot: (item, page, limit) =>
+      ipcRenderer.invoke(IpcChannels.COMMENT_HOT, toPlain(item), page, limit)
   },
   auth: {
     get: () => ipcRenderer.invoke(IpcChannels.AUTH_GET),
@@ -76,6 +93,11 @@ const api: WindowApi = {
     clear: () => ipcRenderer.invoke(IpcChannels.AUTH_CLEAR)
   },
   library: {
+    refreshRemote: (id) => ipcRenderer.invoke(IpcChannels.LIBRARY_REFRESH_REMOTE, id),
+    setAutoRefresh: (id, enabled) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_AUTO_REFRESH, id, enabled),
+    importRemote: (source, id, name, chart, period) =>
+      ipcRenderer.invoke(IpcChannels.LIBRARY_IMPORT_REMOTE, source, id, name, chart, period),
     playlists: () => ipcRenderer.invoke(IpcChannels.LIBRARY_PLAYLISTS),
     playlistSongs: (playlistId, limit, offset) =>
       ipcRenderer.invoke(IpcChannels.LIBRARY_PLAYLIST_SONGS, playlistId, limit, offset),
@@ -118,6 +140,12 @@ const api: WindowApi = {
     }
   },
   discover: {
+    charts: (source) => ipcRenderer.invoke(IpcChannels.DISCOVER_CHARTS, source),
+    chartSongs: (source, id, page, size, period) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_CHART_SONGS, source, id, page, size, period),
+    categories: (source) => ipcRenderer.invoke(IpcChannels.DISCOVER_CATEGORIES, source),
+    playlists: (source, category, order, page, size) =>
+      ipcRenderer.invoke(IpcChannels.DISCOVER_PLAYLISTS, source, category, order, page, size),
     playlistInfo: (source, input) =>
       ipcRenderer.invoke(IpcChannels.DISCOVER_PLAYLIST_INFO, source, input),
     playlistSongs: (source, id, page, size) =>
@@ -154,6 +182,7 @@ const api: WindowApi = {
       ipcRenderer.invoke(IpcChannels.REDIRECT_KG_SEARCH, keyword, durationMs)
   },
   media: {
+    shortcutStatus: () => ipcRenderer.invoke(IpcChannels.MEDIA_SHORTCUT_STATUS),
     onCommand: (cb) => {
       const listener = (_e: Electron.IpcRendererEvent, cmd: MediaCommand): void => cb(cmd)
       ipcRenderer.on(IpcChannels.MEDIA_COMMAND, listener)
@@ -173,7 +202,15 @@ const api: WindowApi = {
         ipcRenderer.off(IpcChannels.DESKTOP_LYRIC_STATE, listener)
       }
     },
-    setLock: (locked) => ipcRenderer.send(IpcChannels.DESKTOP_LYRIC_SET_LOCK, locked)
+    setLock: (locked) => ipcRenderer.send(IpcChannels.DESKTOP_LYRIC_SET_LOCK, locked),
+    seek: (ms) => ipcRenderer.send(IpcChannels.DESKTOP_LYRIC_SEEK, ms),
+    onSeekRequest: (cb) => {
+      const listener = (_e: Electron.IpcRendererEvent, ms: number): void => cb(ms)
+      ipcRenderer.on(IpcChannels.DESKTOP_LYRIC_SEEK_REQUEST, listener)
+      return () => {
+        ipcRenderer.off(IpcChannels.DESKTOP_LYRIC_SEEK_REQUEST, listener)
+      }
+    }
   },
   download: {
     add: (input) =>
@@ -202,6 +239,9 @@ const api: WindowApi = {
     list: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_LIST),
     logout: (provider) => ipcRenderer.invoke(IpcChannels.ACCOUNT_LOGOUT, provider),
     kgSave: (creds) => ipcRenderer.invoke(IpcChannels.ACCOUNT_KG_SAVE, creds),
+    kgQrCreate: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_KG_QR_CREATE),
+    kgQrPoll: (ticket) => ipcRenderer.invoke(IpcChannels.ACCOUNT_KG_QR_POLL, ticket),
+    kgQrStop: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_KG_QR_STOP),
     wyQrCreate: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_WY_QR_CREATE),
     wyQrPoll: (unikey) => ipcRenderer.invoke(IpcChannels.ACCOUNT_WY_QR_POLL, unikey),
     qqQrStart: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_QQ_QR_START),

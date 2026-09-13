@@ -2,7 +2,7 @@
 /**
  * 酷狗音乐 Provider（移植自 KgProvider.kt）。
  * 公开接口用 kgSign 签名；search 无签名。播放走后端 getUrl（platform=kugou, musicId=hash 小写）。
- * 登录链（歌单/用户）依赖 native KgCrypto，暂缓。歌词见 lyric.ts（Task 19）。
+ * 登录链（扫码/用户信息/我的歌单）走 thirdsso 车机接口，见 thirdsso.ts。歌词见 lyric.ts。
  */
 import { createHash } from 'node:crypto'
 import {
@@ -12,18 +12,38 @@ import {
   type ArtistMvItem,
   type ArtistMvResult,
   type ArtistSearchResult,
+  type CommentResult,
   type KugouMusicItem,
   type Lyric,
   type MusicItem,
   type MusicListResult,
   type MvQuality,
-  type MvUrlResult
+  type MvUrlResult,
+  type PlayListInfoResult,
+  type UserInfo
 } from '@common'
-import { BaseProvider } from '../base'
+import { BaseProvider, type ProviderCredentials } from '../base'
 import { requestJson } from '../../net/request'
 import { kgSign, nowSec, signedQuery } from './sign'
-import { cleanText, num, parseKgAlbumSong, parseKgAuthorSong, parseSearchItem } from './item'
+import {
+  applyKgSongSizes,
+  cleanText,
+  num,
+  parseKgAlbumSong,
+  parseKgAuthorSong,
+  parseKgPlaylistSong,
+  parseSearchItem
+} from './item'
 import { getKgLyric } from './lyric'
+import { kgGetComment, kgGetHotComment } from './comment'
+import {
+  kgAuthedRequest,
+  kgFetchUserInfo,
+  kgGenerateDeviceId,
+  kgRefreshToken,
+  type KgCreds
+} from './thirdsso'
+import { fetchKgAudioInfos, fetchKgSpecial, isKgSpecialRef, parseKgSpecialId } from './special'
 
 /** MV 接口的固定设备指纹（移植自 KgProvider，仅上报用） */
 const KG_MV_MID = '77752093425314814852697061885572080940'
@@ -51,6 +71,159 @@ function kgDate(raw: unknown): string | undefined {
 export class KgProvider extends BaseProvider {
   readonly source = 'kg' as const
   readonly displayName = '酷狗音乐'
+
+  /**
+   * thirdsso 接口用的凭据。未登录返回 null。
+   *
+   * 手填凭据（account:kgSave）不带 deviceId，这里内存兜底补一个——device_id 只参与
+   * 设备注册/激活，读接口不校验，故不必持久化。
+   */
+  private kgCreds(): KgCreds | null {
+    const c = this.credentials as unknown as Partial<KgCreds> | null
+    if (!c?.userid || !c?.token) return null
+    if (!c.deviceId) c.deviceId = kgGenerateDeviceId()
+    return c as KgCreds
+  }
+
+  async getUserInfo(): Promise<UserInfo | null> {
+    const creds = this.kgCreds()
+    if (!creds) return null
+    const info = await kgFetchUserInfo(creds).catch(() => null)
+    if (!info) return null
+    return {
+      source: this.source,
+      uid: info.userid,
+      nickname: info.nickname,
+      avatar: info.avatar || undefined,
+      vipType: info.vipType
+    }
+  }
+
+  /** 换新 token（登录态过期前的续期，对应 Android refreshLogin） */
+  async refreshLogin(): Promise<ProviderCredentials | null> {
+    const creds = this.kgCreds()
+    if (!creds) return null
+    const refreshed = await kgRefreshToken(creds).catch(() => null)
+    if (!refreshed) return null
+    const next = { ...refreshed } as unknown as ProviderCredentials
+    this.credentials = next
+    return next
+  }
+
+  /** 我的歌单（favorite/selfv2/list 逐页取完） */
+  async getUserPlaylist(): Promise<PlayListInfoResult[]> {
+    const creds = this.kgCreds()
+    if (!creds) return []
+    const out: PlayListInfoResult[] = []
+    for (let page = 1; ; page++) {
+      const resp = await kgAuthedRequest('favorite/selfv2/list', creds, { page, size: 20 }).catch(
+        () => null
+      )
+      if (resp?.error_code !== 0) break
+      const lists: any[] = resp.data?.playlists ?? []
+      if (!lists.length) break
+      for (const pl of lists) {
+        const id = pl.playlist_id != null ? String(pl.playlist_id) : ''
+        if (!id) continue
+        out.push({
+          source: this.source,
+          id,
+          name: pl.playlist_name ?? '',
+          cover: pl.pic || undefined,
+          total: num(pl.total, 0)
+        })
+      }
+      // 服务端给的 total 是歌单总数；取满即停，避免死循环
+      if (out.length >= num(resp.data?.total, 0)) break
+    }
+    return out
+  }
+
+  /**
+   * 歌单信息：`id_123` / 歌单网页链接 / 纯数字按公开歌单（specialid）处理，
+   * 其余交给登录态「我的歌单」路径（thirdsso 不提供单独的信息接口，此处返回 null 由前端保留路由携带的标题）。
+   */
+  async getPlayListInfo(input: string): Promise<PlayListInfoResult | null> {
+    const specialId = parseKgSpecialId(input)
+    if (!specialId) return null
+    const special = await fetchKgSpecial(specialId)
+    if (!special) return null
+    return {
+      source: 'kg',
+      id: `id_${specialId}`,
+      name: special.name,
+      cover: special.cover,
+      description: special.description,
+      total: special.hashes.length
+    }
+  }
+
+  /** 歌单内歌曲：公开歌单走网页 hash 列表 + 批量详情；我的歌单走 favorite/song */
+  async getPlayListSongs(playlistId: string, page = 0, size = 30): Promise<MusicListResult> {
+    if (isKgSpecialRef(playlistId)) return this.getSpecialSongs(playlistId, page, size)
+    const creds = this.kgCreds()
+    if (!creds) return this.emptyList(page, size)
+    const resp = await kgAuthedRequest('favorite/song', creds, {
+      playlist_id: playlistId,
+      type: 'self',
+      page: page + 1,
+      size,
+      filter_local: 1
+    }).catch(() => null)
+    if (resp?.error_code !== 0) return this.emptyList(page, size)
+
+    const items = ((resp.data?.songs ?? []) as any[])
+      .map((s) => parseKgPlaylistSong(s))
+      .filter((x): x is KugouMusicItem => !!x)
+    await this.fillSongSizes(creds, items)
+    const total = num(resp.data?.total, 0)
+    return {
+      source: this.source,
+      hasNext: (page + 1) * size < total,
+      page,
+      size,
+      result: items
+    }
+  }
+
+  private async getSpecialSongs(ref: string, page: number, size: number): Promise<MusicListResult> {
+    const specialId = parseKgSpecialId(ref)
+    const special = specialId ? await fetchKgSpecial(specialId) : null
+    if (!special) return this.emptyList(page, size)
+    const from = page * size
+    const slice = special.hashes.slice(from, from + size)
+    const items = slice.length ? await fetchKgAudioInfos(slice) : []
+    await this.fetchCovers(items.filter((i) => !i.cover))
+    return {
+      source: 'kg',
+      hasNext: from + size < special.hashes.length,
+      page,
+      size,
+      total: special.hashes.length,
+      result: items
+    }
+  }
+
+  /**
+   * 歌单接口不给文件大小，用 song/infos 批量补（对应 enrichWithSongInfos）。
+   * 失败静默——大小只影响显示与下载体积预估，不阻断播放。
+   */
+  private async fillSongSizes(creds: KgCreds, items: KugouMusicItem[]): Promise<void> {
+    if (!items.length) return
+    const resp = await kgAuthedRequest('song/infos', creds, {
+      songs_id: items.map((i) => i.audioId)
+    }).catch(() => null)
+    if (resp?.error_code !== 0) return
+    const byId = new Map<string, any>()
+    for (const s of (resp.data?.songs ?? []) as any[]) {
+      const id = s.song_id != null ? String(s.song_id) : ''
+      if (id) byId.set(id, s)
+    }
+    for (const item of items) {
+      const s = item.audioId ? byId.get(item.audioId) : undefined
+      if (s) applyKgSongSizes(item, s)
+    }
+  }
 
   async getLyric(item: MusicItem): Promise<Lyric> {
     return getKgLyric(item as KugouMusicItem)
@@ -492,6 +665,11 @@ export class KgProvider extends BaseProvider {
     return json && json.status === 1 ? json.data : null
   }
 
+  /** 供发现模块（排行榜）补封面 */
+  async fillCovers(items: KugouMusicItem[]): Promise<void> {
+    await this.fetchCovers(items).catch(() => {})
+  }
+
   /** 搜索结果无封面，批量从 media.store 补 */
   private async fetchCovers(items: KugouMusicItem[]): Promise<void> {
     if (!items.length) return
@@ -533,5 +711,16 @@ export class KgProvider extends BaseProvider {
         items[i].cover = String(info.image).replace('{size}', String(sz))
       }
     })
+  }
+
+  // —— 评论 ——
+  supportsComment(): boolean {
+    return true
+  }
+  async getComment(item: MusicItem, page = 1, limit = 20): Promise<CommentResult> {
+    return kgGetComment(item, page, limit)
+  }
+  async getHotComment(item: MusicItem, page = 1, limit = 20): Promise<CommentResult> {
+    return kgGetHotComment(item, page, limit)
   }
 }

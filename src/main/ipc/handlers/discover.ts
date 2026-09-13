@@ -1,6 +1,6 @@
 /**
- * 发现 IPC —— 分发到各音源 Provider 的歌单/专辑/歌手 详情与搜索。
- * Provider 侧方法多已实现（wy/qq 最全，kg/kw 有专辑歌手），此处只做转发。
+ * 发现 IPC —— 排行榜 / 热门歌单 / 分类走 providers/discovery（wy/qq/kg/kw），
+ * 歌单/专辑/歌手详情与搜索分发到各音源 Provider，此处只做转发。
  */
 import {
   IpcChannels,
@@ -20,6 +20,13 @@ import {
 } from '@common'
 import { handle } from '../helpers'
 import { getProvider } from '../../providers'
+import {
+  getCharts,
+  getChartSongs,
+  getCategories,
+  discoverPlaylists,
+  searchPlaylists
+} from '../../providers/discovery'
 
 function emptyList(source: MusicSource, page: number, size: number): MusicListResult {
   return { source, hasNext: false, page, size, result: [] }
@@ -33,6 +40,10 @@ function emptyPage<T>(
 }
 
 export function registerDiscoverHandlers(): void {
+  handle(IpcChannels.DISCOVER_CHARTS, getCharts)
+  handle(IpcChannels.DISCOVER_CHART_SONGS, getChartSongs)
+  handle(IpcChannels.DISCOVER_CATEGORIES, getCategories)
+  handle(IpcChannels.DISCOVER_PLAYLISTS, discoverPlaylists)
   handle(
     IpcChannels.DISCOVER_PLAYLIST_INFO,
     async (source: MusicSource, input: string): Promise<PlayListInfoResult | null> =>
@@ -141,9 +152,7 @@ export function registerDiscoverHandlers(): void {
       keyword: string,
       page: number = 0,
       size: number = 20
-    ): Promise<PlaylistSearchResult> =>
-      getProvider(source)?.searchPlaylist(keyword, page, size) ??
-      Promise.resolve(emptyPage<PlayListInfoResult>(source, page, size))
+    ): Promise<PlaylistSearchResult> => searchPlaylists(source, keyword, page, size)
   )
   handle(
     IpcChannels.DISCOVER_USER_PLAYLISTS,

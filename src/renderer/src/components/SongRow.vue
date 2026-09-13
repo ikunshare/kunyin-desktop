@@ -5,6 +5,7 @@ import AppIcon from './AppIcon.vue'
 import ContextMenu, { type MenuItem } from './ContextMenu.vue'
 import ListAddDialog from './ListAddDialog.vue'
 import QualityDialog from './QualityDialog.vue'
+import SongInfoDialog from './SongInfoDialog.vue'
 import RedirectDialog from './RedirectDialog.vue'
 import {
   PLATFORM_SHORT_TAGS,
@@ -66,6 +67,7 @@ function onFavorite(): void {
 const addDialog = ref(false)
 // 歌词重定向弹窗
 const redirectDialog = ref(false)
+const infoDialog = ref(false)
 
 // 右键完整菜单
 const menu = ref<{ x: number; y: number } | null>(null)
@@ -119,6 +121,13 @@ function buildMenu(): MenuItem[] {
     items.push({ key: 'download', label: '下载', icon: 'download', divider: true })
   }
   items.push({ key: 'fav', label: fav ? '取消收藏' : '收藏', icon: fav ? 'heart-filled' : 'heart' })
+  items.push({ key: 'dislike', label: '不喜欢这首歌', icon: 'close' })
+  items.push({
+    key: 'dislikeArtist',
+    label: '不喜欢这位歌手',
+    icon: 'close',
+    disabled: !props.item.artist
+  })
   // 歌词搜错时手动指定目标（安卓「重定向歌曲」；本地歌曲歌词走 .lrc 边车，不适用）
   if (it.type !== 'local') {
     items.push({ key: 'redirect', label: '歌词重定向', icon: 'lyric', divider: true })
@@ -149,6 +158,12 @@ function onSelect(key: string): void {
     return
   }
   switch (key) {
+    case 'dislike':
+      void player.dislike(it)
+      break
+    case 'dislikeArtist':
+      void player.dislike(it, true)
+      break
     case 'play':
       emit('play')
       break
@@ -184,7 +199,7 @@ function onSelect(key: string): void {
       redirectDialog.value = true
       break
     case 'copy':
-      void navigator.clipboard?.writeText(`${it.title} - ${it.artist}`).catch(() => {})
+      infoDialog.value = true
       break
   }
 }
@@ -240,6 +255,7 @@ function onSelect(key: string): void {
     />
     <ListAddDialog v-if="addDialog" :items="[item]" @close="addDialog = false" />
     <QualityDialog v-if="qualityDialog" :items="[item]" @close="qualityDialog = false" />
+    <SongInfoDialog v-if="infoDialog" :item="item" @close="infoDialog = false" />
     <RedirectDialog v-if="redirectDialog" :item="item" @close="redirectDialog = false" />
   </div>
 </template>

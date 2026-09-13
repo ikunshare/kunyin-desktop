@@ -12,6 +12,8 @@ import {
   type ArtistInfoResult,
   type MusicSource
 } from '@common'
+import PlaylistCards from '../components/PlaylistCards.vue'
+import BaseBtn from '../components/BaseBtn.vue'
 import SongRow from '../components/SongRow.vue'
 import AppTabs from '../components/AppTabs.vue'
 import AppIcon from '../components/AppIcon.vue'
@@ -30,6 +32,8 @@ const {
   results,
   albumResults,
   artistResults,
+  playlistResults,
+  error,
   loading,
   loadingMore,
   hasNext,
@@ -136,6 +140,11 @@ watch(source, () => {
         <div v-else-if="keyword" class="empty">未找到「{{ keyword }}」相关专辑</div>
       </template>
 
+      <template v-else-if="searchType === 'playlist'">
+        <PlaylistCards :items="playlistResults" />
+        <div v-if="keyword && !playlistResults.length && !error" class="empty">未找到相关歌单</div>
+      </template>
+
       <!-- 歌手结果（Android ArtistSearchResultsList：圆形头像 + 名称 + N张专辑 · M首） -->
       <template v-else>
         <div v-if="artistResults.length" class="card-list">
@@ -165,6 +174,10 @@ watch(source, () => {
         </div>
         <div v-else-if="keyword" class="empty">未找到「{{ keyword }}」相关歌手</div>
       </template>
+
+      <div v-if="error" class="hint" role="alert">
+        {{ error }} <BaseBtn min @click="searchStore.search()">重试</BaseBtn>
+      </div>
 
       <!-- 加载更多（Android 无限滚动的按钮版） -->
       <div v-if="!loading && hasNext && keyword" class="more">

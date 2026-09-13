@@ -1,12 +1,14 @@
 {
   "name": "kunyin-desktop",
-  "version": "1.0.6-beta.1",
+  "version": "1.0.6-beta.3",
   "description": "一个音乐查找助手",
   "main": "./out/main/index.js",
   "author": "ikunshare",
   "license": "MIT",
   "homepage": "https://github.com/ikunshare/kunyin-desktop",
   "scripts": {
+    "test": "node --test tools/*.test.mjs",
+    "test:discovery": "node tools/check-discovery.mjs",
     "format": "prettier --write .",
     "lint": "eslint --cache .",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",

@@ -4,7 +4,14 @@ import AppAside from '../components/AppAside.vue'
 import AppToolbar from '../components/AppToolbar.vue'
 import PlayerBar from '../components/PlayerBar.vue'
 
-const KEEP_ALIVE = ['SearchView', 'PlaylistsView', 'DownloadView', 'SettingsView']
+const KEEP_ALIVE = [
+  'SearchView',
+  'DiscoverView',
+  'ChartsView',
+  'PlaylistsView',
+  'DownloadView',
+  'SettingsView'
+]
 </script>
 
 <template>

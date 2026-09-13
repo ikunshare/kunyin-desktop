@@ -6,7 +6,9 @@ import {
   type AudioStreamResult,
   type Lyric,
   type MediaInfoResult,
-  type MusicItem
+  type MusicItem,
+  type QQMusicItem,
+  type QQReportEvent
 } from '@common'
 import { handle } from '../helpers'
 import { getProvider } from '../../providers'
@@ -16,6 +18,13 @@ import { audioCacheKey, dropCachedAudio, isAudioFullyCached } from '../../cache/
 import { getCachedLyric, setCachedLyric } from '../../cache/lyricCache'
 import { getRedirect } from '../../store/library'
 import { getKgFallbackLyric } from '../../providers/kg/lyric'
+import { getSettings } from '../../store/settings'
+import {
+  qqReportListening,
+  qqReportPlayRecently,
+  qqReportPlayStream,
+  type QQReportCreds
+} from '../../providers/qq/report'
 
 /**
  * 播放/歌词相关 IPC。
@@ -135,5 +144,24 @@ export function registerPlayerHandlers(): void {
     invalidateMediaUrl(item, qualityId)
     // 命中音频缓存的那一路不碰网络，只失效直链缓存的话重试还会撞上同一个坏文件
     dropCachedAudio(audioCacheKey(item, qualityId))
+  })
+
+  // QQ 音乐听歌上报：设置关闭 / 未登录 / 非 QQ 曲目一律跳过；失败静默
+  handle(IpcChannels.PLAYER_QQ_REPORT, async (event: QQReportEvent): Promise<boolean> => {
+    if (!getSettings().player.qqListenReport) return false
+    if (event.item.type !== 'qq') return false
+    const creds = getProvider('qq')?.credentials as QQReportCreds | null | undefined
+    if (!creds?.uin || !creds.authst) return false
+    const song = event.item as QQMusicItem
+    switch (event.kind) {
+      case 'listening':
+        return qqReportListening(creds, song, event.playTimeMs, event.playList)
+      case 'recently':
+        return qqReportPlayRecently(creds, song)
+      case 'stream':
+        return qqReportPlayStream(creds, song, event.playTimeSec)
+      default:
+        return false
+    }
   })
 }

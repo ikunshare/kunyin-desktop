@@ -107,10 +107,17 @@ async function apply(state: DesktopLyricState): Promise<void> {
 
 let stateUnsub: (() => void) | null = null
 let settingsUnsub: (() => void) | null = null
+let lineSeekUnsub: (() => void) | null = null
 
 onMounted(async () => {
   host.value?.appendChild(lyric.element.value)
   stateUnsub = window.api.desktopLyric.onState(apply)
+  // 点击歌词行：音频在主窗口里，本窗口只能把目标时间转过去，
+  // 引擎侧不自行 seek——等主窗口跳完后回推的进度帧统一对齐，避免两边各跳一次。
+  lineSeekUnsub = lyric.onLineSeek((ms) => {
+    if (locked.value) return
+    window.api.desktopLyric.seek(ms)
+  })
   applyAppearance(await window.api.settings.get())
   settingsUnsub = window.api.settings.onChange(applyAppearance)
 })
@@ -118,6 +125,7 @@ onMounted(async () => {
 onUnmounted(() => {
   stateUnsub?.()
   settingsUnsub?.()
+  lineSeekUnsub?.()
 })
 
 function updateLyrics(patch: Partial<AppSettings['lyrics']>): void {
@@ -345,6 +353,11 @@ function toggleAlwaysOnTop(): void {
 .dl-lyric :deep([data-role='line-normal']) {
   row-gap: 10px !important;
   max-width: calc(100vw - 36px);
+  cursor: pointer;
+}
+/* 锁定（点击穿透）时整窗不接收鼠标事件，指针形状也不该再暗示可点 */
+.locked .dl-lyric :deep([data-role='line-normal']) {
+  cursor: default;
 }
 .dl-lyric :deep([data-role='line-normal-text-word-roman']) {
   white-space: nowrap;

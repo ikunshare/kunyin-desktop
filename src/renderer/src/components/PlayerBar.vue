@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
+import SleepTimer from './SleepTimer.vue'
 import { usePlayerStore } from '../stores/player'
 import { useLibraryStore } from '../stores/library'
 import { coverUrl } from '../utils/cover'
@@ -55,6 +56,7 @@ function onVolInput(e: Event): void {
 
 // 播放模式
 const PLAY_MODE_META: Record<string, { icon: string; label: string }> = {
+  order: { icon: 'list', label: '顺序播放' },
   listLoop: { icon: 'repeat', label: '列表循环' },
   singleLoop: { icon: 'repeat-one', label: '单曲循环' },
   random: { icon: 'shuffle', label: '随机播放' }
@@ -84,6 +86,7 @@ const modeMeta = computed(() => PLAY_MODE_META[playMode.value] ?? PLAY_MODE_META
     <div class="time">{{ timeText }}</div>
 
     <div class="controls">
+      <SleepTimer />
       <button class="act" :class="{ liked }" title="收藏" :disabled="!current" @click="toggleLike">
         <AppIcon :name="liked ? 'heart-filled' : 'heart'" :size="17" />
       </button>

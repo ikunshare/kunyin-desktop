@@ -1,8 +1,10 @@
+import { createLogger } from '../../core/logger'
+const log = createLogger('login')
 /**
  * 平台登录 / 账号 IPC。
  * - wy：扫码（HTTP 轮询）
  * - qq：扫码（MQTT over WS，状态经 ACCOUNT_QQ_QR_EVENT 推送）
- * - kg：手动填凭据（桌面无 native 签名库 KgCrypto，故不做扫码，对齐 Android 的手填回退）
+ * - kg：扫码（thirdsso 车机接口 + HTTP 轮询），另保留手填凭据入口
  * 凭据统一经 credentials.ts safeStorage 持久化并注入 provider。
  */
 import {
@@ -10,6 +12,8 @@ import {
   type AccountProvider,
   type AccountStatus,
   type KgManualCreds,
+  type KgQRCode,
+  type KgQRPoll,
   type WyQRCode,
   type WyQRPoll,
   type QQQRCodeInfo,
@@ -25,6 +29,8 @@ import {
 } from '../../auth/credentials'
 import { wyGetUnikey, wyBuildQRUrl, wyPollStatus } from '../../auth/login/wy'
 import { qqCreateQRCode, qqConnectAndListen } from '../../auth/login/qq'
+import { kgCreateQRCode, kgPollQRCode, kgStopQRCode } from '../../auth/login/kg'
+import { kgGenerateDeviceId } from '../../providers/kg/thirdsso'
 
 const DISPLAY: Record<AccountProvider, string> = {
   qq: 'QQ音乐',
@@ -72,8 +78,25 @@ export function registerAccountHandlers(): void {
       userid: creds.userid,
       token: creds.token,
       mid: creds.mid || undefined,
-      dfid: creds.dfid || undefined
+      dfid: creds.dfid || undefined,
+      // thirdsso 接口需要 device_id；手填时补一个并落盘，免得每次启动都换设备
+      deviceId: kgGenerateDeviceId()
     })
+  })
+
+  // —— kg 扫码（thirdsso）——
+  handle(IpcChannels.ACCOUNT_KG_QR_CREATE, async (): Promise<KgQRCode | null> => {
+    return kgCreateQRCode()
+  })
+  handle(IpcChannels.ACCOUNT_KG_QR_POLL, async (ticket: string): Promise<KgQRPoll> => {
+    const r = await kgPollQRCode(ticket)
+    if (r.status === 'success' && r.credentials) {
+      saveCredential('kg', r.credentials as unknown as Record<string, unknown>)
+    }
+    return { status: r.status }
+  })
+  handle(IpcChannels.ACCOUNT_KG_QR_STOP, () => {
+    kgStopQRCode()
   })
 
   // —— wy 扫码 ——
@@ -97,7 +120,8 @@ export function registerAccountHandlers(): void {
     let qr: QQQRCodeInfo
     try {
       qr = await qqCreateQRCode()
-    } catch {
+    } catch (error) {
+      log.error('QQ 登录二维码获取失败', error)
       return null
     }
     qqStop = qqConnectAndListen(qr.qrcodeId, (r) => {

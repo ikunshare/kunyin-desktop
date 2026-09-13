@@ -1,3 +1,5 @@
+import { createLogger } from '../../core/logger'
+const log = createLogger('sync')
 /**
  * LX 同步 RPC（1:1 移植 Android sync/SyncRpc.kt，与 Go 端 sync/rpc.go 双向兼容）。
  * - 请求帧带非空 `path` 数组；响应帧只有 `name` + `error` + `data`。
@@ -51,6 +53,7 @@ export class SyncRpc {
         return
       }
       const timer = setTimeout(() => {
+        log.warn('同步 RPC 超时', { method })
         this.pending.delete(name)
         reject(new Error(`rpc timeout: ${method}`))
       }, SyncProtocol.RPC_TIMEOUT_MS)
@@ -98,6 +101,7 @@ export class SyncRpc {
       const result = await handler(args)
       this.replyOk(name, result)
     } catch (e) {
+      log.error('同步 RPC 执行失败', e)
       this.replyError(name, (e as Error).message ?? 'handler error')
     }
   }

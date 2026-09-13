@@ -11,6 +11,7 @@ import {
   type ArtistMvItem,
   type ArtistMvResult,
   type ArtistSearchResult,
+  type CommentResult,
   type Lyric,
   type MusicItem,
   type MusicListResult,
@@ -25,6 +26,7 @@ import { requestJson } from '../../net/request'
 import { eapiPost, extractMusicU, weapiPost } from '../../crypto/netease'
 import { parseYrc } from '../../crypto/lyric'
 import { enrichFromQualityDetail, num, parseTrackInfo } from './item'
+import { wyGetComment, wyGetHotComment } from './comment'
 
 /** 字节 → MB/GB 显示（MV 音质档用）。 */
 function formatMvSize(bytes: number): string {
@@ -162,7 +164,7 @@ export class WyProvider extends BaseProvider {
     const result = await this.enrichAll(items)
     const hasNext = to < trackIds.length
     if (!hasNext) this.playlistCache.delete(playListId)
-    return { source: 'wy', hasNext, page, size, result }
+    return { source: 'wy', hasNext, page, size, total: trackIds.length, result }
   }
 
   // —— 专辑 ——
@@ -519,5 +521,16 @@ export class WyProvider extends BaseProvider {
       if (m) return m[1]
     }
     return null
+  }
+
+  // —— 评论 ——
+  supportsComment(): boolean {
+    return true
+  }
+  async getComment(item: MusicItem, page = 1, limit = 20): Promise<CommentResult> {
+    return wyGetComment(item, page, limit)
+  }
+  async getHotComment(item: MusicItem, page = 1, limit = 20): Promise<CommentResult> {
+    return wyGetHotComment(item, page, limit)
   }
 }

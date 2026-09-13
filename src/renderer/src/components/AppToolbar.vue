@@ -85,7 +85,7 @@ onUnmounted(() => unsubscribeFullscreen?.())
             v-model="local"
             class="search-input"
             type="text"
-            placeholder="搜索歌曲、歌手、专辑"
+            placeholder="搜索歌曲、歌手、专辑、歌单"
             spellcheck="false"
             @focus="focused = true"
             @blur="onBlur"

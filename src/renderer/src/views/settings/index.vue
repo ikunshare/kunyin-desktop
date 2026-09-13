@@ -3,6 +3,7 @@ import { nextTick, ref } from 'vue'
 import AppIcon from '../../components/AppIcon.vue'
 import SettingBasic from './SettingBasic.vue'
 import SettingPlay from './SettingPlay.vue'
+import SettingShortcuts from './SettingShortcuts.vue'
 import SettingLyric from './SettingLyric.vue'
 import SettingDesktopLyric from './SettingDesktopLyric.vue'
 import SettingDownload from './SettingDownload.vue'
@@ -10,6 +11,7 @@ import SettingNetwork from './SettingNetwork.vue'
 import SettingSync from './SettingSync.vue'
 import SettingBackup from './SettingBackup.vue'
 import SettingOther from './SettingOther.vue'
+import SettingDeveloper from './SettingDeveloper.vue'
 import SettingAbout from './SettingAbout.vue'
 
 // 设置页整体布局移植自 lx-music-desktop（Apache-2.0, © lyswhut）views/Setting/index.vue：
@@ -19,6 +21,7 @@ defineOptions({ name: 'SettingsView' })
 const tocList = [
   { id: 'SettingBasic', title: '外观与界面', icon: 'settings' },
   { id: 'SettingPlay', title: '播放', icon: 'play' },
+  { id: 'SettingShortcuts', title: '快捷键', icon: 'settings' },
   { id: 'SettingLyric', title: '歌词', icon: 'lyric' },
   { id: 'SettingDesktopLyric', title: '桌面歌词', icon: 'translate' },
   { id: 'SettingDownload', title: '下载', icon: 'download' },
@@ -26,6 +29,7 @@ const tocList = [
   { id: 'SettingSync', title: '同步', icon: 'refresh' },
   { id: 'SettingBackup', title: '备份与恢复', icon: 'upload' },
   { id: 'SettingOther', title: '账户与其他', icon: 'more' },
+  { id: 'SettingDeveloper', title: '开发者', icon: 'edit' },
   { id: 'SettingAbout', title: '关于', icon: 'info' }
 ] as const
 
@@ -34,6 +38,7 @@ type TocId = (typeof tocList)[number]['id']
 const components: Record<TocId, unknown> = {
   SettingBasic,
   SettingPlay,
+  SettingShortcuts,
   SettingLyric,
   SettingDesktopLyric,
   SettingDownload,
@@ -41,6 +46,7 @@ const components: Record<TocId, unknown> = {
   SettingSync,
   SettingBackup,
   SettingOther,
+  SettingDeveloper,
   SettingAbout
 }
 
