@@ -8,6 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   EMPTY_LYRIC,
+  type AlbumDisc,
   type AlbumInfoResult,
   type AlbumSearchResult,
   type ArtistInfoResult,
@@ -32,6 +33,32 @@ import { qqComm } from './comm'
 import { zzcSign } from './sign'
 import { decodeLegacyLyric, isLyricEmpty, parseTxLyric } from './lyric'
 import { qqGetComment, qqGetHotComment } from './comment'
+
+/**
+ * 由各曲的 index_cd 切出专辑分碟。
+ * 字段关联：index_cd 是 **0 起** 的碟序，而 cdNameMap 的 key 是 **1 起** 的碟号字符串，
+ * 故 `cdNameMap[String(index_cd + 1)]` 才是碟名；cdNewStyle=1 表示该专辑启用了自定义碟名。
+ * 按返回顺序切连续段（order=2 即专辑序，index_album 全局递增），段长之和 = 曲目数。
+ * 只有一段（单碟）时返回 undefined，详情页退回普通列表。
+ */
+function buildAlbumDiscs(
+  discNos: number[],
+  cdNameMap: any,
+  newStyle: boolean
+): AlbumDisc[] | undefined {
+  const discs: AlbumDisc[] = []
+  for (const no of discNos) {
+    const last = discs[discs.length - 1]
+    if (last && last.no === no) last.count++
+    else discs.push({ no, name: albumDiscName(no, cdNameMap, newStyle), count: 1 })
+  }
+  return discs.length > 1 ? discs : undefined
+}
+
+function albumDiscName(no: number, cdNameMap: any, newStyle: boolean): string {
+  const custom = newStyle ? cdNameMap?.[String(no)] : undefined
+  return typeof custom === 'string' && custom.trim() ? custom.trim() : `CD${no}`
+}
 
 function pcSearchId(): string {
   const uuid = randomUUID().replace(/-/g, '').toUpperCase()
@@ -281,11 +308,24 @@ export class QqProvider extends BaseProvider {
 
   async getAlbumSongs(albumMid: string): Promise<MusicListResult> {
     const json = await this.fetchAlbumPayload(albumMid)
-    const list = json?.req_2?.data?.songList ?? []
-    const result = list
-      .map((el: any) => parseTrackInfo(el.songInfo))
-      .filter((x: any): x is QQMusicItem => !!x)
-    return { source: 'qq', hasNext: false, page: 0, size: result.length, result }
+    const data = json?.req_2?.data
+    const result: QQMusicItem[] = []
+    // 与 result 一一对应的碟号（1 起）；解析失败的曲目一并跳过，避免分碟切点错位
+    const discNos: number[] = []
+    for (const el of data?.songList ?? []) {
+      const item = parseTrackInfo(el?.songInfo)
+      if (!item) continue
+      result.push(item)
+      discNos.push(num(el?.songInfo?.index_cd, 0) + 1)
+    }
+    return {
+      source: 'qq',
+      hasNext: false,
+      page: 0,
+      size: result.length,
+      result,
+      discs: buildAlbumDiscs(discNos, data?.cdNameMap, num(data?.cdNewStyle, 0) === 1)
+    }
   }
 
   async getArtistInfo(singerMid: string): Promise<ArtistInfoResult | null> {

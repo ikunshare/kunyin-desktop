@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { QUALITY_IDS, QUALITY_NAMES, blockedQualityIds, type MusicItem } from '@common'
+import {
+  QUALITY_IDS,
+  QUALITY_NAMES,
+  blockedQualityIds,
+  type AlbumDisc,
+  type DownloadDisc,
+  type MusicItem
+} from '@common'
 import { useSettingsStore } from '../stores/settings'
 import { useDownloadStore } from '../stores/download'
 
@@ -17,6 +24,8 @@ const props = defineProps<{
   subDir?: string
   /** 整专下载：按曲目顺序给文件名加两位轨号（配合「文件名前缀轨号」设置） */
   numbered?: boolean
+  /** 多碟专辑：分碟信息（按 items 顺序切分，用于按碟建目录与写分碟标签） */
+  discs?: AlbumDisc[]
   /** 自定义标题（纯音质选择模式用，例如「下载 N 张专辑」；items 为空时仅选档不下载） */
   label?: string
 }>()
@@ -53,6 +62,27 @@ const options = computed<QualityOption[]>(() => {
   return out.length ? out : ladder.map((id) => ({ id, label: `${QUALITY_NAMES[id]}${suffix(id)}` }))
 })
 
+/**
+ * items 下标 → 该曲所属碟（含碟内轨号）；无分碟信息时为空数组。
+ * 碟名为默认 `CDn` 时置空串，交给主进程退回碟号命名。
+ */
+const discOf = computed<DownloadDisc[]>(() => {
+  const discs = props.discs
+  if (!discs?.length) return []
+  const out: DownloadDisc[] = []
+  for (const d of discs) {
+    for (let i = 0; i < d.count; i++) {
+      out.push({
+        no: d.no,
+        total: discs.length,
+        name: d.name === `CD${d.no}` ? '' : d.name,
+        trackNumber: i + 1
+      })
+    }
+  }
+  return out
+})
+
 function fmtSize(bytes: number): string {
   if (!bytes) return ''
   return `${(bytes / 1024 / 1024).toFixed(1)}M`
@@ -66,7 +96,8 @@ function pick(id: string): void {
   props.items.forEach((item, i) => {
     void download.add(item, id, {
       ...base,
-      trackNumber: props.numbered ? i + 1 : undefined
+      trackNumber: props.numbered ? i + 1 : undefined,
+      disc: discOf.value[i]
     })
   })
   emit('added', id)

@@ -16,6 +16,7 @@ import {
   buildPictureBlock,
   buildVorbisComment,
   commentValue,
+  parseDiscComments,
   parsePictureBlock,
   parseVorbisComment,
   PICTURE_TYPE_FRONT_COVER
@@ -158,6 +159,7 @@ export async function readOggMeta(filePath: string): Promise<MusicMeta | null> {
     meta.album = commentValue(vc.comments, 'ALBUM') ?? undefined
     const track = Number.parseInt(commentValue(vc.comments, 'TRACKNUMBER')?.trim() ?? '')
     if (!Number.isNaN(track)) meta.trackNumber = track
+    Object.assign(meta, parseDiscComments(vc.comments))
     meta.lyrics = commentValue(vc.comments, 'LYRICS') ?? undefined
     const pictureB64 = commentValue(vc.comments, 'METADATA_BLOCK_PICTURE')
     if (pictureB64) {
@@ -294,6 +296,9 @@ function buildCommentPacket(meta: MusicMeta, isOpus: boolean): Buffer {
   if (meta.artist) comments.push(`ARTIST=${meta.artist}`)
   if (meta.album) comments.push(`ALBUM=${meta.album}`)
   if (meta.trackNumber != null) comments.push(`TRACKNUMBER=${meta.trackNumber}`)
+  if (meta.discNumber != null) comments.push(`DISCNUMBER=${meta.discNumber}`)
+  if (meta.discTotal != null) comments.push(`DISCTOTAL=${meta.discTotal}`)
+  if (meta.discName) comments.push(`DISCSUBTITLE=${meta.discName}`)
   if (meta.lyrics) comments.push(`LYRICS=${meta.lyrics}`)
 
   let img: { width: number; height: number; mimeType: string; data: Buffer } | null = null

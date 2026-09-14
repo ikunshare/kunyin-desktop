@@ -72,6 +72,28 @@ export function commentValue(comments: string[], key: string): string | null {
   return null
 }
 
+/**
+ * 取分碟字段（DISCNUMBER 允许 `n/m` 写法，总碟数再由 DISCTOTAL 覆盖）。
+ * 只返回有值的键，便于 Object.assign 进 MusicMeta 而不写入 undefined。
+ */
+export function parseDiscComments(comments: string[]): {
+  discNumber?: number
+  discTotal?: number
+  discName?: string
+} {
+  const out: { discNumber?: number; discTotal?: number; discName?: string } = {}
+  const [no, total] = (commentValue(comments, 'DISCNUMBER') ?? '').split('/')
+  const discNumber = Number.parseInt(no?.trim() ?? '')
+  if (!Number.isNaN(discNumber)) out.discNumber = discNumber
+  const discTotal = Number.parseInt(
+    commentValue(comments, 'DISCTOTAL')?.trim() ?? total?.trim() ?? ''
+  )
+  if (!Number.isNaN(discTotal)) out.discTotal = discTotal
+  const discName = commentValue(comments, 'DISCSUBTITLE')
+  if (discName) out.discName = discName
+  return out
+}
+
 // —— PICTURE 块（big-endian） ——
 
 export function buildPictureBlock(pic: FlacPictureBlock): Buffer {

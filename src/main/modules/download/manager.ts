@@ -31,6 +31,7 @@ import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import type {
   AddDownloadInput,
+  DownloadDisc,
   DownloadTask,
   Lyric,
   MediaInfoResult,
@@ -63,7 +64,7 @@ const tasks = new Map<string, DownloadTask>()
 const songCache = new Map<string, MusicItem>()
 /** 正在下载的 taskKey -> AbortController（暂停/取消用） */
 const activeControllers = new Map<string, AbortController>()
-/** 整专封面已写入的子目录（first-write-wins，避免并发重复写） */
+/** 整专封面已写入的目录（分碟时每张碟目录各一份；first-write-wins，避免并发重复写） */
 const albumCoverDirs = new Set<string>()
 
 let changeListener: (() => void) | null = null
@@ -94,6 +95,11 @@ function sanitize(s: string): string {
   return s.replace(/[\\/:*?"<>|]/g, '_')
 }
 
+/** 碟子目录名：`CD1 - 碟名`；接口只给默认名时退回 `CD1` */
+function discFolderName(disc: DownloadDisc): string {
+  return disc.name ? `CD${disc.no} - ${disc.name}` : `CD${disc.no}`
+}
+
 function buildFileName(task: DownloadTask): string {
   const s = getSettings().download
   let base: string
@@ -107,9 +113,11 @@ function buildFileName(task: DownloadTask): string {
     default:
       base = `${sanitize(task.artist)} - ${sanitize(task.title)}`
   }
-  // trackNumber 仅整专/批量专辑下载时 >0，故此前缀等价于「整专文件名带曲目号」
-  if (s.trackNumberPrefix && task.trackNumber > 0) {
-    return `${String(task.trackNumber).padStart(2, '0')}.${base}`
+  // trackNumber 仅整专/批量专辑下载时 >0，故此前缀等价于「整专文件名带曲目号」。
+  // 分碟目录开启时各碟独立成夹、不会撞名，用碟内轨号；否则用全专连续轨号避免同目录下重号。
+  const trackNo = s.discSubDir && task.disc ? task.disc.trackNumber : task.trackNumber
+  if (s.trackNumberPrefix && trackNo > 0) {
+    return `${String(trackNo).padStart(2, '0')}.${base}`
   }
   return base
 }
@@ -277,14 +285,14 @@ async function resolveAlternative(
 export function addTask(input: AddDownloadInput): void {
   // 下载功能总开关（对齐 lx download.enable）
   if (!getSettings().download.enabled) return
-  const { item, subDir = '', listName = '', trackNumber = 0 } = input
+  const { item, subDir = '', listName = '', trackNumber = 0, disc } = input
   const isMv = !!input.mvQuality
   const qualityId = isMv ? `mv_${input.mvQuality}` : pickQuality(item, input.qualityId)
   if (!qualityId) {
     // 该曲只剩被屏蔽的 AI 音质版本：记一条失败任务说明原因，别让用户点了下载毫无反应
     if (!isMv && onlyBlockedQualities(item)) {
       const target = input.qualityId || getSettings().download.preferredQuality
-      addBlockedTask(item, target, subDir, listName, trackNumber)
+      addBlockedTask(item, target, input)
     }
     return
   }
@@ -324,7 +332,8 @@ export function addTask(input: AddDownloadInput): void {
     errorMessage: '',
     subDir,
     listName,
-    trackNumber
+    trackNumber,
+    ...(disc ? { disc } : {})
   })
   saveTasks()
   notify()
@@ -343,13 +352,8 @@ function onlyBlockedQualities(item: MusicItem): boolean {
  * 记一条「仅剩 AI 音质版本」的失败任务，让用户在下载列表里看得到跳过原因。
  * 任务本身按原目标档登记：用户若改主意关掉屏蔽，直接点重试即可下到该版本。
  */
-function addBlockedTask(
-  item: MusicItem,
-  target: string,
-  subDir: string,
-  listName: string,
-  trackNumber: number
-): void {
+function addBlockedTask(item: MusicItem, target: string, input: AddDownloadInput): void {
+  const { subDir = '', listName = '', trackNumber = 0, disc } = input
   const taskKey = `${item.type}_${item.id}_${target}`
   const existing = tasks.get(taskKey)
   if (existing && existing.status !== 'failed') return
@@ -373,7 +377,8 @@ function addBlockedTask(
     errorMessage: '该曲仅提供 AI 音质版本，已按设置屏蔽',
     subDir,
     listName,
-    trackNumber
+    trackNumber,
+    ...(disc ? { disc } : {})
   })
   saveTasks()
   notify()
@@ -448,8 +453,11 @@ async function executeDownload(taskKey: string): Promise<void> {
     const s = getSettings().download
     let dir = defaultDownloadDir()
     // 整专下载：存到「下载目录/专辑名/」（专辑名过滤非法路径字符）
-    if (task.subDir) dir = join(dir, sanitize(task.subDir))
-    else if (s.groupByListName && task.listName) dir = join(dir, sanitize(task.listName))
+    if (task.subDir) {
+      dir = join(dir, sanitize(task.subDir))
+      // 多碟专辑再按碟分一层「专辑名/CD1 - 碟名/」
+      if (s.discSubDir && task.disc) dir = join(dir, sanitize(discFolderName(task.disc)))
+    } else if (s.groupByListName && task.listName) dir = join(dir, sanitize(task.listName))
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
     let baseName = buildFileName(task)
@@ -562,7 +570,17 @@ async function executeDownload(taskKey: string): Promise<void> {
         title: task.title,
         artist: task.artist,
         album: task.album,
-        ...(task.trackNumber > 0 ? { trackNumber: task.trackNumber } : {}),
+        // 标签里的轨号按标准取碟内号（与 TPOS/DISCNUMBER 配套），与文件名前缀的取法无关
+        ...(task.disc
+          ? {
+              trackNumber: task.disc.trackNumber,
+              discNumber: task.disc.no,
+              ...(task.disc.total > 0 ? { discTotal: task.disc.total } : {}),
+              ...(task.disc.name ? { discName: task.disc.name } : {})
+            }
+          : task.trackNumber > 0
+            ? { trackNumber: task.trackNumber }
+            : {}),
         ...(needCover && coverBytes
           ? { pictureData: coverBytes, pictureMimeType: sniffImageMime(coverBytes) }
           : {}),
@@ -587,12 +605,12 @@ async function executeDownload(taskKey: string): Promise<void> {
 
     // 整专封面 first-write-wins（复用已取回的封面字节）
     if (s.saveAlbumCover && task.subDir && coverBytes) {
-      if (!albumCoverDirs.has(task.subDir)) {
-        albumCoverDirs.add(task.subDir)
+      if (!albumCoverDirs.has(dir)) {
+        albumCoverDirs.add(dir)
         try {
           writeFileSync(join(dir, `cover${sniffImageExt(coverBytes)}`), coverBytes)
         } catch {
-          albumCoverDirs.delete(task.subDir)
+          albumCoverDirs.delete(dir)
         }
       }
     }

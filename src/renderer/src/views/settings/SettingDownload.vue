@@ -99,6 +99,14 @@ function openDir(): void {
           @update:model-value="store.update({ download: { groupByListName: $event as boolean } })"
         />
       </div>
+      <div class="gap-top">
+        <BaseCheckbox
+          id="setting_download_disc_sub_dir"
+          :model-value="settings.download.discSubDir"
+          label="多碟专辑整专下载时按碟分子目录（如 CD1 - 碟名，曲目号随之改用碟内轨号）"
+          @update:model-value="store.update({ download: { discSubDir: $event as boolean } })"
+        />
+      </div>
     </div>
   </dd>
 
@@ -203,7 +211,7 @@ function openDir(): void {
           id="setting_dl_embed_lyric_lx"
           :model-value="settings.download.embedLyricLx"
           :disabled="!settings.download.embedLyric"
-          label="嵌入逐字歌词"
+          label="嵌入逐字歌词（增强 LRC，含逐字时间标签；个别老播放器会把标签显示出来）"
           @update:model-value="store.update({ download: { embedLyricLx: $event as boolean } })"
         />
       </div>
@@ -242,7 +250,7 @@ function openDir(): void {
           id="setting_dl_lrc_lx"
           :model-value="settings.download.saveLrcLx"
           :disabled="!settings.download.saveLrcFile"
-          label="附带逐字歌词"
+          label="逐字歌词（增强 LRC，含逐字时间标签）"
           @update:model-value="store.update({ download: { saveLrcLx: $event as boolean } })"
         />
       </div>

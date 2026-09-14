@@ -9,6 +9,7 @@ import {
   albumFolderName,
   getMusicItemKey,
   publishYear,
+  type AlbumDisc,
   type MusicItem,
   type MusicSource
 } from '@common'
@@ -24,7 +25,27 @@ const album = ref<{
   publishTime?: string
 }>({ name: '' })
 const tracks = ref<MusicItem[]>([])
+/** 分碟（多碟专辑才有，如 QQ 的 index_cd/cdNameMap） */
+const discs = ref<AlbumDisc[] | undefined>()
 const loading = ref(false)
+
+/**
+ * 把曲目按碟切成段；无分碟信息时只有一段（name 为空，不渲染碟头）。
+ * offset 是该段首曲在 tracks 里的下标，播放/下载仍用完整 tracks，顺序不受分段影响。
+ */
+const sections = computed(() => {
+  if (!discs.value?.length) return [{ no: 0, name: '', offset: 0, tracks: tracks.value }]
+  let offset = 0
+  return discs.value.map((d) => {
+    const seg = { ...d, offset, tracks: tracks.value.slice(offset, offset + d.count) }
+    offset += d.count
+    return seg
+  })
+})
+/** 自定义碟名时前缀碟号（`CD1 · 漫卷霜色`），默认名则只显示 `CD1` */
+function discLabel(sec: { no: number; name: string }): string {
+  return sec.name === `CD${sec.no}` ? sec.name : `CD${sec.no} · ${sec.name}`
+}
 
 /** 整专下载目录名：`年份 艺人 - 专辑名`（专辑接口没给艺人时退回首曲艺人） */
 const downloadDir = computed(() =>
@@ -36,7 +57,10 @@ const downloadDir = computed(() =>
 )
 const headerMeta = computed(() => {
   const year = publishYear(album.value.publishTime)
-  return [`专辑 · ${album.value.total ?? tracks.value.length} 首`, year].filter(Boolean).join(' · ')
+  const discCount = discs.value?.length ? `${discs.value.length} 碟` : ''
+  return [`专辑 · ${album.value.total ?? tracks.value.length} 首`, discCount, year]
+    .filter(Boolean)
+    .join(' · ')
 })
 
 // ============ 整专下载 ============
@@ -71,6 +95,7 @@ async function load(): Promise<void> {
   if (!key) return
   loading.value = true
   tracks.value = []
+  discs.value = undefined
   try {
     const info = await window.api.discover.albumInfo(key.source, key.id)
     album.value = info
@@ -84,6 +109,7 @@ async function load(): Promise<void> {
       : { name: '专辑' }
     const res = await window.api.discover.albumSongs(key.source, key.id, 0, 100)
     tracks.value = res.result
+    discs.value = res.discs
   } finally {
     loading.value = false
   }
@@ -121,20 +147,27 @@ function playAll(): void {
     />
     <div v-if="loading" class="hint">加载中…</div>
     <div v-else class="list">
-      <SongRow
-        v-for="(t, i) in tracks"
-        :key="getMusicItemKey(t)"
-        :item="t"
-        :index="i"
-        :active="isActive(t)"
-        @play="play(t)"
-      />
+      <template v-for="sec in sections" :key="sec.no">
+        <div v-if="sec.name" class="disc-head">
+          <span class="disc-name ellipsis">{{ discLabel(sec) }}</span>
+          <span class="disc-count">{{ sec.tracks.length }} 首</span>
+        </div>
+        <SongRow
+          v-for="(t, i) in sec.tracks"
+          :key="getMusicItemKey(t)"
+          :item="t"
+          :index="sec.offset + i"
+          :active="isActive(t)"
+          @play="play(t)"
+        />
+      </template>
     </div>
 
     <QualityDialog
       v-if="qualityDialog"
       :items="tracks"
       :sub-dir="downloadDir"
+      :discs="discs"
       numbered
       @added="onDownloadAdded"
       @close="qualityDialog = false"
@@ -150,6 +183,28 @@ function playAll(): void {
 .list {
   display: flex;
   flex-direction: column;
+}
+.disc-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px 8px;
+  font-size: 13px;
+  color: var(--color-font-label);
+}
+.disc-head::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-primary-background-hover);
+}
+.disc-name {
+  font-weight: 600;
+  color: var(--color-font);
+  max-width: 60%;
+}
+.disc-count {
+  flex-shrink: 0;
 }
 .hint {
   padding: 20px 0;

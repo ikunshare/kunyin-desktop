@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { DownloadTask, MusicItem } from '@common'
+import type { DownloadDisc, DownloadTask, MusicItem } from '@common'
 
 /**
  * 下载队列状态。数据在主进程；此 store 缓存任务列表，随 DOWNLOAD_CHANGED 广播刷新。
@@ -15,7 +15,12 @@ export const useDownloadStore = defineStore('download', () => {
   async function add(
     item: MusicItem,
     qualityId?: string,
-    opts: { listName?: string; subDir?: string; trackNumber?: number } = {}
+    opts: {
+      listName?: string
+      subDir?: string
+      trackNumber?: number
+      disc?: DownloadDisc
+    } = {}
   ): Promise<void> {
     // contextBridge 无法克隆 Pinia 响应式 Proxy，过 IPC 前转普通对象
     const plain = JSON.parse(JSON.stringify(item)) as MusicItem
@@ -24,7 +29,8 @@ export const useDownloadStore = defineStore('download', () => {
       qualityId,
       listName: opts.listName,
       subDir: opts.subDir,
-      trackNumber: opts.trackNumber
+      trackNumber: opts.trackNumber,
+      disc: opts.disc
     })
   }
 

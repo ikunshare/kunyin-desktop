@@ -15,6 +15,7 @@ import {
   buildPictureBlock,
   buildVorbisComment,
   commentValue,
+  parseDiscComments,
   parsePictureBlock,
   parseVorbisComment,
   PICTURE_TYPE_FRONT_COVER
@@ -52,6 +53,7 @@ export async function readFlacMeta(filePath: string): Promise<MusicMeta | null> 
         meta.album = commentValue(vc.comments, 'ALBUM') ?? undefined
         const track = Number.parseInt(commentValue(vc.comments, 'TRACKNUMBER')?.trim() ?? '')
         if (!Number.isNaN(track)) meta.trackNumber = track
+        Object.assign(meta, parseDiscComments(vc.comments))
         meta.lyrics = commentValue(vc.comments, 'LYRICS') ?? undefined
       } else if (type === MDB_TYPE_PICTURE) {
         const payload = Buffer.alloc(length)
@@ -122,6 +124,9 @@ export async function writeFlac(filePath: string, meta: MusicMeta): Promise<void
   if (meta.artist) comments.push(`ARTIST=${meta.artist}`)
   if (meta.album) comments.push(`ALBUM=${meta.album}`)
   if (meta.trackNumber != null) comments.push(`TRACKNUMBER=${meta.trackNumber}`)
+  if (meta.discNumber != null) comments.push(`DISCNUMBER=${meta.discNumber}`)
+  if (meta.discTotal != null) comments.push(`DISCTOTAL=${meta.discTotal}`)
+  if (meta.discName) comments.push(`DISCSUBTITLE=${meta.discName}`)
   if (meta.lyrics) comments.push(`LYRICS=${meta.lyrics}`)
   const vorbis = buildVorbisComment(VENDOR, comments)
   const picture = resolvePicture(meta)

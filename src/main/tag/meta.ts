@@ -7,6 +7,12 @@ export interface MusicMeta {
   artist?: string
   album?: string
   trackNumber?: number
+  /** 碟号（多碟专辑，1 起；MP3 写 TPOS，Vorbis 写 DISCNUMBER） */
+  discNumber?: number
+  /** 总碟数（MP3 并入 TPOS 的 `n/m`，Vorbis 写 DISCTOTAL） */
+  discTotal?: number
+  /** 碟名（Vorbis DISCSUBTITLE；ID3v2.3 无对应帧，MP3 不写） */
+  discName?: string
   /** 封面图片本地文件路径（写入时读取） */
   picture?: string
   /** 歌词（增强 LRC 文本） */

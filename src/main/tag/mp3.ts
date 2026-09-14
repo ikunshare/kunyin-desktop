@@ -60,6 +60,15 @@ function parseFrames(data: Buffer): MusicMeta {
         meta.trackNumber = Number.parseInt(decodeTextFrame(frameData)?.split('/')[0]?.trim() ?? '')
         if (Number.isNaN(meta.trackNumber)) delete meta.trackNumber
         break
+      case 'TPOS': {
+        // TPOS 是 `碟号` 或 `碟号/总碟数`
+        const [no, total] = (decodeTextFrame(frameData) ?? '').split('/')
+        const discNumber = Number.parseInt(no?.trim() ?? '')
+        if (!Number.isNaN(discNumber)) meta.discNumber = discNumber
+        const discTotal = Number.parseInt(total?.trim() ?? '')
+        if (!Number.isNaN(discTotal)) meta.discTotal = discTotal
+        break
+      }
       case 'USLT':
         meta.lyrics = decodeUsltFrame(frameData) ?? undefined
         break
@@ -219,6 +228,11 @@ function buildFrames(meta: MusicMeta): Buffer {
   if (meta.artist) chunks.push(buildTextFrame('TPE1', meta.artist))
   if (meta.album) chunks.push(buildTextFrame('TALB', meta.album))
   if (meta.trackNumber != null) chunks.push(buildTextFrame('TRCK', String(meta.trackNumber)))
+  // 碟名（TSST）是 ID3v2.4 才有的帧，这里写的是 v2.3，故只写 TPOS
+  if (meta.discNumber != null) {
+    const tpos = meta.discTotal ? `${meta.discNumber}/${meta.discTotal}` : String(meta.discNumber)
+    chunks.push(buildTextFrame('TPOS', tpos))
+  }
   if (meta.lyrics) chunks.push(buildUsltFrame(meta.lyrics))
   if (meta.picture) {
     try {

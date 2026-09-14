@@ -217,6 +217,8 @@ export interface AppSettings {
     namingStyle: 'artist-title' | 'title-artist' | 'title-only'
     /** 整专下载的文件名前缀两位曲目号，如 `01.歌手 - 歌名`（对应 downloadTrackNumber） */
     trackNumberPrefix: boolean
+    /** 多碟专辑整专下载时按碟再分一层子目录（`专辑名/CD1 - 碟名/`），曲目号随之改用碟内轨号 */
+    discSubDir: boolean
     /** 同名文件是否覆盖（否则自动追加序号，对应 downloadOverwriteExisting） */
     overwriteExisting: boolean
     /** 存在同名文件时跳过下载（优先于 overwriteExisting；对应 download.skipExistFile） */
@@ -231,7 +233,7 @@ export interface AppSettings {
     embedLyricT: boolean
     /** 嵌入罗马音歌词（需 embedLyric） */
     embedLyricR: boolean
-    /** 嵌入逐字歌词（需 embedLyric） */
+    /** 嵌入逐字歌词：标签里的歌词改用增强 LRC（A2 `<mm:ss.xxx>` 词级时间）；需 embedLyric */
     embedLyricLx: boolean
     /** 额外保存 .lrc 歌词文件（对应 download.isDownloadLrc） */
     saveLrcFile: boolean
@@ -239,7 +241,7 @@ export interface AppSettings {
     saveLrcT: boolean
     /** 歌词文件附带罗马音 */
     saveLrcR: boolean
-    /** 歌词文件附带逐字歌词 */
+    /** 歌词文件写逐字歌词（增强 LRC） */
     saveLrcLx: boolean
     /** 歌词文件编码（对应 download.lrcFormat） */
     lrcFormat: 'utf8' | 'gbk'
@@ -376,6 +378,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     maxConcurrent: 3,
     namingStyle: 'artist-title',
     trackNumberPrefix: true,
+    discSubDir: true,
     overwriteExisting: false,
     skipExistFile: false,
     groupByListName: false,

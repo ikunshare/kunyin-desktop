@@ -25,6 +25,22 @@ export interface MusicListResult {
   total?: number
   /** 同步/导入场景：跳过的本地歌曲数 */
   skippedLocalSongs?: number
+  /** 专辑分碟（仅多碟专辑给出，按 result 顺序切分；单碟/非专辑缺省） */
+  discs?: AlbumDisc[]
+}
+
+/**
+ * 专辑的一张碟。
+ * 按 `result` 顺序切分：第 n 张碟占 `result[sum(count[0..n-1]) .. +count)`，
+ * 各碟 count 之和恒等于 `result.length`。
+ */
+export interface AlbumDisc {
+  /** 碟号，1 起 */
+  no: number
+  /** 碟名：接口给了自定义碟名就用它，否则 `CD${no}` */
+  name: string
+  /** 该碟曲目数 */
+  count: number
 }
 
 /**
