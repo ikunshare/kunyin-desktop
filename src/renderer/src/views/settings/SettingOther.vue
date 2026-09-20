@@ -6,6 +6,7 @@ import { useSettingsStore } from '../../stores/settings'
 import type { AccountProvider, AccountStatus, AuthState, CacheKind, CacheStats } from '@common'
 import AccountLoginDialog from '../../components/AccountLoginDialog.vue'
 import BaseBtn from '../../components/BaseBtn.vue'
+import BaseInput from '../../components/BaseInput.vue'
 import BaseSelect from '../../components/BaseSelect.vue'
 
 // 其他设置：平台账号登录管理 + 卡密激活
@@ -110,7 +111,7 @@ async function setAudioLimit(value: string): Promise<void> {
 </script>
 
 <template>
-  <dt id="other">其他设置</dt>
+  <dt id="other">其他</dt>
   <dd>
     <h3 id="other_account">平台账号</h3>
     <div>
@@ -201,6 +202,23 @@ async function setAudioLimit(value: string): Promise<void> {
     </div>
   </dd>
 
+  <dd>
+    <h3 id="other_dislike">「不喜欢的歌曲」规则</h3>
+    <div>
+      <BaseInput
+        multiline
+        :model-value="settings.player.dislikeRules"
+        placeholder="每行一个歌名；屏蔽歌手请填写 @歌手名"
+        @change="
+          settingsStore.update({
+            player: { dislikeRules: ($event.target as HTMLTextAreaElement).value }
+          })
+        "
+      />
+      <p class="p dislike-tip">播放队列会跳过匹配项。删除对应行即可取消屏蔽。</p>
+    </div>
+  </dd>
+
   <AccountLoginDialog
     v-if="loginProvider"
     :provider="loginProvider"
@@ -210,6 +228,16 @@ async function setAudioLimit(value: string): Promise<void> {
 </template>
 
 <style scoped>
+.dislike-tip {
+  margin-top: 8px;
+  color: var(--color-font-label);
+  font-size: 12px;
+}
+:deep(textarea) {
+  display: block;
+  width: min(460px, 100%);
+  min-height: 100px;
+}
 .account-row {
   display: flex;
   align-items: center;

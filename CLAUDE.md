@@ -92,6 +92,29 @@ QMC2（mflac/mgg）的两条**逐字节热循环**在 Rust 里：`native/qmc-was
 - 移植坑（`lib.rs` 注释里有对应说明）：`rc4_segment_key` 是**浮点**除法，换整数除法结果就变了；它的结果在 JS 侧分别经历 `% n` 与 `& 0x1ff`（ToInt32 截断），Rust 侧要按同样顺序复现；`rc4_hash` 是 uint32 乘法回绕（`wrapping_mul`）。
 - 解密器状态是 wasm 的模块级 static，所以**每个解密器一个 `WebAssembly.Instance`**（单实例线性内存 192KB，实例化约 30µs），并发的播放流与下载任务不会互相踩。
 
+## 音效（EQ / 混响 / 3D 环绕 / 升降调 / 最大声道输出）
+
+处理图在 `src/renderer/src/audio/soundEffect.ts`（**渲染层**，不是主进程），结构逐条移植自
+lx-music-desktop：`<audio> → source → analyser → 10 段 EQ →（变调 worklet）→ 干声/混响两路 →
+压缩器 → panner → gain → destination`。频点、Q、预设曲线、各脉冲响应的干湿增益都在
+`@common/audio`，是照抄上游调出来的听感，别凭感觉改。设置界面是 `views/settings/SettingSoundEffect.vue`。
+
+三条硬约束，动它之前必须知道：
+
+- **懒建图**：`createMediaElementSource` 一旦建立就撤不回来，此后 `<audio>` 的声音只能经
+  AudioContext 出去。所以只有用户真开了某项音效才建图（`needsGraph()`）；全默认值时播放链路
+  与没有这个功能时完全一致——否则自动播放策略会把它卡成静音（AudioContext 拿到用户手势前是
+  suspended，那时声音只能走图就哑了）。
+- **频谱有两条来源**：没建图走 `stores/player.ts` 的 `captureStream` 旁路，建了图改用图里的
+  analyser。两者不能并存：建图后 capture 到的是静音，还会白挂一堆摘不掉的 sink。
+- **输出设备**：建图后 sinkId 必须设到 `AudioContext` 上，设在 `<audio>` 上不起作用。LX 界面里
+  那句「音效设置与自定义音频输出设备冲突，目前此问题暂无法解决」就是没绕过这点；
+  `AudioContext.setSinkId` 在**安全上下文**下可用（Electron 44 实测：`file://` 有，`data:` 没有），
+  渲染层正好满足，所以设备切换统一收口到 `soundEffect.ts` 的 `setSinkId()`。
+
+滑杆的 `@input` 只调用 `previewSoundEffect` 实时试听，`@change` 才写设置——设置每写一次就是一次
+JSON 原子写，按住滑杆拖会写成百上千次。
+
 ## IPC 契约
 
 - channel 常量全在 `src/common/types/ipc.ts` 的 `IpcChannels`，类型面是 `WindowApi`。
@@ -143,7 +166,7 @@ QMC2（mflac/mgg）的两条**逐字节热循环**在 Rust 里：`native/qmc-was
 
 ## 常驻模块
 
-`src/main/modules/index.ts` 的 `registerModules()` 启动时挂载：devtools（Ctrl+F12）、media（全局媒体键/托盘/开机自启）、sync（LX Music 同步客户端）、backup（备份/导入）、updater（electron-updater）、desktop-lyrics（桌面歌词悬浮窗）、playlist-refresh（远程歌单自动刷新）、shortcuts（全局快捷键）。模块间用 `src/main/core/events.ts` 的类型化事件总线 `appEvent` 解耦（`app-inited` / `main-window-created` / `settings-updated`）。
+`src/main/modules/index.ts` 的 `registerModules()` 启动时挂载：devtools（Ctrl+F12）、media（全局媒体键/托盘/开机自启）、sync（LX Music 同步客户端）、backup（备份/导入）、updater（electron-updater）、desktop-lyrics（桌面歌词悬浮窗）、playlist-refresh（远程歌单自动刷新）、shortcuts（全局快捷键）、power（播放时阻止系统休眠 + 任务栏播放进度）。模块间用 `src/main/core/events.ts` 的类型化事件总线 `appEvent` 解耦（`app-inited` / `main-window-created` / `settings-updated`）。
 
 ## 渲染层与 UI 方向
 
@@ -151,11 +174,23 @@ QMC2（mflac/mgg）的两条**逐字节热循环**在 Rust 里：`native/qmc-was
 - 状态用 Pinia（`src/renderer/src/stores/`：player/search/library/settings/download/artist/mv）。
 - **UI 方向（用户已定）**：全屏播放器页 = Apple Music 招牌（封面取色流体渐变 `FluidBackground` + 逐字歌词 + 白色前景）；其余页面 = LX Music 风（绿意浅色，单主色派生换肤引擎 `src/renderer/src/theme/`，运行期注入 CSS 变量）。**不要自创中性色板或「AI 味」设计**，列表/设置/详情用 LX 语义变量（`--color-primary-background(-hover/-active)`、`--color-font(-label)`、`--color-button-*`）。
 
+## 设置页分类
+
+`views/settings/index.vue` 的 `tocList` 就是分类与顺序的唯一真源，**按 lx-music-desktop 的设置页对齐**：基本设置 → 播放设置 →（音效设置）→ 播放详情页设置 → 桌面歌词设置 → 列表设置 → 下载设置 → 快捷键设置 → 数据同步 → 网络设置 → 备份与恢复 → 其他 →（开发者）→ 软件更新 → 关于。括号里两项是坤音自己的：音效在 LX 是播放栏弹窗，这里做成独立页并紧跟播放设置。
+
+跟着 LX 的几条归属约定，新增设置项时照此放：
+
+- 歌词**内容**开关（显示翻译/音译）在**播放设置**；歌词**呈现**（字体等）在**播放详情页设置**。
+- 「不喜欢的歌曲」规则在**其他**，不在播放设置。
+- 列表相关独立成**列表设置**，不并进基本设置。
+- LX 有而坤音没有对应设置项的分类（搜索设置、开放 API、强迫症设置）**不建空页**。
+
 ## Vendored 第三方代码
 
+- 音效资源 vendored 在 `src/renderer/src/audio/`：`filters/*.wav`（13 条混响脉冲响应，来自 lx-music-desktop）与 `pitch-shifter.worklet.js`（olvb/phaze 的 phase vocoder）。后者是把上游三个文件拼成的单文件——AudioWorklet 在 Chromium 里不支持静态 `import`，而 Vite 的 `?url` 只拷贝不打包依赖。出处与改动登记在 `src/renderer/src/audio/README.md`，eslint/prettier 已忽略该 worklet。
 - 歌词引擎 vendored 在 `src/renderer/src/lyric/`（music-lyric-kit 解析 + music-lyric-player 渲染，纯 DOM、零框架依赖），背景在 `src/renderer/src/bg-render/`（AMLL MeshGradient，WebGL + gl-matrix）。eslint 已忽略 `lyric/**`、对 `bg-render` 关显式返回类型；对这些目录的改动须标 `[vendor patch]` 并登记 `src/renderer/src/lyric/README.md`，保持与上游可对照。别名让业务侧 import 名不变，将来换回 npm 包只动 `electron.vite.config.ts` 与 tsconfig。
 
 ## 发布与自动更新
 
 - 版本号在 `package.json`，**不带 `v` 前缀**。打 `vX.Y.Z` 标签（须与 version 严格一致）并 push → `.github/workflows/release.yml` 自动建 Release 并在 Windows/macOS/Linux 三平台构建 + 上传安装包与 `latest*.yml`。
-- 用户端自动更新走 electron-updater（GitHub Releases provider，`electron-builder.yml` 的 `publish`），设置页「软件更新」手动检查，启动静默检查。
+- 用户端自动更新走 electron-updater（GitHub Releases provider，`electron-builder.yml` 的 `publish`），设置页「软件更新」（`views/settings/SettingUpdate.vue`）手动检查，启动静默检查。

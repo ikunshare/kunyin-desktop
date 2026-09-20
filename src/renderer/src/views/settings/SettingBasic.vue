@@ -29,7 +29,7 @@ function setAppFont(font: string): void {
 </script>
 
 <template>
-  <dt id="basic">外观与界面</dt>
+  <dt id="basic">基本设置</dt>
   <dd>
     <h3 id="basic_theme">主题外观 <span class="hint">右键自定义主题可编辑</span></h3>
     <div>
@@ -107,17 +107,6 @@ function setAppFont(font: string): void {
         :model-value="settings.appearance.appFont"
         :list="fontList"
         @update:model-value="setAppFont"
-      />
-    </div>
-  </dd>
-  <dd>
-    <h3 id="basic_list">列表</h3>
-    <div>
-      <BaseCheckbox
-        id="setting_list_show_operation_buttons"
-        :model-value="settings.list.showOperationButtons"
-        label="显示列表操作按钮"
-        @update:model-value="store.update({ list: { showOperationButtons: $event as boolean } })"
       />
     </div>
   </dd>

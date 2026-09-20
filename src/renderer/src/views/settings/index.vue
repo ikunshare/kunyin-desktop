@@ -3,34 +3,44 @@ import { nextTick, ref } from 'vue'
 import AppIcon from '../../components/AppIcon.vue'
 import SettingBasic from './SettingBasic.vue'
 import SettingPlay from './SettingPlay.vue'
-import SettingShortcuts from './SettingShortcuts.vue'
-import SettingLyric from './SettingLyric.vue'
+import SettingSoundEffect from './SettingSoundEffect.vue'
+import SettingPlayDetail from './SettingPlayDetail.vue'
 import SettingDesktopLyric from './SettingDesktopLyric.vue'
+import SettingList from './SettingList.vue'
 import SettingDownload from './SettingDownload.vue'
-import SettingNetwork from './SettingNetwork.vue'
+import SettingShortcuts from './SettingShortcuts.vue'
 import SettingSync from './SettingSync.vue'
+import SettingNetwork from './SettingNetwork.vue'
 import SettingBackup from './SettingBackup.vue'
 import SettingOther from './SettingOther.vue'
 import SettingDeveloper from './SettingDeveloper.vue'
+import SettingUpdate from './SettingUpdate.vue'
 import SettingAbout from './SettingAbout.vue'
 
 // 设置页整体布局移植自 lx-music-desktop（Apache-2.0, © lyswhut）views/Setting/index.vue：
 // 左侧分类目录 + 右侧 dl>dt/dd 分组内容，切换分组后回滚到顶部。
 defineOptions({ name: 'SettingsView' })
 
+// 分类与顺序对齐 lx-music-desktop 的设置页（基本 → 播放 → 播放详情页 → 桌面歌词 →
+// 列表 → 下载 → 快捷键 → 同步 → 网络 → 备份 → 其他 → 更新 → 关于）。
+// 两个是坤音自己的：「音效设置」（LX 做成播放栏弹窗，这里是独立页，紧跟播放）与「开发者」。
+// LX 有而坤音没有对应设置项的（搜索设置、开放 API、强迫症设置）不建空页。
 const tocList = [
-  { id: 'SettingBasic', title: '外观与界面', icon: 'settings' },
-  { id: 'SettingPlay', title: '播放', icon: 'play' },
-  { id: 'SettingShortcuts', title: '快捷键', icon: 'settings' },
-  { id: 'SettingLyric', title: '歌词', icon: 'lyric' },
-  { id: 'SettingDesktopLyric', title: '桌面歌词', icon: 'translate' },
-  { id: 'SettingDownload', title: '下载', icon: 'download' },
-  { id: 'SettingNetwork', title: '网络', icon: 'shuffle' },
-  { id: 'SettingSync', title: '同步', icon: 'refresh' },
+  { id: 'SettingBasic', title: '基本设置', icon: 'settings' },
+  { id: 'SettingPlay', title: '播放设置', icon: 'play' },
+  { id: 'SettingSoundEffect', title: '音效设置', icon: 'headphone' },
+  { id: 'SettingPlayDetail', title: '播放详情页设置', icon: 'lyric' },
+  { id: 'SettingDesktopLyric', title: '桌面歌词设置', icon: 'translate' },
+  { id: 'SettingList', title: '列表设置', icon: 'library' },
+  { id: 'SettingDownload', title: '下载设置', icon: 'download' },
+  { id: 'SettingShortcuts', title: '快捷键设置', icon: 'settings' },
+  { id: 'SettingSync', title: '数据同步', icon: 'repeat' },
+  { id: 'SettingNetwork', title: '网络设置', icon: 'shuffle' },
   { id: 'SettingBackup', title: '备份与恢复', icon: 'upload' },
-  { id: 'SettingOther', title: '账户与其他', icon: 'more' },
+  { id: 'SettingOther', title: '其他', icon: 'more' },
   { id: 'SettingDeveloper', title: '开发者', icon: 'edit' },
-  { id: 'SettingAbout', title: '关于', icon: 'info' }
+  { id: 'SettingUpdate', title: '软件更新', icon: 'refresh' },
+  { id: 'SettingAbout', title: '关于坤音', icon: 'info' }
 ] as const
 
 type TocId = (typeof tocList)[number]['id']
@@ -38,15 +48,18 @@ type TocId = (typeof tocList)[number]['id']
 const components: Record<TocId, unknown> = {
   SettingBasic,
   SettingPlay,
-  SettingShortcuts,
-  SettingLyric,
+  SettingSoundEffect,
+  SettingPlayDetail,
   SettingDesktopLyric,
+  SettingList,
   SettingDownload,
-  SettingNetwork,
+  SettingShortcuts,
   SettingSync,
+  SettingNetwork,
   SettingBackup,
   SettingOther,
   SettingDeveloper,
+  SettingUpdate,
   SettingAbout
 }
 

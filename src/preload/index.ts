@@ -192,7 +192,8 @@ const api: WindowApi = {
         ipcRenderer.off(IpcChannels.MEDIA_COMMAND, listener)
       }
     },
-    setState: (playing) => ipcRenderer.send(IpcChannels.MEDIA_SET_STATE, playing)
+    setState: (playing) => ipcRenderer.send(IpcChannels.MEDIA_SET_STATE, playing),
+    setProgress: (percent) => ipcRenderer.send(IpcChannels.MEDIA_SET_PROGRESS, percent)
   },
   desktopLyric: {
     toggle: (enabled) => ipcRenderer.invoke(IpcChannels.DESKTOP_LYRIC_TOGGLE, enabled),

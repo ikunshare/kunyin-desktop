@@ -49,7 +49,7 @@ onUnmounted(() => syncUnsub?.())
 </script>
 
 <template>
-  <dt id="sync">同步设置</dt>
+  <dt id="sync">数据同步</dt>
   <dd>
     <div>
       <BaseCheckbox

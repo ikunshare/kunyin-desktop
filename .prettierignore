@@ -5,3 +5,5 @@ LICENSE.md
 tsconfig.json
 tsconfig.*.json
 reference
+src/renderer/src/lyric
+src/renderer/src/audio/pitch-shifter.worklet.js

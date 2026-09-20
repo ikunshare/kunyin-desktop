@@ -54,7 +54,7 @@ function capture(id: string, e: KeyboardEvent): void {
 }
 </script>
 <template>
-  <dt>快捷键</dt>
+  <dt id="hotkey">快捷键设置</dt>
   <dd>
     <h3>全局快捷键</h3>
     <p>点击输入框后按下组合键。清空即停用，窗口最小化时也可使用。</p>

@@ -139,4 +139,15 @@ export function useMediaSession(): void {
     if (Math.abs(t - last) > 1500) updatePositionState()
     last = t
   })
+
+  // 任务栏/dock 进度条：1 秒一次就够，timeupdate 每秒 4 次全推过去纯属吵主进程。
+  // 开关在主进程侧判（modules/power.ts），这里只管把数推过去。
+  let lastProgressAt = 0
+  watch(currentTime, (t) => {
+    const now = Date.now()
+    if (now - lastProgressAt < 1000) return
+    lastProgressAt = now
+    const dur = duration.value
+    window.api.media.setProgress(dur > 0 ? Math.min(1, Math.max(0, t / dur)) : 0)
+  })
 }

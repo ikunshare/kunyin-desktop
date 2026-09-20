@@ -14,7 +14,10 @@ export default defineConfig(
       'scripts',
       // vendored 歌词引擎（music-lyric-kit / -player 上游源码，见 tools/vendor-lyric.mjs）：
       // 保持与上游逐字节可对照，不套本项目的 prettier/lint 规约，否则每次升级都是满屏格式 diff
-      'src/renderer/src/lyric/**'
+      'src/renderer/src/lyric/**',
+      // vendored 变调 worklet（olvb/phaze，见 src/renderer/src/audio/README.md）：
+      // 同样保持与上游可对照，且它跑在 AudioWorkletGlobalScope 里，本项目的 env 规则对不上
+      'src/renderer/src/audio/pitch-shifter.worklet.js'
     ]
   },
   tseslint.configs.recommended,

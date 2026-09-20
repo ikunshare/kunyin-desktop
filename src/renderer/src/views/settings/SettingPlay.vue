@@ -10,7 +10,9 @@ const experienceOptions = [
   ['autoSkipOnError', '播放失败后自动跳过'],
   ['autoSwitchSource', '播放失败后尝试其他音源'],
   ['pauseOnDeviceChange', '音频设备断开或切换时暂停'],
-  ['qqListenReport', 'QQ 音乐听歌上报（登录后同步最近播放与听歌记录）']
+  ['qqListenReport', 'QQ 音乐听歌上报（登录后同步最近播放与听歌记录）'],
+  ['powerSaveBlocker', '播放时阻止系统休眠'],
+  ['taskbarProgress', '在任务栏按钮上显示播放进度']
 ] as const
 import {
   AI_QUALITY_CANDIDATES,
@@ -23,7 +25,6 @@ import {
 import BaseCheckbox from '../../components/BaseCheckbox.vue'
 import BaseSelect from '../../components/BaseSelect.vue'
 import BaseBtn from '../../components/BaseBtn.vue'
-import BaseInput from '../../components/BaseInput.vue'
 
 const store = useSettingsStore()
 const { settings } = storeToRefs(store)
@@ -95,6 +96,12 @@ function toggleAiQuality(id: QualityId, on: boolean): void {
           @update:model-value="store.update({ player: { playbackRate: Number($event) } })"
         />
       </label>
+      <BaseCheckbox
+        id="play-preserves-pitch"
+        :model-value="settings.player.preservesPitch"
+        label="倍速播放时保持音调（关掉即变速变调）"
+        @update:model-value="store.update({ player: { preservesPitch: !!$event } })"
+      />
       <div class="control-row">
         <label for="play-output-device">输出设备</label>
         <BaseSelect
@@ -111,17 +118,23 @@ function toggleAiQuality(id: QualityId, on: boolean): void {
         <BaseBtn min @click="player.refreshDevices()">刷新</BaseBtn>
       </div>
       <p v-if="player.deviceError" role="status">{{ player.deviceError }}</p>
-      <label
-        >不喜欢的歌曲／歌手<BaseInput
-          multiline
-          :model-value="settings.player.dislikeRules"
-          placeholder="每行一个歌名；屏蔽歌手请填写 @歌手名"
-          @change="
-            store.update({ player: { dislikeRules: ($event.target as HTMLTextAreaElement).value } })
-          "
-        />
-      </label>
-      <p>队列会跳过匹配项。删除对应行即可取消屏蔽。</p>
+    </div>
+  </dd>
+  <dd>
+    <h3 id="play_lyric">歌词显示</h3>
+    <div class="lyric-options">
+      <BaseCheckbox
+        id="setting_lyric_translation"
+        :model-value="settings.lyrics.showTranslation"
+        label="显示歌词翻译（如果可用）"
+        @update:model-value="store.update({ lyrics: { showTranslation: $event as boolean } })"
+      />
+      <BaseCheckbox
+        id="setting_lyric_roman"
+        :model-value="settings.lyrics.showRomanization"
+        label="显示歌词音译（如果可用）"
+        @update:model-value="store.update({ lyrics: { showRomanization: $event as boolean } })"
+      />
     </div>
   </dd>
   <dd>
@@ -181,5 +194,11 @@ function toggleAiQuality(id: QualityId, on: boolean): void {
 .experience p {
   color: var(--color-font-label);
   font-size: 12px;
+}
+.lyric-options {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
 }
 </style>

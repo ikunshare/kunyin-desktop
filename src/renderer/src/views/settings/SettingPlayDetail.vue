@@ -1,10 +1,13 @@
 <script setup lang="ts">
+/**
+ * 播放详情页设置（对应 lx-music-desktop 的「播放详情页设置」）。
+ * 只放播放页里歌词「怎么显示」的项；「显示不显示翻译/音译」按 LX 的分法归在播放设置。
+ */
 import { onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSettingsStore } from '../../stores/settings'
 import { useApi } from '../../composables/useApi'
 import { listSystemFonts } from '../../composables/useFonts'
-import BaseCheckbox from '../../components/BaseCheckbox.vue'
 import BaseSelect from '../../components/BaseSelect.vue'
 
 const store = useSettingsStore()
@@ -27,36 +30,24 @@ function setLyricFont(font: string): void {
 </script>
 
 <template>
-  <dt id="lyric">歌词设置</dt>
+  <dt id="play_detail">播放详情页设置</dt>
   <dd>
-    <h3 id="lyric_content">歌词内容</h3>
-    <div>
-      <div>
-        <BaseCheckbox
-          id="setting_lyric_translation"
-          :model-value="settings.lyrics.showTranslation"
-          label="显示歌词翻译"
-          @update:model-value="store.update({ lyrics: { showTranslation: $event as boolean } })"
-        />
-      </div>
-      <div class="gap-top">
-        <BaseCheckbox
-          id="setting_lyric_roman"
-          :model-value="settings.lyrics.showRomanization"
-          label="显示歌词音译"
-          @update:model-value="store.update({ lyrics: { showRomanization: $event as boolean } })"
-        />
-      </div>
-    </div>
-  </dd>
-  <dd>
-    <h3 id="lyric_font">歌词字体</h3>
+    <h3 id="play_detail_font">歌词字体</h3>
     <div>
       <BaseSelect
         :model-value="settings.lyrics.font"
         :list="fontList"
         @update:model-value="setLyricFont"
       />
+      <p class="tip">留空则跟随「基本设置」里的软件字体。</p>
     </div>
   </dd>
 </template>
+
+<style scoped>
+.tip {
+  margin-top: 10px;
+  color: var(--color-font-label);
+  font-size: 12px;
+}
+</style>

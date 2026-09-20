@@ -99,7 +99,7 @@ function resetAll(): void {
 </script>
 
 <template>
-  <dt id="desktop_lyric">桌面歌词</dt>
+  <dt id="desktop_lyric">桌面歌词设置</dt>
 
   <dd class="master-card">
     <div class="master-row">

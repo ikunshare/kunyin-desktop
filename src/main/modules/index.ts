@@ -7,6 +7,7 @@
  * - sync：LX Music 同步客户端（Phase 5.2）
  * - backup：备份/导入（Phase 5.3）
  * - updater：自动更新（Phase 5.3）
+ * - power：播放时阻止系统休眠 + 任务栏播放进度
  * 说明：下载队列走 IPC handler 按需初始化；音频代理走 audio/protocol（app ready 时装）。
  */
 import { registerDevToolsModule } from './devtools'
@@ -17,6 +18,7 @@ import { registerDesktopLyricModule } from './desktop-lyrics/window'
 import { registerSyncModule } from './sync'
 import { registerBackupHandlers } from './backup'
 import { registerUpdaterModule } from './updater'
+import { registerPowerModule } from './power'
 
 export function registerModules(): void {
   // 须在任何窗口创建前：它挂的是 app 级 browser-window-created，晚了会漏掉主窗口
@@ -28,4 +30,5 @@ export function registerModules(): void {
   registerSyncModule()
   registerBackupHandlers()
   registerUpdaterModule()
+  registerPowerModule()
 }

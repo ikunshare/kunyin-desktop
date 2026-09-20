@@ -97,6 +97,15 @@ export interface AppSettings {
     outputDeviceId: string
     pauseOnDeviceChange: boolean
     playbackRate: number
+    /**
+     * 倍速播放时保持原音调。关掉就是「变速变调」的花栗鼠效果（有人要的就是这个）。
+     * 与音效里的升降调是两回事：那一路是不改速度只改音调。
+     */
+    preservesPitch: boolean
+    /** 播放时阻止系统休眠（对应 LX 的 player.powerSaveBlocker） */
+    powerSaveBlocker: boolean
+    /** 在任务栏按钮上显示播放进度（Windows/macOS 的 dock 进度条） */
+    taskbarProgress: boolean
     /** 每行一个歌名；以 @ 开头表示屏蔽歌手。 */
     dislikeRules: string
     /** 自定义全局快捷键；空字符串为禁用。 */
@@ -118,6 +127,34 @@ export interface AppSettings {
      * 同步到 QQ 音乐账号（影响推荐与「最近播放」列表）。
      */
     qqListenReport: boolean
+    /**
+     * 音效（移植自 lx-music-desktop 的「音效设置」，常量见 @common/audio）。
+     *
+     * 全部处于默认值时**不建** Web Audio 处理图，播放链路与没有这个功能时完全一致；
+     * 任一项启用后音频改走 AudioContext（见 renderer/src/audio/soundEffect.ts）。
+     */
+    soundEffect: {
+      /** 10 段均衡器增益（dB，-15..15），索引对应 EQ_FREQS；全 0 = 不接均衡器 */
+      eq: number[]
+      /** 最近一次套用的预设 id（''=自定义），只用于界面高亮 */
+      eqPreset: string
+      /** 环境混响预设 id（''=关闭），见 CONVOLUTION_PRESETS */
+      convolution: string
+      /** 干声增益 ×10（0..50） */
+      convolutionMainGain: number
+      /** 湿声（混响）增益 ×10（0..50） */
+      convolutionSendGain: number
+      /** 3D 立体环绕（需戴耳机才听得出来） */
+      pannerEnabled: boolean
+      /** 声源距离 ×10（1..30） */
+      pannerRadius: number
+      /** 环绕速度（1..50） */
+      pannerSpeed: number
+      /** 升降调因子，1 = 原调。非 1 时会加载 AudioWorklet，CPU 占用明显上升。 */
+      pitchFactor: number
+      /** 最大声道输出：把输出声道数顶到设备支持的上限（多声道设备才有意义） */
+      maxOutputChannels: boolean
+    }
   }
 
   /** 音质过滤（播放取流与下载共用） */
@@ -314,13 +351,30 @@ export const DEFAULT_SETTINGS: AppSettings = {
     outputDeviceId: 'default',
     pauseOnDeviceChange: true,
     playbackRate: 1,
+    preservesPitch: true,
+    powerSaveBlocker: true,
+    // 默认关：任务栏忽然多出一条进度条对老用户是「意外行为」，想要的人自己开
+    taskbarProgress: false,
     dislikeRules: '',
     shortcuts: {},
     playMode: 'listLoop',
     preferredQuality: 'flac',
     autoPlay: false,
     audioCacheBytes: 4 * 1024 ** 3,
-    qqListenReport: true
+    qqListenReport: true,
+    soundEffect: {
+      eq: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      eqPreset: '',
+      convolution: '',
+      // 与 LX 的默认值一致：干声满、湿声为 0，选了混响预设后再按预设覆盖
+      convolutionMainGain: 10,
+      convolutionSendGain: 0,
+      pannerEnabled: false,
+      pannerRadius: 5,
+      pannerSpeed: 25,
+      pitchFactor: 1,
+      maxOutputChannels: false
+    }
   },
   quality: {
     blockAi: true,

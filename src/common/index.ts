@@ -1,6 +1,7 @@
 /**
  * 共享层统一出口。主进程 / preload / 渲染层可 `import { ... } from '@common'`。
  */
+export * from './audio'
 export * from './constants'
 export * from './format'
 export * from './types/music'

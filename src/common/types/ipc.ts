@@ -140,6 +140,7 @@ export const IpcChannels = {
   MEDIA_SHORTCUT_STATUS: 'media:shortcutStatus',
   /** 渲染 → 主：推送播放状态（用于更新任务栏缩略图工具栏的播放/暂停按钮） */
   MEDIA_SET_STATE: 'media:setState',
+  MEDIA_SET_PROGRESS: 'media:setProgress',
 
   // 桌面歌词悬浮窗
   DESKTOP_LYRIC_TOGGLE: 'desktopLyric:toggle', // 渲染 → 主：开/关窗口
@@ -686,8 +687,10 @@ export interface WindowApi {
     shortcutStatus(): Promise<Record<string, string>>
     /** 订阅播放命令（playpause/next/prev），返回取消订阅 */
     onCommand(cb: (cmd: MediaCommand) => void): Unsubscribe
-    /** 推送播放状态给主进程（更新任务栏缩略图工具栏的播放/暂停按钮） */
+    /** 推送播放状态给主进程（更新任务栏缩略图工具栏的播放/暂停按钮、休眠拦截） */
     setState(playing: boolean): void
+    /** 推送播放进度 0..1（任务栏/dock 进度条；1 秒一次，够用且不吵） */
+    setProgress(percent: number): void
   }
 
   /** 桌面歌词悬浮窗 */

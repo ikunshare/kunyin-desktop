@@ -4,6 +4,12 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { PlaybackQueue } from '../utils/playbackQueue'
 import { useAudioDevices } from '../composables/useAudioDevices'
+import {
+  applySoundEffect,
+  attachAudioElement,
+  getEffectAnalyser,
+  isSoundEffectActive
+} from '../audio/soundEffect'
 import type { AudioStreamResult, MusicItem, MusicSource, PlayMode, QualityId } from '@common'
 import {
   DEFAULT_SETTINGS,
@@ -88,8 +94,11 @@ export const usePlayerStore = defineStore('player', () => {
   const muted = ref(false)
 
   const audio = new Audio()
-  // kunyin:// 响应带 Access-Control-Allow-Origin；anonymous 让 captureStream 可旁路采样。
+  // kunyin:// 响应带 Access-Control-Allow-Origin；anonymous 让 captureStream 可旁路采样，
+  // 也让音效模块能对它 createMediaElementSource（跨源且不带 CORS 时那一步会静音）。
   audio.crossOrigin = 'anonymous'
+  // 只是把元素交给音效模块记下来，不建处理图 —— 建不建由设置决定（见 audio/soundEffect.ts）
+  attachAudioElement(audio)
   audio.volume = volume.value
   const { devices, deviceError, refreshDevices } = useAudioDevices(audio, () => pause())
 
@@ -188,20 +197,31 @@ export const usePlayerStore = defineStore('player', () => {
     }, 2000)
   }
   watch(
-    () => useSettingsStore().settings.player.playbackRate,
-    (rate) => {
-      audio.playbackRate = Number.isFinite(rate) ? Math.max(0.5, Math.min(2, rate)) : 1
+    () =>
+      [
+        useSettingsStore().settings.player.playbackRate,
+        useSettingsStore().settings.player.preservesPitch
+      ] as const,
+    ([rate, keepPitch]) => {
+      audio.playbackRate = Number.isFinite(rate) ? Math.max(0.5, Math.min(2, rate as number)) : 1
+      // 关掉就是「变速变调」的花栗鼠效果；与音效里的升降调是两回事（那一路不改速度）
+      audio.preservesPitch = !!keepPitch
     },
     { immediate: true }
   )
 
-  // 桌面歌词实时频谱使用 captureStream 旁路采样，绝不把原 <audio> 改接到
-  // MediaElementAudioSourceNode；后者会接管原输出链路，遇到自定义协议/CORS 时可能直接静音。
+  // 频谱有两条来源，取决于音效处理图建没建（见 audio/soundEffect.ts）：
+  // - 没建图（默认）：captureStream 旁路采样。这条路**不碰**原输出链路，代价是 sink 泄漏
+  //   风险大（见下方 stopCapturedStream）、拿到音轨的时机还得靠轮询等。
+  // - 建了图：直接用图里的 analyser，既准确又没有旁路开销。此时不能再走 captureStream——
+  //   声音已经不从元素直出，capture 到的是静音，白挂一堆摘不掉的 sink。
   let audioContext: AudioContext | null = null
   let capturedStream: MediaStream | null = null
   let spectrumGraph: { source: MediaStreamAudioSourceNode; sink: GainNode } | null = null
   let analyser: AnalyserNode | null = null
   let spectrumBytes: Uint8Array<ArrayBuffer> | null = null
+  /** 音效图 analyser 的取样缓冲（与旁路那条各用各的，fftSize 可能不同） */
+  let effectBytes: Uint8Array<ArrayBuffer> | null = null
   let spectrumAttachTimer: ReturnType<typeof setTimeout> | null = null
 
   /**
@@ -237,6 +257,8 @@ export const usePlayerStore = defineStore('player', () => {
   }
 
   function attachSpectrumStream(): void {
+    // 音效处理图在跑：频谱直接取图里的 analyser，旁路这条路必须让开
+    if (isSoundEffectActive()) return
     const context = audioContext
     if (!context || context.state !== 'running' || analyser || spectrumGraph) return
     const capture = (
@@ -286,6 +308,19 @@ export const usePlayerStore = defineStore('player', () => {
     }
   }
 
+  // 音效：deep 监听整段设置。全是默认值时 applySoundEffect 直接返回，不会建处理图。
+  // 必须放在上面那几个频谱 let 声明之后 —— immediate 回调是同步执行的，
+  // 搁在声明前面一旦走进 resetSpectrumStream 就会撞上 TDZ。
+  watch(
+    () => useSettingsStore().settings.player.soundEffect,
+    (effect) => {
+      const active = applySoundEffect(effect)
+      // 图刚建起来的那一刻，旁路采样这条路就作废了（capture 到的是静音），收掉它
+      if (active) resetSpectrumStream()
+    },
+    { deep: true, immediate: true }
+  )
+
   function scheduleSpectrumAttach(attempt = 0): void {
     if (spectrumAttachTimer) clearTimeout(spectrumAttachTimer)
     spectrumAttachTimer = null
@@ -332,11 +367,25 @@ export const usePlayerStore = defineStore('player', () => {
     audio.src = url
   }
 
+  /** 当前该用哪个分析器：音效图优先，否则用 captureStream 旁路那一个 */
+  function activeAnalyser(): { node: AnalyserNode; bytes: Uint8Array<ArrayBuffer> } | null {
+    const effect = getEffectAnalyser()
+    if (effect) {
+      if (!effectBytes || effectBytes.length !== effect.frequencyBinCount) {
+        effectBytes = new Uint8Array(effect.frequencyBinCount)
+      }
+      return { node: effect, bytes: effectBytes }
+    }
+    if (!analyser || !spectrumBytes || audioContext?.state !== 'running') return null
+    return { node: analyser, bytes: spectrumBytes }
+  }
+
   function getSpectrumData(): number[] {
     const bars = new Array<number>(SPECTRUM_BAR_COUNT).fill(0)
-    if (!analyser || !spectrumBytes || audio.paused || audioContext?.state !== 'running')
-      return bars
-    analyser.getByteFrequencyData(spectrumBytes)
+    const active = audio.paused ? null : activeAnalyser()
+    if (!active) return bars
+    const spectrumBytes = active.bytes
+    active.node.getByteFrequencyData(spectrumBytes)
     // 频率桶按幂次划分：低频保留更多分辨率，高频合并，视觉上更接近真实音乐频谱。
     const usableBins = Math.min(spectrumBytes.length, 96)
     for (let i = 0; i < SPECTRUM_BAR_COUNT; i++) {
