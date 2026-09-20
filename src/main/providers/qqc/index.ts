@@ -12,6 +12,7 @@ import type { MusicItem, MusicListResult, QQMusicItem } from '@common'
 import { BaseProvider } from '../base'
 import { requestJson } from '../../net/request'
 import { parseTrackInfo } from '../qq/item'
+import { fillMissingQqCovers } from '../qq/cover'
 import { zzcRequest } from '../qq'
 
 const SEARCH_ENDPOINT = 'https://c.wwwweb.top/music/search'
@@ -61,6 +62,7 @@ export class QqcProvider extends BaseProvider {
     })
 
     const total = Number(json.total) || 0
+    await fillMissingQqCovers(result)
     return { source: 'qqc', hasNext: (page + 1) * size < total, page, size, result }
   }
 

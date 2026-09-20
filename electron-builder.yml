@@ -30,6 +30,9 @@ files:
   - '!scripts{,/**/*}'
   - '!scripts-verify{,/**/*}'
   - '!tools{,/**/*}'
+  # wasm crate 源码与 cargo 产物：编译结果已内联进 src/main/crypto/qmcWasmBinary.ts，
+  # target/ 还动辄几百 MB，一律不进包
+  - '!native{,/**/*}'
   - '!**/.vscode{,/**/*}'
   - '!*.tsbuildinfo'
   - '!tsconfig*.json'

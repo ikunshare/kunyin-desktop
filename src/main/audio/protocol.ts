@@ -27,6 +27,8 @@ import {
   type CacheRecord
 } from '../cache/audioCache'
 import { createLogger } from '../core/logger'
+import { netStats } from '../net/request'
+import { guardStream } from './streamGuard'
 
 const log = createLogger('audio')
 
@@ -115,8 +117,8 @@ const MAX_ENTRIES = 64
 const registry = new Map<string, AudioStreamSpec>()
 
 /**
- * 等响应头的超时（ms）。只覆盖「建连 + 收到响应头」这一段，不限制后续流式传输，
- * 否则长音频播到一半会被掐断。
+ * 等响应头的超时（ms）。只覆盖「建连 + 收到响应头」这一段；拿到响应头之后交给
+ * streamGuard 的空闲看门狗接管，不限制总传输时长，否则长音频播到一半会被掐断。
  *
  * 没有它的话：上游 CDN 挂住连接却不响应时 net.fetch 的 await 永不落地，
  * handler 永不返回，DevTools 里那条请求就永远停在「待处理」，播放彻底卡死。
@@ -125,8 +127,26 @@ const registry = new Map<string, AudioStreamSpec>()
  */
 const UPSTREAM_HEADER_TIMEOUT = 12_000
 
+/**
+ * 拿到响应头之后的「空闲」上限（ms）：这么久一个字节都没来就判上游停摆。
+ * 只在 <audio> 正在要数据时计时，暂停/缓冲满的背压不会误判（见 streamGuard）。
+ *
+ * 320k 的流每秒 40KB，20s 一个字节都没有只可能是上游半开；继续等下去那条连接就
+ * 永远占着 per-host 额度——这正是「放久了每首歌都超时」的根因之一。
+ */
+const UPSTREAM_IDLE_TIMEOUT = 20_000
+
 /** 一路取流最多试几个地址（原地址 + 换路候选） */
 const MAX_UPSTREAM_ATTEMPTS = 3
+
+/** 连续多少次「等响应头超时」判定为连接池被打满（此时换路也没用，得清池） */
+const HEADER_TIMEOUT_STORM = 3
+
+/** 清主机解析缓存的最小间隔（ms）：storm 里别让它自己变成新的抖动源 */
+const DNS_RESET_COOLDOWN = 10_000
+
+/** 回收整条连接池的最小间隔（ms） */
+const POOL_RESET_COOLDOWN = 60_000
 
 /**
  * 上游请求 UA：对齐真实浏览器。部分 CDN/WAF 会把裸 `Mozilla/5.0` 当机器人，
@@ -248,44 +268,175 @@ function upstreamAttempts(raw: string): string[] {
   return out.slice(0, MAX_UPSTREAM_ATTEMPTS)
 }
 
-/**
- * 当前在飞的上游取流数。只用于诊断：Chromium 每主机只给 6 个并发额度，
- * 一旦出现「连上了却等不到响应头」，这个数字能直接分辨是我们漏了连接（数值一路涨）
- * 还是纯粹上游/线路不通（数值仍是 1、2）。
- */
-let inFlightUpstreams = 0
+/** 一次 protocol.handle 调用里传给各层的上下文：取消闸 + 诊断用 token */
+interface StreamContext {
+  token: string
+  /** **不是** request.signal（Electron 从不触发它，见 openSlot），是我们自己的闸 */
+  signal: AbortSignal
+}
 
 /**
- * 单次上游取流，带「等响应头」超时：
- * - rendererSignal（<audio> 的取消）必须联动到上游，否则 seek/换歌后主进程侧连接
- *   继续在后台拉完整个文件，孤儿连接攒满连接池后新请求就发不出去；
- * - 超时只掐「等响应头」这一段，拿到响应头后立刻解除，不影响后面的流式传输——
- *   否则长音频播到一半会被掐断；
- * - once：监听器随请求对象一起回收，不必手动摘（摘了传输阶段就断不掉上游）。
+ * 一路在飞的上游取流。既是诊断面，也是「要不要清连接池」的判据：
+ * Chromium 每主机只给 6 个并发额度，出现「连上了却等不到响应头」时，这张表能直接
+ * 分辨是我们漏了连接（僵尸条目一路涨、bytes 恒为 0）还是纯粹线路不通（表里只有一两条）。
+ */
+interface UpstreamTrack {
+  host: string
+  token: string
+  startedAt: number
+  /** 已从上游读到的字节数；0 = 连上了但一个字节都没来 */
+  bytes: number
+  lastByteAt: number
+  phase: 'header' | 'body'
+  releaseReason?: string
+}
+
+const upstreams = new Set<UpstreamTrack>()
+
+/** 诊断用：当前在飞的上游取流快照（导出日志时会记一条，见 ipc/handlers/log.ts） */
+export function audioNetStats(): {
+  inFlight: number
+  streams: { host: string; phase: string; ageMs: number; bytes: number; idleMs: number }[]
+} {
+  const now = Date.now()
+  return {
+    inFlight: upstreams.size,
+    streams: [...upstreams].map((u) => ({
+      host: u.host,
+      phase: u.phase,
+      ageMs: now - u.startedAt,
+      bytes: u.bytes,
+      idleMs: u.lastByteAt ? now - u.lastByteAt : -1
+    }))
+  }
+}
+
+/** 连续「等响应头超时」计数；任何一次成功拿到响应头都清零 */
+let consecutiveHeaderTimeouts = 0
+let lastDnsReset = 0
+let lastPoolReset = 0
+
+/**
+ * 「等响应头超时」的善后。
+ *
+ * 单次超时多半是坏节点，或主机解析器缓存了坏 IP/坏路由——清 DNS + 换路
+ * （upstreamAttempts）就能自救。但**连续**多次、且此刻没有任何一路在正常供流时，
+ * 真正的原因通常是连接池被僵尸连接占满：换多少个主机都一样，因为额度根本发不出来。
+ * 这时才动全局。
+ *
+ * 之所以敢 closeAllConnections：判据已经保证「没人在正常传输」，没有可打断的播放；
+ * 而这恰恰就是用户此前只能靠重启应用解决的那件事。两个冷却各管一档，避免抖动期反复清。
+ */
+async function afterHeaderTimeout(): Promise<void> {
+  consecutiveHeaderTimeouts++
+  const now = Date.now()
+  const streaming = [...upstreams].some((u) => u.bytes > 0 && now - u.lastByteAt < 5_000)
+
+  if (now - lastDnsReset >= DNS_RESET_COOLDOWN) {
+    lastDnsReset = now
+    await session.defaultSession.clearHostResolverCache().catch(() => {})
+  }
+  if (streaming || consecutiveHeaderTimeouts < HEADER_TIMEOUT_STORM) return
+  if (now - lastPoolReset < POOL_RESET_COOLDOWN) return
+  lastPoolReset = now
+  consecutiveHeaderTimeouts = 0
+  log.warn('连续取流超时，判定连接池被占满，回收全部连接', {
+    audio: audioNetStats(),
+    net: netStats()
+  })
+  await session.defaultSession.closeAllConnections().catch(() => {})
+}
+
+/** 一路上游连接的租约。拿到它就有责任 release——release 幂等，多处收口不怕重复调。 */
+interface UpstreamLease {
+  response: Response
+  track: UpstreamTrack
+  release(reason: string): void
+}
+
+/**
+ * 单次上游取流。与旧实现的关键差别：AbortController **活过响应头阶段**。
+ *
+ * 旧实现只在「等响应头」这一段持有 controller，拿到响应头就 clearTimeout 撒手，此后
+ * 再没有任何办法主动掐断这条连接——只能指望流的 cancel 一路传播回来。而走异步生成器
+ * 的那条路（assembleRange → fetchAndStore）传不回来：AsyncGenerator.return() 会排在
+ * 未决的 next() 之后，生成器卡在 await reader.read() 时 finally 永远跑不到。于是每遇到
+ * 一次「上游半开」就永久漏掉一条连接，直到 per-host 额度被占满；此后**任何**歌曲都只能
+ * 排队等额度、最终全部报 upstream header timeout，重启应用才恢复。
+ *
+ * ctx.signal 是我们自己的 AbortController，不是 request.signal（见 openSlot）。
  */
 async function fetchUpstreamOnce(
   url: string,
   headers: Record<string, string>,
-  rendererSignal: AbortSignal
-): Promise<Response> {
+  ctx: StreamContext
+): Promise<UpstreamLease> {
   const abort = new AbortController()
-  rendererSignal.addEventListener('abort', () => abort.abort(), { once: true })
+  const track: UpstreamTrack = {
+    host: hostOf(url),
+    token: ctx.token,
+    startedAt: Date.now(),
+    bytes: 0,
+    lastByteAt: 0,
+    phase: 'header'
+  }
+  upstreams.add(track)
+
+  let released = false
+  const release = (reason: string): void => {
+    if (released) return
+    released = true
+    track.releaseReason = reason
+    upstreams.delete(track)
+    abort.abort()
+  }
+  // 不摘监听器，靠 release 幂等兜底：signal 属于单次请求，最多挂 MAX_UPSTREAM_ATTEMPTS 个、
+  // 随请求一起回收；而「传输阶段仍能被下游取消」这件事必须全程有效。
+  if (ctx.signal.aborted) release('下游已取消')
+  else ctx.signal.addEventListener('abort', () => release('下游取消'), { once: true })
+
   let timedOut = false
   const timer = setTimeout(() => {
     timedOut = true
-    abort.abort()
+    release('等响应头超时')
   }, UPSTREAM_HEADER_TIMEOUT)
-  inFlightUpstreams++
   try {
     // net.fetch 走 Electron 网络栈（遵循代理/证书设置），比全局 fetch 更合适
-    return await net.fetch(url, { headers, signal: abort.signal })
+    const response = await net.fetch(url, { headers, signal: abort.signal })
+    track.phase = 'body'
+    consecutiveHeaderTimeouts = 0
+    return { response, track, release }
   } catch (e) {
-    if (timedOut && !rendererSignal.aborted) throw new HeaderTimeoutError()
+    release('取流失败')
+    if (timedOut && !ctx.signal.aborted) throw new HeaderTimeoutError()
     throw e
   } finally {
-    inFlightUpstreams--
     clearTimeout(timer)
   }
+}
+
+/**
+ * 上游响应体 → 带空闲看门狗的流。**所有**读上游的路径都必须经过它：
+ * 它是这条连接唯一能保证被释放的出口（读完 / 出错 / 停摆 / 被取消都会 release）。
+ */
+function leaseBody(lease: UpstreamLease): ReadableStream<Uint8Array> {
+  return guardStream(lease.response.body as ReadableStream<Uint8Array>, {
+    idleMs: UPSTREAM_IDLE_TIMEOUT,
+    onData: (bytes) => {
+      lease.track.bytes += bytes
+      lease.track.lastByteAt = Date.now()
+    },
+    onSettle: (reason) => {
+      if (reason === 'stall') {
+        log.warn('上游停摆，掐断并回收连接', {
+          host: lease.track.host,
+          bytes: lease.track.bytes,
+          idleMs: UPSTREAM_IDLE_TIMEOUT
+        })
+      }
+      lease.release('流' + reason)
+    }
+  })
 }
 
 function parseRangeStart(range: string | null): number {
@@ -352,13 +503,14 @@ export function registerAudioScheme(): void {
 
 /**
  * 取一路上游流（含「等响应头超时 → 换路重试」）。
- * @returns 成功给 Response（body 必非空）；失败给一个可直接返回给 <audio> 的错误 Response
+ * @returns 成功给租约（response.body 必非空，且必须经 leaseBody 消费）；
+ *   失败给一个可直接返回给 <audio> 的错误 Response
  */
 async function fetchUpstream(
   url: string,
   headers: Record<string, string>,
-  signal: AbortSignal
-): Promise<{ ok: true; upstream: Response } | { ok: false; error: Response }> {
+  ctx: StreamContext
+): Promise<{ ok: true; lease: UpstreamLease } | { ok: false; error: Response }> {
   const attempts = upstreamAttempts(url)
   const aborted = (): { ok: false; error: Response } => ({
     ok: false,
@@ -367,20 +519,24 @@ async function fetchUpstream(
 
   for (let i = 0; i < attempts.length; i++) {
     const target = attempts[i]
-    // 仅重试当前请求。不能 closeAllConnections()：它会把正在播放或刚切换的其他歌曲
-    // 一并中止，制造与真实网络故障无关的 net::ERR_ABORTED。
+    if (ctx.signal.aborted) return aborted()
+    // 仅重试当前请求。这里不能无条件 closeAllConnections()：它会把正在播放或刚切换的
+    // 其他歌曲一并中止，制造与真实网络故障无关的 net::ERR_ABORTED。真需要清池的判据
+    // 在 afterHeaderTimeout —— 那时已经确认没人在正常供流。
     if (i > 0) {
       await sleep(NET_RETRY_DELAY)
-      if (signal.aborted) return aborted()
+      if (ctx.signal.aborted) return aborted()
     }
     try {
-      const upstream = await fetchUpstreamOnce(target, headers, signal)
+      const lease = await fetchUpstreamOnce(target, headers, ctx)
+      const upstream = lease.response
       if (upstream.status >= 400 || !upstream.body) {
         log.warn('上游拒绝取流', { status: upstream.status, host: hostOf(target) })
-        // 必须主动 cancel：不消费也不取消的响应体会把那条上游连接一直挂在池子里，
-        // 403（直链过期）在播放中途是常态，攒下来的孤儿连接会占满 per-host 连接数，
-        // 之后的取流请求只能排队——表现为切歌越来越慢。
+        // 必须主动 cancel + release：不消费也不取消的响应体会把那条上游连接一直挂在
+        // 池子里，403（直链过期）在播放中途是常态，攒下来的孤儿连接会占满 per-host
+        // 连接数，之后的取流请求只能排队——表现为切歌越来越慢，最终全部超时。
         void upstream.body?.cancel().catch(() => {})
+        lease.release('上游 ' + upstream.status)
         // 4xx/5xx 是上游给出的明确答复（直链过期、鉴权不通），换主机也是同样结果，不再试
         return {
           ok: false,
@@ -388,24 +544,25 @@ async function fetchUpstream(
         }
       }
       if (i > 0) log.info('换路取流成功', { host: hostOf(target) })
-      return { ok: true, upstream }
+      return { ok: true, lease }
     } catch (e) {
       // 取消属正常流程（seek/换歌），不当错误报
-      if (signal.aborted || (e as Error)?.name === 'AbortError') return aborted()
+      if (ctx.signal.aborted || (e as Error)?.name === 'AbortError') return aborted()
       if (!isRetryable(e)) {
         // 别静默吞掉：代理不可达/DNS/证书失败在这里全都长得像一个光秃秃的 502
         log.error('上游取流失败', e, { host: hostOf(target) })
         return { ok: false, error: new Response(null, { status: 502 }) }
       }
-      if (e instanceof HeaderTimeoutError) {
-        // 「重启才恢复」的典型根因是主机解析器缓存了坏 IP/坏路由：清掉后重试才能重新解析，
-        // 而不是继续连同一个坏地址。仅清 DNS 缓存，不影响正在播放的其它歌曲。
-        await session.defaultSession.clearHostResolverCache().catch(() => {})
-      }
+      // 清 DNS / 必要时回收连接池，判据与冷却都在里面
+      if (e instanceof HeaderTimeoutError) await afterHeaderTimeout()
       const last = i === attempts.length - 1
       const msg = (e as Error)?.message ?? String(e)
       if (last) {
-        log.error('上游取流失败（全部候选）', msg, { hosts: attempts.map(hostOf) })
+        log.error('上游取流失败（全部候选）', msg, {
+          hosts: attempts.map(hostOf),
+          audio: audioNetStats(),
+          net: netStats()
+        })
         return {
           ok: false,
           error: new Response(null, { status: e instanceof HeaderTimeoutError ? 504 : 502 })
@@ -413,7 +570,7 @@ async function fetchUpstream(
       }
       log.warn('上游取流失败，换路重试', {
         error: msg,
-        inFlight: inFlightUpstreams,
+        inFlight: upstreams.size,
         host: hostOf(attempts[i + 1])
       })
     }
@@ -423,22 +580,71 @@ async function fetchUpstream(
 }
 
 /**
- * 把响应体的生命周期绑到渲染层这条请求上。
+ * 一次 protocol.handle 调用的取消闸。
+ *
+ * **实测：Electron 44 的 `protocol.handle` 从不触发 `request.signal`**——<audio> 换源、
+ * seek、渲染层 fetch 的 AbortController 都试过，signal 一次都不 abort；能观测到下游放弃的
+ * 唯一信号是「我们返回的 Response.body 被 cancel」。所以取消靠两条路反推：
+ *
+ * 1. 下游 cancel 我们返回的 body → bindToRequest 里的 pipeTo 落地 → abort 整条上下文；
+ * 2. 同一个 token 又来了新请求，而旧的那一路一个字节都还没吐出去 → 它已经被放弃
+ *    （seek/切歌时 Chromium 先取消再重发，而那次取消我们收不到）→ abort 它。
+ *
+ * request.signal 仍然挂着：将来 Electron 补上语义就能更早释放，挂着不花钱。
+ */
+interface RequestSlot {
+  token: string
+  abort: AbortController
+  /** 已经写给 <audio> 的字节数；> 0 表示这一路在正常供流，不可被顶替 */
+  served: number
+}
+
+const slots = new Set<RequestSlot>()
+
+function openSlot(token: string, rendererSignal: AbortSignal): RequestSlot {
+  for (const other of slots) {
+    if (other.token !== token || other.served > 0) continue
+    // 还没开口就被同 token 的新请求追上 = 上一次是被放弃的（我们收不到那次取消）。
+    // 不掐掉的话它会一直占着 per-host 额度直到 12s 的等响应头超时，而用户连点下一首
+    // 时几秒内就能把额度占满，后面的歌只能排队等 —— 正是「越放越慢最后全超时」。
+    other.abort.abort()
+    slots.delete(other)
+  }
+  const slot: RequestSlot = { token, abort: new AbortController(), served: 0 }
+  slots.add(slot)
+  slot.abort.signal.addEventListener('abort', () => slots.delete(slot), { once: true })
+  if (rendererSignal.aborted) slot.abort.abort()
+  else rendererSignal.addEventListener('abort', () => slot.abort.abort(), { once: true })
+  return slot
+}
+
+/**
+ * 把响应体的生命周期绑到这一路的 slot 上。
  *
  * `protocol.handle` 返回的 Response 有可能压根不会被消费——最典型的是 await 上游期间
- * <audio> 已经 seek/切歌，Electron 直接把这条响应丢掉。此时上游那条连接既没被读、也没被
- * cancel，会一直挂在 Chromium 的连接池里；每个主机只有 6 个并发额度，攒够了之后新的取流
- * 只能排队等额度——表现正是「放久了之后每首歌都 upstream header timeout」，且跨主机同时中招。
- * 绑上 signal 后，请求一取消就 cancel 上游流，连接立刻归还。
+ * <audio> 已经 seek/切歌。好在 Electron 仍会 cancel 这条 body（即便 handler 是事后才返回的），
+ * cancel 经 TransformStream 传回 pipeTo，pipeTo 再取消 src，一路传到 leaseBody 把上游连接还掉。
+ * 少了这一环，上游那条连接既没被读也没被 cancel，会一直挂在 Chromium 连接池里；每主机只有
+ * 6 个额度，攒够之后新的取流只能排队——表现正是「放久了之后每首歌都 upstream header timeout」。
  */
 function bindToRequest(
   src: ReadableStream<Uint8Array>,
-  signal: AbortSignal
+  slot: RequestSlot
 ): ReadableStream<Uint8Array> {
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
-  void src.pipeTo(writable, { signal }).catch(() => {
-    // 取消/断流属正常路径（seek、切歌、网络中断）；错误已经由 readable 侧传给 <audio>
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      // 计数不是为了统计：openSlot 靠它区分「正在正常供流」与「还没开口就被放弃」
+      slot.served += chunk.byteLength
+      controller.enqueue(chunk)
+    }
   })
+  void src
+    .pipeTo(writable, { signal: slot.abort.signal })
+    .catch(() => {
+      // 取消/断流属正常路径（seek、切歌、网络中断）；错误已经由 readable 侧传给 <audio>
+    })
+    // 正常读完也要 abort：它是这一路所有上游租约与 slot 登记的统一回收点
+    .finally(() => slot.abort.abort())
   return readable
 }
 
@@ -449,22 +655,35 @@ function upstreamHeaders(spec: AudioStreamSpec, range?: string): Record<string, 
   return headers
 }
 
-/** 解密后的上游流（按绝对偏移喂流密码，Range 请求同样正确） */
+/**
+ * 解密后的上游流（按绝对偏移喂流密码，Range 请求同样正确）。
+ * 入参是 leaseBody 包好的流，而不是裸 Response.body —— 连接的回收靠那一层。
+ */
 function decryptedBody(
   spec: AudioStreamSpec,
-  upstream: Response,
+  body: ReadableStream<Uint8Array>,
   startOffset: number
 ): ReadableStream<Uint8Array> {
   const decryptor = spec.ekey ? createAudioDecryptor(spec.ekey) : null
   if (spec.ekey && !decryptor) {
     log.warn('加密流暂无解密器，透传（播放将异常）')
   }
-  const body = upstream.body as ReadableStream<Uint8Array>
   return decryptor ? decryptStream(body, decryptor, startOffset) : body
 }
 
-/** 把 async generator 接成 ReadableStream；cancel 时走 generator 的 finally（收尾落块） */
-function streamFrom(gen: AsyncGenerator<Uint8Array>): ReadableStream<Uint8Array> {
+/**
+ * 把 async generator 接成 ReadableStream；cancel 时走 generator 的 finally（收尾落块）。
+ *
+ * onCancel 的顺序是关键：`AsyncGenerator.return()` 会**排在未决的 next() 之后**，
+ * 生成器此刻若正卡在 `await reader.read()`（上游半开）或 `await fetchUpstream`（等响应头），
+ * 这个 return 永远不会被处理，finally 里的 reader.cancel() 也就跑不到 —— 那条上游连接
+ * 就永久留在连接池里。所以先 abort 让上游落地，生成器自己会解开；return 只是补一刀，
+ * 不 await（它可能要等 abort 传播回来，cancel 本身不该被它拖住）。
+ */
+function streamFrom(
+  gen: AsyncGenerator<Uint8Array>,
+  onCancel: () => void
+): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
@@ -478,8 +697,9 @@ function streamFrom(gen: AsyncGenerator<Uint8Array>): ReadableStream<Uint8Array>
         controller.error(e)
       }
     },
-    async cancel() {
-      await gen.return(undefined).catch(() => {})
+    cancel() {
+      onCancel()
+      void gen.return(undefined).catch(() => {})
     }
   })
 }
@@ -518,20 +738,22 @@ async function* fetchAndStore(
   fetchEnd: number,
   emitStart: number,
   emitEnd: number,
-  signal: AbortSignal
+  ctx: StreamContext
 ): AsyncGenerator<Uint8Array> {
   if (!spec.url) throw new Error('缺块需要回源，但这一路没有直链')
   const result = await fetchUpstream(
     spec.url,
     upstreamHeaders(spec, `bytes=${fetchStart}-${fetchEnd}`),
-    signal
+    ctx
   )
   if (!result.ok) throw new Error(`上游取流失败 ${result.error.status}`)
-  const body = decryptedBody(spec, result.upstream, fetchStart)
-  const writer = openBlockWriter(key, record, fetchStart)
-  const reader = body.getReader()
+  const lease = result.lease
+  // leaseBody 必须在 try 之前拿到 reader：openBlockWriter 万一抛了，也得有人把这条上游还掉
+  const reader = decryptedBody(spec, leaseBody(lease), fetchStart).getReader()
+  let writer: ReturnType<typeof openBlockWriter> | null = null
   let pos = fetchStart
   try {
+    writer = openBlockWriter(key, record, fetchStart)
     for (;;) {
       const { done, value } = await reader.read()
       if (done || !value) break
@@ -546,8 +768,9 @@ async function* fetchAndStore(
       if (pos > fetchEnd) break
     }
   } finally {
-    writer.finish()
+    writer?.finish()
     void reader.cancel().catch(() => {})
+    lease.release('分段结束')
   }
 }
 
@@ -561,7 +784,7 @@ async function* assembleRange(
   record: CacheRecord,
   start: number,
   end: number,
-  signal: AbortSignal
+  ctx: StreamContext
 ): AsyncGenerator<Uint8Array> {
   // 先把涉及的块逐个验一遍（大小对不上的会被剔出索引，当作缺块回源补齐）
   const available = new Set<number>()
@@ -582,7 +805,7 @@ async function* assembleRange(
         seg.fetchEnd,
         seg.emitStart,
         seg.emitEnd,
-        signal
+        ctx
       )
     }
   }
@@ -630,74 +853,86 @@ export function installAudioProtocol(): void {
     // 本地文件：直接 fs 流式响应，不走网络栈
     if (spec.filePath) return serveLocalFile(spec.filePath, range, spec.contentType)
 
-    // 已有缓存条目（知道总长与已有块）：按块拼接，本地块直读、缺块回源补齐
-    const key = spec.cacheKey
-    const record = key ? getAudioCacheRecord(key) : null
-    if (key && record) {
-      const resolved = resolveRange(range, record.size)
-      if (!resolved) {
-        return new Response(null, {
-          status: 416,
-          headers: { 'Content-Range': `bytes */${record.size}` }
+    const slot = openSlot(token, request.signal)
+    const ctx: StreamContext = { token, signal: slot.abort.signal }
+    /** 任何「不返回流」的出口都得走它，否则这一路的 slot 与上游租约没人收 */
+    const fail = (status: number, headers?: Record<string, string>): Response => {
+      slot.abort.abort()
+      return new Response(null, { status, headers })
+    }
+
+    try {
+      // 已有缓存条目（知道总长与已有块）：按块拼接，本地块直读、缺块回源补齐
+      const key = spec.cacheKey
+      const record = key ? getAudioCacheRecord(key) : null
+      if (key && record) {
+        const resolved = resolveRange(range, record.size)
+        if (!resolved) return fail(416, { 'Content-Range': `bytes */${record.size}` })
+        const { start, end, partial } = resolved
+        const out = new Headers({
+          'Access-Control-Allow-Origin': '*',
+          'Accept-Ranges': 'bytes',
+          'Content-Type': record.contentType,
+          'Content-Length': String(end - start + 1)
+        })
+        if (partial) out.set('Content-Range', `bytes ${start}-${end}/${record.size}`)
+        const body = streamFrom(assembleRange(spec, key, record, start, end, ctx), () =>
+          slot.abort.abort()
+        )
+        return new Response(bindToRequest(body, slot) as BodyInit, {
+          status: partial ? 206 : 200,
+          headers: out
         })
       }
-      const { start, end, partial } = resolved
-      const out = new Headers({
-        'Access-Control-Allow-Origin': '*',
-        'Accept-Ranges': 'bytes',
-        'Content-Type': record.contentType,
-        'Content-Length': String(end - start + 1)
-      })
-      if (partial) out.set('Content-Range', `bytes ${start}-${end}/${record.size}`)
-      const body = streamFrom(assembleRange(spec, key, record, start, end, request.signal))
-      return new Response(bindToRequest(body, request.signal) as BodyInit, {
-        status: partial ? 206 : 200,
-        headers: out
-      })
+
+      if (!spec.url) return fail(404)
+
+      // 还没有条目（首次播放）：直连上游，顺便按响应头建条目并边下边落块
+      const upstreamStart = range ? parseRangeStart(range) : 0
+      const result = await fetchUpstream(spec.url, upstreamHeaders(spec, range ?? undefined), ctx)
+      if (!result.ok) {
+        slot.abort.abort()
+        return result.error
+      }
+      const lease = result.lease
+      const upstream = lease.response
+
+      // 等上游响应头这段时间里 <audio> 可能已经 seek/切歌，或者这一路已被同 token 的新
+      // 请求顶替。Electron 会 cancel 我们返回的 body（bindToRequest 能收到），但被顶替的
+      // 那一路不会再有下游，必须自己收掉，否则这条连接一直占着 per-host 额度。
+      if (slot.abort.signal.aborted) {
+        void upstream.body?.cancel().catch(() => {})
+        lease.release('已被顶替')
+        return new Response(null, { status: 499 })
+      }
+
+      const contentType = spec.contentType ?? upstream.headers.get('content-type') ?? 'audio/mpeg'
+      const out = new Headers()
+      out.set('Access-Control-Allow-Origin', '*')
+      out.set('Accept-Ranges', 'bytes')
+      out.set('Content-Type', contentType)
+      const cl = upstream.headers.get('content-length')
+      const cr = upstream.headers.get('content-range')
+      const status = upstream.status
+      if (cl) out.set('Content-Length', cl)
+      if (cr) out.set('Content-Range', cr)
+
+      let body = decryptedBody(spec, leaseBody(lease), upstreamStart)
+
+      // 挂在解密之后：缓存里存的是可直接播的明文。总长度从响应头得出，
+      // 拿不到就不缓存（宁可不存，也不写出长度存疑的块）。
+      if (key) {
+        const total = parseTotalSize(status, cl, cr)
+        const fresh = total > 0 ? ensureAudioCacheRecord(key, total, contentType) : null
+        if (fresh) body = tapToBlocks(body, key, fresh, upstreamStart)
+      }
+
+      return new Response(bindToRequest(body, slot) as BodyInit, { status, headers: out })
+    } catch (e) {
+      // 建流途中抛错（落盘目录不可写等）：slot 一旦不 abort，刚拿到的上游租约就没人还
+      log.error('音频流响应失败', e)
+      return fail(500)
     }
-
-    if (!spec.url) return new Response(null, { status: 404 })
-
-    // 还没有条目（首次播放）：直连上游，顺便按响应头建条目并边下边落块
-    const upstreamStart = range ? parseRangeStart(range) : 0
-    const result = await fetchUpstream(
-      spec.url,
-      upstreamHeaders(spec, range ?? undefined),
-      request.signal
-    )
-    if (!result.ok) return result.error
-    const upstream = result.upstream
-
-    // 等上游响应头这段时间里 <audio> 可能已经 seek/切歌。此时 Electron 会把返回的
-    // Response 直接丢掉，谁也不会去 cancel 它——必须自己收掉，否则这条连接会一直占着
-    // per-host 的并发额度（见 bindToRequest）。
-    if (request.signal.aborted) {
-      void upstream.body?.cancel().catch(() => {})
-      return new Response(null, { status: 499 })
-    }
-
-    const contentType = spec.contentType ?? upstream.headers.get('content-type') ?? 'audio/mpeg'
-    const out = new Headers()
-    out.set('Access-Control-Allow-Origin', '*')
-    out.set('Accept-Ranges', 'bytes')
-    out.set('Content-Type', contentType)
-    const cl = upstream.headers.get('content-length')
-    const cr = upstream.headers.get('content-range')
-    const status = upstream.status
-    if (cl) out.set('Content-Length', cl)
-    if (cr) out.set('Content-Range', cr)
-
-    let body = decryptedBody(spec, upstream, upstreamStart)
-
-    // 挂在解密之后：缓存里存的是可直接播的明文。总长度从响应头得出，
-    // 拿不到就不缓存（宁可不存，也不写出长度存疑的块）。
-    if (key) {
-      const total = parseTotalSize(status, cl, cr)
-      const fresh = total > 0 ? ensureAudioCacheRecord(key, total, contentType) : null
-      if (fresh) body = tapToBlocks(body, key, fresh, upstreamStart)
-    }
-
-    return new Response(bindToRequest(body, request.signal) as BodyInit, { status, headers: out })
   })
 }
 

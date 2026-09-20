@@ -51,7 +51,7 @@ import { resolveMediaInfo } from '../../providers/getUrl'
 import { getProvider } from '../../providers'
 import { decryptAudioFile } from '../../crypto/decryptor'
 import { fillAudioTags, sniffImageMime } from '../../tag'
-import { requestBuffer, requestRaw } from '../../net/request'
+import { drainResponse, requestBuffer, requestRaw } from '../../net/request'
 import { appDataPath } from '../../core/paths'
 import { buildLyrics, encodeLyric } from './lyric'
 
@@ -705,13 +705,20 @@ async function downloadToFile(
   signal: AbortSignal,
   refresh: () => Promise<{ playUrl: string; isSuccess: boolean }>
 ): Promise<void> {
-  let resp = await requestRaw(url, { timeout: 60000 })
+  // signal 透传到 net 层：暂停/取消时连「等响应头」这一段也立刻断掉，
+  // 否则主进程侧连接会继续拉完整个文件，孤儿连接攒满 per-host 额度后新任务发不出去。
+  let resp = await requestRaw(url, { timeout: 60000, signal })
   if (!resp.ok) {
+    // 换链接前先把这条失败响应收掉：丢着不读等于漏一条连接，直链过期在下载里是常态
+    drainResponse(resp)
     const refreshed = await refresh()
     if (refreshed.isSuccess && refreshed.playUrl)
-      resp = await requestRaw(refreshed.playUrl, { timeout: 60000 })
+      resp = await requestRaw(refreshed.playUrl, { timeout: 60000, signal })
   }
-  if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`)
+  if (!resp.ok || !resp.body) {
+    drainResponse(resp)
+    throw new Error(`HTTP ${resp.status}`)
+  }
 
   const cl = Number(resp.headers.get('content-length')) || fallbackTotal
   if (cl > 0) patchTask(taskKey, { totalBytes: cl })

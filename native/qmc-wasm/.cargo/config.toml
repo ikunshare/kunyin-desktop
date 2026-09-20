@@ -1,0 +1,5 @@
+[target.wasm32-unknown-unknown]
+# wasm-ld 默认给影子栈留 1MB，于是每个实例的线性内存都是 1216KB。
+# 这里全是静态缓冲、没有递归也没有大的栈上数组，32KB 绰绰有余 ——
+# 每个解密器一个实例，省下的是实打实的常驻内存（1216KB → 256KB）。
+rustflags = ["-C", "link-arg=-zstack-size=32768"]

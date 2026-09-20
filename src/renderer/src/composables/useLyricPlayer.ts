@@ -177,12 +177,17 @@ function toCredits(raw: readonly { role: string; names: { content: string }[] }[
  */
 export function useLyricPlayer(): {
   element: ShallowRef<HTMLElement>
+  /**
+   * 加载歌词。返回经 transform 链后是否还有唱词行。
+   * 纯器乐曲的「歌词」常常只有一份幕后名单（作曲/指挥/录音棚…），会被 extractCreator
+   * 整段抽进 credits、正文一行不剩：此时返回 false、引擎置空，但 `credits` 仍保留给宿主展示。
+   */
   loadLyric: (
     original: string,
     translate?: string,
     roman?: string,
     musicInfo?: { name?: string; singer?: string[] }
-  ) => void
+  ) => boolean
   clear: () => void
   play: (ms?: number) => void
   pause: () => void
@@ -489,10 +494,10 @@ export function useLyricPlayer(): {
     translate = '',
     roman = '',
     musicInfo?: { name?: string; singer?: string[] }
-  ): void {
+  ): boolean {
     if (!original.trim()) {
       clear()
-      return
+      return false
     }
     try {
       // 去掉 AI 音译声明等噪音行；制作人行留着，交给下面的 pure.extractCreator 提取
@@ -537,6 +542,11 @@ export function useLyricPlayer(): {
       // 作为歌词流的收尾渲染到引擎 footer（跟着最后一行滚动）
       credits.value = toCredits(result.meta?.credits ?? [])
       applyCredits()
+      // 只剩制作人信息、没有一句唱词（纯器乐曲常见）：引擎置空，credits 留给宿主自行展示
+      if (!result.lines.some((line) => Lyric.Parsed.isParsedLineNormal(line))) {
+        base.updateLyric(Lyric.Parsed.makeParsedInfo())
+        return false
+      }
       // 绝对时间标签的词 end==start，补全时长供卡拉 OK / 重音；
       // 传原文以取行末时间标签（kit 的行 time.end 是末词 start，补不了末字）
       reconstructWordDurations(result, cleanedOriginal)
@@ -551,9 +561,11 @@ export function useLyricPlayer(): {
       // 不要拼回主词——拼接会让和声词排进主词时间轴末尾，时序全错。
 
       base.updateLyric(result)
+      return true
     } catch (e) {
       console.error('[lyric] 解析失败', e)
       clear()
+      return false
     }
   }
 

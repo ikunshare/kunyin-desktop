@@ -3,7 +3,13 @@
  *
  * 流程：ekey → base64/TEA 解出真实 key → 按 key 长度选 map(≤300) 或 RC4 流密码 →
  *   decrypt(chunk, fileOffset) 按字节偏移解密（天然支持 Range/seek）。
+ *
+ * ekey 解密（base64/TEA）每首歌只跑一次，留在这里用 JS 做；
+ * 两种流密码是逐字节的热循环，默认走 wasm 后端（native/qmc-wasm，见 qmcWasm.ts），
+ * 本文件的 MapCipher / Rc4Cipher 退为**回退实现 + wasm 的对照基准**。
+ * 改任何一边都要同步另一边，一致性由 tools/qmc.test.mjs 逐字节校验。
  */
+import { createWasmCipher } from './qmcWasm'
 
 // —— 常量（与 C++ 逐字一致）——
 const V1_KEY_SIZE = 128
@@ -251,28 +257,67 @@ class Rc4Cipher implements AudioDecryptor {
   }
 }
 
+/** C++ create_cipher 的选型规则：keyLen ≤ 300 → map，否则 RC4。 */
+function cipherKind(rawKey: Uint8Array): 'map' | 'rc4' {
+  return rawKey.length <= 300 ? 'map' : 'rc4'
+}
+
+/**
+ * 纯 JS 流密码。wasm 不可用时的回退，同时是 tools/qmc.test.mjs 里 wasm 的对照基准。
+ * 正常播放/下载不会走到这里 —— 要基准测试请显式调它。
+ */
+export function createJsCipher(rawKey: Uint8Array): AudioDecryptor {
+  return cipherKind(rawKey) === 'map' ? new MapCipher(rawKey) : new Rc4Cipher(rawKey)
+}
+
+/** 由解出的原始 key 造流密码：优先 wasm，拿不到就回退纯 JS。 */
+export function createCipher(rawKey: Uint8Array): AudioDecryptor {
+  return createWasmCipher(rawKey, cipherKind(rawKey)) ?? createJsCipher(rawKey)
+}
+
 /** 由 ekey 构造解密器；失败返回 null（调用方对 null 走透传）。 */
 export function createMflacDecryptor(ekey: string): AudioDecryptor | null {
   if (!ekey || ekey.length < 12) return null
   try {
     const key = ekeyDecrypt(Buffer.from(ekey, 'latin1'))
     if (!key || key.length === 0) return null
-    // C++ create_cipher：keyLen<=300 → map，否则 RC4
-    return key.length <= 300 ? new MapCipher(key) : new Rc4Cipher(key)
+    return createCipher(key)
   } catch {
     return null
   }
 }
 
+/** 整文件解密的分块大小。wasm 侧 IO 窗口更小，WasmCipher 内部会再切。 */
+const FILE_CHUNK_SIZE = 1024 * 1024
+
 /**
- * 整文件原地解密（对应 Android MflacCrypto.decryptFile，下载完成后用）。
- * 读入密文 → 从偏移 0 解密 → 写回同一路径。ekey 无效则抛错。
+ * 整文件原地解密（对应 Android MflacCrypto.decryptFile，下载完成后用）。ekey 无效则抛错。
+ *
+ * 以 `r+` 打开、按块读→解密→写回同一偏移：流密码按绝对偏移寻址、块间无状态，
+ * 原地覆盖是安全的。不用 readFile/writeFile 是因为那样峰值内存正比于文件大小
+ * （一份密文 + 一份明文），hires/master 动辄上百 MB；分块后常驻只有 2×1MB。
  */
 export async function decryptFile(filePath: string, ekey: string): Promise<void> {
-  const { readFile, writeFile } = await import('node:fs/promises')
   const decryptor = createMflacDecryptor(ekey)
   if (!decryptor) throw new Error('无效 ekey，无法构造解密器')
-  const cipher = await readFile(filePath)
-  const plain = decryptor.decrypt(cipher, 0)
-  await writeFile(filePath, plain)
+  await decryptFileWith(decryptor, filePath)
+}
+
+/** decryptFile 的分块读写主体；拆出来是为了能用裸 key 造的解密器直接测分块边界。 */
+export async function decryptFileWith(decryptor: AudioDecryptor, filePath: string): Promise<void> {
+  const { open } = await import('node:fs/promises')
+  const fh = await open(filePath, 'r+')
+  try {
+    const buf = Buffer.allocUnsafe(FILE_CHUNK_SIZE)
+    let offset = 0
+    for (;;) {
+      const { bytesRead } = await fh.read(buf, 0, FILE_CHUNK_SIZE, offset)
+      if (bytesRead === 0) break
+      const plain = decryptor.decrypt(buf.subarray(0, bytesRead), offset)
+      await fh.write(plain, 0, bytesRead, offset)
+      offset += bytesRead
+    }
+  } finally {
+    await fh.close()
+  }
 }

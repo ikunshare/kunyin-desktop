@@ -11,6 +11,7 @@ import { initAppDataDir } from './core/paths'
 import { appEvent } from './core/events'
 import { createLogger, initLogger, setLogLevel, setLogToFile } from './core/logger'
 import { getSettings } from './store/settings'
+import { qmcWasmStatus } from './crypto/qmcWasm'
 
 const log = createLogger('boot')
 
@@ -50,6 +51,12 @@ if (!app.requestSingleInstanceLock()) {
       setLogLevel(s.developer.logLevel)
       setLogToFile(s.developer.logToFile)
     })
+
+    // QMC 解密后端：回退到纯 JS 不影响正确性（两条实现逐字节一致），但吞吐差 2~3.6 倍，
+    // 排查「下载后解密很慢」时先看这条
+    const qmcWasm = qmcWasmStatus()
+    if (qmcWasm.available) log.info('QMC 解密后端：wasm')
+    else log.warn('QMC 解密后端：纯 JS（wasm 不可用）', { reason: qmcWasm.reason })
 
     // Windows 任务栏/通知归属
     electronApp.setAppUserModelId('com.ikunshare.sound')

@@ -32,6 +32,7 @@ import { num, parseTrackInfo, stripEm } from './item'
 import { qqComm } from './comm'
 import { zzcSign } from './sign'
 import { decodeLegacyLyric, isLyricEmpty, parseTxLyric } from './lyric'
+import { fillMissingQqCovers } from './cover'
 import { qqGetComment, qqGetHotComment } from './comment'
 
 /**
@@ -131,6 +132,7 @@ export class QqProvider extends BaseProvider {
       .map((x: any) => parseTrackInfo(x))
       .filter((x: any): x is QQMusicItem => !!x && !seen.has(x.id) && (seen.add(x.id), true))
     const hasNext = num(data.meta?.nextpage, -1) > page
+    await fillMissingQqCovers(result)
     return { source: 'qq', hasNext, page, size, result }
   }
 
@@ -286,6 +288,7 @@ export class QqProvider extends BaseProvider {
     const result = (data.songlist ?? [])
       .map((s: any) => parseTrackInfo(s))
       .filter((x: any): x is QQMusicItem => !!x && !seen.has(x.id) && (seen.add(x.id), true))
+    await fillMissingQqCovers(result)
     return { source: 'qq', hasNext: (page + 1) * size < total, page, size, result }
   }
 
@@ -478,6 +481,7 @@ export class QqProvider extends BaseProvider {
     const result = (data.songList ?? [])
       .map((s: any) => parseTrackInfo(s.songInfo))
       .filter((x: any): x is QQMusicItem => !!x)
+    await fillMissingQqCovers(result)
     return { source: 'qq', hasNext: (page + 1) * size < total, page, size, result }
   }
 
@@ -650,7 +654,9 @@ export class QqProvider extends BaseProvider {
     const json = await zzcRequest<any>(req).catch(() => null)
     if (!json || json.code !== 0 || json.req?.code !== 0) return null
     const trackInfo = json.req.data?.track_info
-    return trackInfo ? parseTrackInfo(trackInfo) : null
+    const item = trackInfo ? parseTrackInfo(trackInfo) : null
+    if (item) await fillMissingQqCovers([item])
+    return item
   }
 
   async getLyric(item: MusicItem): Promise<Lyric> {

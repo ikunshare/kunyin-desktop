@@ -12,7 +12,7 @@
 import { createHash, randomInt } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import type { QQMusicItem } from '@common'
-import { requestJson, requestRaw } from '../../net/request'
+import { drainResponse, requestJson, requestRaw } from '../../net/request'
 import { zzcRequest } from './index'
 import { qqComm, qqLoginType } from './comm'
 import { ensureQimeiReady, getQQDevice } from './device'
@@ -161,6 +161,9 @@ export async function qqReportPlayStream(
       },
       body: gzipSync(Buffer.from(xml, 'utf-8'))
     })
+    // 上报只关心状态码。body 不收就是一条永远挂在 Chromium 连接池里的孤儿连接——
+    // 每播一首歌漏一条，攒满之后取流也申请不到额度（见 drainResponse）。
+    drainResponse(resp)
     return resp.ok
   } catch {
     return false

@@ -4,7 +4,7 @@
  * 3. WS /socket?i&t 建连；4. 解压帧交 SyncRpc；发帧前按大小 gzip；60s 心跳文本 "ping"。
  */
 import WebSocket from 'ws'
-import { requestRaw } from '../../net/request'
+import { drainResponse, requestRaw } from '../../net/request'
 import { SyncProtocol } from './protocol'
 import {
   aesDecrypt,
@@ -170,7 +170,11 @@ export class SyncClient {
 
   private async probeHello(base: string): Promise<void> {
     const r = await requestRaw(`${base}/hello`, { method: 'GET' })
-    if (!r.ok) throw new Error(`hello 失败: HTTP ${r.status}`)
+    if (!r.ok) {
+      // 同步是长跑的：每次重连失败都漏一条连接的话，最后连取流都没额度
+      drainResponse(r)
+      throw new Error(`hello 失败: HTTP ${r.status}`)
+    }
     const body = (await r.text()).trim()
     if (body !== SyncProtocol.HELLO_MSG) {
       throw new Error(`服务器不是 LX Music 同步协议 (reply=${body})`)
@@ -214,7 +218,10 @@ export class SyncClient {
     const headers: Record<string, string> = { m: encMsg }
     if (clientId) headers.i = clientId
     const r = await requestRaw(`${base}/ah`, { method: 'GET', headers })
-    if (!r.ok) return null
+    if (!r.ok) {
+      drainResponse(r)
+      return null
+    }
     return r.text()
   }
 

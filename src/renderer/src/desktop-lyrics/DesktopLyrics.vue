@@ -78,12 +78,15 @@ async function apply(state: DesktopLyricState): Promise<void> {
       if (state.hasLyric && state.lyric) {
         hasLyric.value = true
         await nextTick()
-        lyric.loadLyric(state.lyric, state.translate, state.roman, {
+        // 只有制作人信息、没有唱词（纯器乐曲）时返回 false：引擎已置空，回到占位态
+        hasLyric.value = lyric.loadLyric(state.lyric, state.translate, state.roman, {
           name: state.musicName,
           singer: state.musicSinger
         })
-        await nextTick()
-        requestAnimationFrame(() => lyric.relayout())
+        if (hasLyric.value) {
+          await nextTick()
+          requestAnimationFrame(() => lyric.relayout())
+        }
       } else {
         lyric.clear()
         hasLyric.value = false

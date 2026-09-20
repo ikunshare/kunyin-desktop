@@ -181,6 +181,8 @@ function likeFromMenu(): void {
 // 逐字歌词引擎
 const lyricHost = ref<HTMLElement>()
 const lyric = useLyricPlayer()
+/** 制作人信息；歌词只有幕后名单、没有唱词时，由「纯音乐」占位块直接列出 */
+const lyricCredits = lyric.credits
 const hasLyric = ref(false)
 const hasTranslation = ref(false)
 // 每次加载自增，避免异步竞态（旧请求回来覆盖新歌）
@@ -217,10 +219,16 @@ async function loadLyric(): Promise<void> {
       await nextTick()
       if (token !== loadToken) return
       const roman = ly.chroma || ly.roma
-      lyric.loadLyric(original, ly.trans, roman, {
+      const hasLines = lyric.loadLyric(original, ly.trans, roman, {
         name: plain.title,
         singer: plain.artist ? [plain.artist] : []
       })
+      if (!hasLines) {
+        // 只有制作人信息、没有唱词：按纯音乐处理，credits 留在 lyric.credits 里由占位块展示
+        hasLyric.value = false
+        hasTranslation.value = false
+        return
+      }
       await nextTick()
       if (token !== loadToken) return
       requestAnimationFrame(() => lyric.relayout())
@@ -474,7 +482,15 @@ watch(currentTime, (t) => {
 
         <div v-show="lyricVisible" class="right">
           <div ref="lyricHost" class="lyric-host" :class="{ hidden: !hasLyric }" />
-          <div v-if="!hasLyric" class="no-lyric">纯音乐，请欣赏</div>
+          <div v-if="!hasLyric" class="no-lyric">
+            <div class="no-lyric-title">纯音乐，请欣赏</div>
+            <div v-if="lyricCredits.length" class="no-lyric-credits">
+              <div v-for="item in lyricCredits" :key="item.role" class="no-lyric-credits-row">
+                <span class="no-lyric-credits-role">{{ item.role }}</span>
+                <span class="no-lyric-credits-names">{{ item.names.join(' · ') }}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -503,15 +519,31 @@ watch(currentTime, (t) => {
   /* 网格渐变画布按音量留出 ~5% 透明度，给个深色底，
      免得主题背景图从缝隙里透出来；渲染失败时也退化成深色而非主题图 */
   background: #101013;
-  /*
-   * 无边框窗口只能靠 app-region 拖动。本页 Teleport 到 body 且铺满窗口，
-   * 会把 AppToolbar/AppAside 上唯一的拖拽区整块盖掉——那时窗口彻底拖不动。
-   * 因此让页面底板（背景/遮罩/封面/曲目信息这些无交互的地方）可拖，
-   * 再由下面一条规则把所有交互区域显式排除。
-   */
-  -webkit-app-region: drag;
 }
-/* app-region 会被后代继承，按容器排除即可覆盖其中所有按钮/滑块/菜单 */
+/*
+ * 无边框窗口只能靠 app-region 拖动。本页 Teleport 到 body 且铺满窗口，
+ * 会把 AppToolbar/AppAside 上唯一的拖拽区整块盖掉——那时窗口彻底拖不动。
+ * 因此让铺满整页的遮罩层可拖，再由下面一条规则把所有交互区域显式排除。
+ *
+ * 拖拽区是纯几何计算、与绘制层级无关：Chromium 按 DOM 顺序收集每个
+ * drag / no-drag 盒子的矩形，Electron 依序做并集 / 差集。app-region 会被后代
+ * 继承，所以 drag 只能挂在 .scrim 这种没有后代、且排在所有交互元素之前的
+ * 元素上。若挂在 .player-page，排在 .close 之后的 .content 会继承 drag、把整页
+ * 矩形再并回去，返回键中没被 .right 面板（no-drag）盖到的右侧就变回拖拽区，
+ * 点击被系统当成拖窗口吃掉。
+ */
+.scrim {
+  position: absolute;
+  inset: 0;
+  -webkit-app-region: drag;
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.26) 0%,
+    rgba(0, 0, 0, 0.08) 42%,
+    rgba(0, 0, 0, 0.44) 100%
+  );
+}
+/* 交互区域从拖拽区里挖掉；按容器排除即可覆盖其中所有按钮/滑块/菜单 */
 .close,
 .progress,
 .controls,
@@ -520,33 +552,39 @@ watch(currentTime, (t) => {
 .right {
   -webkit-app-region: no-drag;
 }
-.scrim {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    180deg,
-    rgba(0, 0, 0, 0.26) 0%,
-    rgba(0, 0, 0, 0.08) 42%,
-    rgba(0, 0, 0, 0.44) 100%
-  );
-}
 .close {
+  /* 可见圆底直径 / 圆外四周额外的命中区宽度 */
+  --close-size: 40px;
+  --close-slop: 12px;
   position: absolute;
-  top: 20px;
-  right: 24px;
+  top: calc(20px - var(--close-slop));
+  right: calc(24px - var(--close-slop));
   z-index: 3;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
+  width: calc(var(--close-size) + var(--close-slop) * 2);
+  height: calc(var(--close-size) + var(--close-slop) * 2);
   color: #fff;
+}
+/*
+ * 可见圆底画在伪元素上，按钮盒子本身比圆大一圈（--close-slop）：整盒都是命中区，
+ * 视觉上仍是原来大小的圆。悬停高亮跟随整盒，点到圆外一圈时也有反馈。
+ */
+.close::before {
+  content: '';
+  position: absolute;
+  inset: var(--close-slop);
+  border-radius: 50%;
   background: rgba(255, 255, 255, 0.16);
   transition: background 0.2s ease;
 }
-.close:hover {
+.close:hover::before {
   background: rgba(255, 255, 255, 0.26);
+}
+.close :deep(.app-icon) {
+  /* 抬到伪元素圆底之上 */
+  position: relative;
 }
 
 .content {
@@ -823,11 +861,49 @@ watch(currentTime, (t) => {
 }
 .no-lyric {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 22px;
   height: 100%;
-  font-size: 20px;
   color: rgba(255, 255, 255, 0.6);
+}
+.no-lyric-title {
+  font-size: 20px;
+}
+/*
+ * 歌词只有幕后名单时（纯器乐曲常见），名单在「纯音乐」下方居中列出。
+ * 字号/透明度与歌词末尾的 .lyric-credits 保持同一档，只是居中排。
+ * 名单可能很长（乐队/录音棚一行十几个名字），允许行内换行并整块可滚动，滚动条隐藏。
+ */
+.no-lyric-credits {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 60%;
+  max-width: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: center;
+}
+.no-lyric-credits::-webkit-scrollbar {
+  display: none;
+}
+.no-lyric-credits-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 10px;
+}
+.no-lyric-credits-role {
+  flex: none;
+  color: rgba(255, 255, 255, 0.34);
+}
+.no-lyric-credits-names {
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 /*
@@ -947,10 +1023,9 @@ watch(currentTime, (t) => {
 }
 
 .player-page.fullscreen .close {
-  top: 26px;
-  right: 30px;
-  width: 48px;
-  height: 48px;
+  --close-size: 48px;
+  top: calc(26px - var(--close-slop));
+  right: calc(30px - var(--close-slop));
 }
 
 .player-page.fullscreen .close :deep(.app-icon) {
@@ -958,7 +1033,8 @@ watch(currentTime, (t) => {
   height: 28px;
 }
 
-.player-page.fullscreen .lyric-host :deep(.lyric-credits) {
+.player-page.fullscreen .lyric-host :deep(.lyric-credits),
+.player-page.fullscreen .no-lyric-credits {
   gap: 6px;
   font-size: 14px;
 }

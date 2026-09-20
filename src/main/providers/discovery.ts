@@ -23,6 +23,7 @@ import { requestJson, requestText } from '../net/request'
 import { zzcRequest } from './qq'
 import { qqComm } from './qq/comm'
 import { parseTrackInfo } from './qq/item'
+import { fillMissingQqCovers } from './qq/cover'
 import { parseKgRankSong } from './kg/item'
 import { parseKwListSong } from './kw/item'
 import { wbdBuildParam, wbdDecode } from './kw/wbd'
@@ -57,7 +58,17 @@ function cached<T>(key: string, ttl: number, load: () => Promise<T>): Promise<T>
   return task
 }
 
-/** 最多重试 times 次，回调返回 null / 抛错都视为失败 */
+/**
+ * 最多重试 times 次，回调返回 null / 抛错都视为失败。
+ *
+ * 与 net/request.ts 的重试是两回事，两层都要留着：
+ * - net 层管**传输失败**（超时、5xx、连接错误），带指数退避；
+ * - 这一层管**语义失败**（HTTP 200 但 `errcode != 0` / 列表为空），net 层看不出问题，
+ *   只有解析后才知道。故这里刻意不退避 —— 重试的是「再问一次」，立刻试即可。
+ *
+ * 两层确实会相乘（最坏 3×3=9 次请求），但总耗时不变：net 层的超时是**整个请求的绝对
+ * 预算**，各次内部重试共享它，所以一次 retry 迭代最多还是 15s，3 次仍是 45s 上限。
+ */
 async function retry<T>(times: number, fn: () => Promise<T | null>): Promise<T | null> {
   for (let i = 0; i < times; i++) {
     const value = await fn().catch(() => null)
@@ -437,6 +448,7 @@ export async function getChartSongs(
         period
       })
       const result = (data.songInfoList ?? []).map(parseTrackInfo).filter(Boolean)
+      await fillMissingQqCovers(result)
       const total = Number(data.data?.totalNum) || (page === 0 ? result.length : 0)
       return { source, page, size, hasNext: (page + 1) * size < total, total, result }
     }
