@@ -192,6 +192,12 @@ export function useLyricPlayer(): {
   play: (ms?: number) => void
   pause: () => void
   seekMs: (ms: number) => void
+  /**
+   * 同步宿主倍速（`<audio>.playbackRate`）。
+   * 引擎自己跑一条墙钟时钟、逐字动画又是 WAAPI 墙钟动画，不告诉它就会按 1× 走，
+   * 倍速下歌词越放越落后（见 lyric/README.md 的 [vendor patch]）。
+   */
+  setPlaybackRate: (rate: number) => void
   setColors: (normal: string, active: string) => void
   setFontFamily: (font: string) => void
   setPresentation: (opts: {
@@ -579,6 +585,9 @@ export function useLyricPlayer(): {
     base.play(ms)
     base.pause()
   }
+  function setPlaybackRate(rate: number): void {
+    base.setPlaybackRate(rate)
+  }
 
   onUnmounted(() => {
     base.event.remove('play', onEnginePlay)
@@ -595,6 +604,7 @@ export function useLyricPlayer(): {
     play,
     pause,
     seekMs,
+    setPlaybackRate,
     setColors,
     setFontFamily,
     setPresentation,

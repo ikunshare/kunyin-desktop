@@ -107,7 +107,8 @@ abstract class EffectBase {
         }
         continue
       }
-      animation.playbackRate = 1
+      // [vendor patch] Match the host rate: these are wall-clock WAAPI animations, the line clock is not.
+      animation.playbackRate = this.context.playbackRate
       animation.currentTime = localTime
       if (isPlay) {
         animation.play()

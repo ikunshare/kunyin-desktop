@@ -23,6 +23,11 @@ export class BaseLyricPlayer {
   private state: {
     playing: boolean
     scanIndex: number
+    /**
+     * [vendor patch] Host playback rate. The internal clock advances by
+     * `elapsed wall time * rate`, so lines switch in step with a sped-up host.
+     */
+    rate: number
   }
   private active: {
     lines: Lyric.Parsed.ParsedLine[]
@@ -41,7 +46,8 @@ export class BaseLyricPlayer {
   constructor() {
     this.state = {
       playing: false,
-      scanIndex: 0
+      scanIndex: 0,
+      rate: 1
     }
     this.active = {
       lines: [],
@@ -78,7 +84,8 @@ export class BaseLyricPlayer {
     if (!this.state.playing) {
       return this.time.seek
     }
-    return this.time.seek + (performance.now() - this.time.start)
+    // [vendor patch] `* rate`: at 2x the host consumes twice as much content per wall second.
+    return this.time.seek + (performance.now() - this.time.start) * this.state.rate
   }
 
   // Real playback time shifted by the combined offset; all lyric matching runs against this.
@@ -309,6 +316,34 @@ export class BaseLyricPlayer {
     this.active.index = []
 
     this.info = Lyric.Parsed.makeParsedInfo()
+  }
+
+  /**
+   * [vendor patch] Set the host playback rate (`<audio>.playbackRate`).
+   *
+   * Rebases the clock first so the current position survives the change, then emits
+   * `playbackRateUpdate` — the DOM layer re-drives its WAAPI animations from that event,
+   * since those run on the wall clock and would otherwise wipe at the wrong speed.
+   *
+   * @param rate playback rate; non-finite or non-positive values are ignored.
+   */
+  setPlaybackRate(rate: number) {
+    if (!Number.isFinite(rate) || rate <= 0 || rate === this.state.rate) {
+      return
+    }
+    if (this.state.playing) {
+      this.time.seek = this.handleGetCurrentTime()
+      this.time.start = performance.now()
+    }
+    this.state.rate = rate
+    this.event.emit('playbackRateUpdate', rate)
+  }
+
+  /**
+   * [vendor patch] The current host playback rate.
+   */
+  get currentPlaybackRate() {
+    return this.state.rate
   }
 
   /**

@@ -261,6 +261,11 @@ export interface DesktopLyricState {
   playing: boolean
   /** Web Audio AnalyserNode 采样的实时频谱，值域 0..1 */
   spectrum: number[]
+  /**
+   * 生效中的倍速（`<audio>.playbackRate`）。歌词窗的引擎自走一条墙钟时钟，
+   * 不同步倍速就会按 1× 推进、越放越落后。缺省视作 1。
+   */
+  playbackRate?: number
   /** 是否有歌词（无则显示占位/隐藏）。仅内容帧携带。 */
   hasLyric?: boolean
   /** 主歌词（增强 LRC 或行级 LRC），歌词窗自行用 kit 解析。仅内容帧携带。 */

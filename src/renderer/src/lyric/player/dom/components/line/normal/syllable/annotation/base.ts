@@ -120,7 +120,7 @@ export abstract class WordAnnotationBaseElement implements WordAnnotationElement
     const lineDuration = Lyric.Common.getTimeDuration(lineInfo.time)
     this.host = new MaskAnimationHost(context, lineDuration, this.spans.length)
     for (const span of this.spans) {
-      this.masks.push(new MaskAnimation(span, lineDuration))
+      this.masks.push(new MaskAnimation(span, lineDuration, context))
     }
   }
 

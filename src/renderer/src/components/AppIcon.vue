@@ -46,6 +46,16 @@ const ICONS: Record<string, IconDef> = {
   },
   volume: { inner: '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>' },
   'volume-mute': { inner: '<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>' },
+  // 播放速度：速度表（270° 表盘 + 指针）
+  speed: {
+    inner:
+      '<path d="M6.3 18.7A8 8 0 1 1 17.7 18.7"/><path d="m12.9 12.1 3.6-3"/><circle cx="12" cy="13" r="1.4"/>'
+  },
+  // 音效：三条竖向推子（均衡器）
+  equalizer: {
+    inner:
+      '<path d="M6 3.5v5.3M6 14v6.5M12 3.5v2.9M12 11.6v8.9M18 3.5v9.1M18 17.8v2.7"/><circle cx="6" cy="11.4" r="2.4"/><circle cx="12" cy="9" r="2.4"/><circle cx="18" cy="15.2" r="2.4"/>'
+  },
   repeat: {
     inner:
       '<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>'

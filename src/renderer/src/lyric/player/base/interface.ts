@@ -14,6 +14,12 @@ export interface BaseLyricPlayerEventMap {
   pause: (currentTime: number) => void
 
   /**
+   * [vendor patch] When the host playback rate changes (e.g. the user switches to 1.5x).
+   * @param rate The new playback rate; the internal clock already advances at this rate.
+   */
+  playbackRateUpdate: (rate: number) => void
+
+  /**
    * When the entire lyric information is updated (e.g., loading a new lyric/song).
    * @param info The newly loaded lyric information object.
    */

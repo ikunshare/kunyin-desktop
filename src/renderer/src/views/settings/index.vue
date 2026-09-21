@@ -3,7 +3,6 @@ import { nextTick, ref } from 'vue'
 import AppIcon from '../../components/AppIcon.vue'
 import SettingBasic from './SettingBasic.vue'
 import SettingPlay from './SettingPlay.vue'
-import SettingSoundEffect from './SettingSoundEffect.vue'
 import SettingPlayDetail from './SettingPlayDetail.vue'
 import SettingDesktopLyric from './SettingDesktopLyric.vue'
 import SettingList from './SettingList.vue'
@@ -23,12 +22,12 @@ defineOptions({ name: 'SettingsView' })
 
 // 分类与顺序对齐 lx-music-desktop 的设置页（基本 → 播放 → 播放详情页 → 桌面歌词 →
 // 列表 → 下载 → 快捷键 → 同步 → 网络 → 备份 → 其他 → 更新 → 关于）。
-// 两个是坤音自己的：「音效设置」（LX 做成播放栏弹窗，这里是独立页，紧跟播放）与「开发者」。
+// 只有「开发者」是坤音自己加的。音效（均衡器/混响/环绕/升降调）与播放速度跟 LX 一样
+// 挂在播放页的弹层里，不做设置页分类——那些项都是边听边调的。
 // LX 有而坤音没有对应设置项的（搜索设置、开放 API、强迫症设置）不建空页。
 const tocList = [
   { id: 'SettingBasic', title: '基本设置', icon: 'settings' },
   { id: 'SettingPlay', title: '播放设置', icon: 'play' },
-  { id: 'SettingSoundEffect', title: '音效设置', icon: 'headphone' },
   { id: 'SettingPlayDetail', title: '播放详情页设置', icon: 'lyric' },
   { id: 'SettingDesktopLyric', title: '桌面歌词设置', icon: 'translate' },
   { id: 'SettingList', title: '列表设置', icon: 'library' },
@@ -48,7 +47,6 @@ type TocId = (typeof tocList)[number]['id']
 const components: Record<TocId, unknown> = {
   SettingBasic,
   SettingPlay,
-  SettingSoundEffect,
   SettingPlayDetail,
   SettingDesktopLyric,
   SettingList,

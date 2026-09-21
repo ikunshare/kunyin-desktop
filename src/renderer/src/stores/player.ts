@@ -196,6 +196,21 @@ export const usePlayerStore = defineStore('player', () => {
       step(1)
     }, 2000)
   }
+  /**
+   * 生效中的倍速（<audio>.playbackRate 的真值）。
+   *
+   * 与设置里的 `player.playbackRate` 不是一回事：滑杆拖动中的试听只改元素、不落盘，
+   * 这个 ref 跟着元素走。歌词引擎必须以它为准——引擎自走一条墙钟时钟，
+   * 不同步倍速的话歌词会越放越落后（见 `composables/useLyricPlayer.ts` 的 setPlaybackRate）。
+   */
+  const playbackRate = ref(1)
+
+  function applyPlaybackRate(rate: number): void {
+    const next = Number.isFinite(rate) ? Math.max(0.5, Math.min(2, rate)) : 1
+    audio.playbackRate = next
+    playbackRate.value = next
+  }
+
   watch(
     () =>
       [
@@ -203,12 +218,22 @@ export const usePlayerStore = defineStore('player', () => {
         useSettingsStore().settings.player.preservesPitch
       ] as const,
     ([rate, keepPitch]) => {
-      audio.playbackRate = Number.isFinite(rate) ? Math.max(0.5, Math.min(2, rate as number)) : 1
+      applyPlaybackRate(rate as number)
       // 关掉就是「变速变调」的花栗鼠效果；与音效里的升降调是两回事（那一路不改速度）
       audio.preservesPitch = !!keepPitch
     },
     { immediate: true }
   )
+
+  /**
+   * 只改 <audio> 不落盘：播放页速度滑杆拖动中的实时试听。
+   * 松手时调用方再写设置，上面的 watcher 会把同一个值正式落到元素上。
+   * （设置每写一次就是一次 JSON 原子写，按住滑杆拖会写成百上千次。）
+   */
+  function previewPlaybackRate(rate: number): void {
+    if (!Number.isFinite(rate)) return
+    applyPlaybackRate(rate)
+  }
 
   // 频谱有两条来源，取决于音效处理图建没建（见 audio/soundEffect.ts）：
   // - 没建图（默认）：captureStream 旁路采样。这条路**不碰**原输出链路，代价是 sink 泄漏
@@ -1192,6 +1217,8 @@ export const usePlayerStore = defineStore('player', () => {
     setVolume,
     toggleMute,
     cyclePlayMode,
+    playbackRate,
+    previewPlaybackRate,
     changeQuality,
     restore,
     onTrackEvent

@@ -263,7 +263,9 @@ export class MaskAnimation {
 
   constructor(
     private readonly host: HTMLElement,
-    private readonly lineDuration: number
+    private readonly lineDuration: number,
+    // [vendor patch] Needed for the host playback rate; the inner class had no context before.
+    private readonly context: ComponentContext
   ) {}
 
   private applyMaskStyle() {
@@ -322,7 +324,8 @@ export class MaskAnimation {
       return
     }
 
-    this.animation.playbackRate = 1
+    // [vendor patch] Match the host rate: these are wall-clock WAAPI animations, the line clock is not.
+    this.animation.playbackRate = this.context.playbackRate
     this.animation.currentTime = relativeTime < 0 ? 0 : relativeTime
     if (isPlay) {
       this.animation.play()

@@ -13,7 +13,7 @@ import type { DesktopLyricState, Lyric } from '@common'
 export function useDesktopLyricBridge(): void {
   const player = usePlayerStore()
   const settings = useSettingsStore()
-  const { current, playing, currentTime } = storeToRefs(player)
+  const { current, playing, currentTime, playbackRate } = storeToRefs(player)
 
   let cached: Lyric | null = null
   let loadToken = 0
@@ -46,7 +46,8 @@ export function useDesktopLyricBridge(): void {
     const state: DesktopLyricState = {
       currentTime: currentTime.value,
       playing: playing.value,
-      spectrum: settings.settings.lyrics.desktopAudioVisualization ? player.getSpectrumData() : []
+      spectrum: settings.settings.lyrics.desktopAudioVisualization ? player.getSpectrumData() : [],
+      playbackRate: playbackRate.value
     }
     if (pendingContent) {
       Object.assign(state, pendingContent)
@@ -101,6 +102,8 @@ export function useDesktopLyricBridge(): void {
 
   watch(current, () => void loadLyric())
   watch(playing, push)
+  // 倍速变化要立刻推一帧：进度帧的节奏不变，歌词窗却要马上换时钟
+  watch(playbackRate, push)
   // 频谱开启时由 80ms 定时器连同进度一起推；关闭时沿用 <audio> timeupdate（约 4/s）。
   watch(currentTime, () => {
     if (!settings.settings.lyrics.desktopAudioVisualization) push()

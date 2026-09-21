@@ -61,7 +61,7 @@ export class WordElement {
       // Float hosts on the word so it lifts alone.
       float: new FloatAnimation(this.word, this.context, this.wordInfo, this.lineInfo),
       // Mask hosts on the wipe so it covers the word plus the rows riding it, while independent rows mask themselves
-      mask: new MaskAnimation(this.wipe, Lyric.Common.getTimeDuration(this.lineInfo.time)),
+      mask: new MaskAnimation(this.wipe, Lyric.Common.getTimeDuration(this.lineInfo.time), this.context),
       // Emphasize only in main word.
       emphasize: new EmphasizeAnimation(
         this.context,

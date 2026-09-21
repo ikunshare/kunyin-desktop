@@ -97,7 +97,13 @@ QMC2（mflac/mgg）的两条**逐字节热循环**在 Rust 里：`native/qmc-was
 处理图在 `src/renderer/src/audio/soundEffect.ts`（**渲染层**，不是主进程），结构逐条移植自
 lx-music-desktop：`<audio> → source → analyser → 10 段 EQ →（变调 worklet）→ 干声/混响两路 →
 压缩器 → panner → gain → destination`。频点、Q、预设曲线、各脉冲响应的干湿增益都在
-`@common/audio`，是照抄上游调出来的听感，别凭感觉改。设置界面是 `views/settings/SettingSoundEffect.vue`。
+`@common/audio`，是照抄上游调出来的听感，别凭感觉改。
+
+界面跟 LX 一样挂在**播放页**而不是设置页——这些都是边听边调的项：
+`components/SoundEffectDialog.vue`（均衡器 / 环境混响 / 3D 环绕 / 升降调，原生 `<dialog>`）与
+`components/PlaybackRatePopover.vue`（播放速度 0.5×–2×＋保持音调，深色玻璃弹层），
+入口是 `views/PlayerView.vue` 底部 `.actions` 里的两个按钮。只有「最大声道输出」这种
+一次性开关留在设置页的**播放设置**（LX 也在那儿）。
 
 三条硬约束，动它之前必须知道：
 
@@ -112,8 +118,9 @@ lx-music-desktop：`<audio> → source → analyser → 10 段 EQ →（变调 w
   `AudioContext.setSinkId` 在**安全上下文**下可用（Electron 44 实测：`file://` 有，`data:` 没有），
   渲染层正好满足，所以设备切换统一收口到 `soundEffect.ts` 的 `setSinkId()`。
 
-滑杆的 `@input` 只调用 `previewSoundEffect` 实时试听，`@change` 才写设置——设置每写一次就是一次
-JSON 原子写，按住滑杆拖会写成百上千次。
+滑杆的 `@input` 只试听、`@change` 才写设置——设置每写一次就是一次 JSON 原子写，按住滑杆拖会写
+成百上千次。音效走 `previewSoundEffect`（直接改处理图），播放速度走 `stores/player.ts` 的
+`previewPlaybackRate`（直接改 `<audio>.playbackRate`；`<audio>` 元素不出 store）。
 
 ## IPC 契约
 
@@ -176,19 +183,20 @@ JSON 原子写，按住滑杆拖会写成百上千次。
 
 ## 设置页分类
 
-`views/settings/index.vue` 的 `tocList` 就是分类与顺序的唯一真源，**按 lx-music-desktop 的设置页对齐**：基本设置 → 播放设置 →（音效设置）→ 播放详情页设置 → 桌面歌词设置 → 列表设置 → 下载设置 → 快捷键设置 → 数据同步 → 网络设置 → 备份与恢复 → 其他 →（开发者）→ 软件更新 → 关于。括号里两项是坤音自己的：音效在 LX 是播放栏弹窗，这里做成独立页并紧跟播放设置。
+`views/settings/index.vue` 的 `tocList` 就是分类与顺序的唯一真源，**按 lx-music-desktop 的设置页对齐**：基本设置 → 播放设置 → 播放详情页设置 → 桌面歌词设置 → 列表设置 → 下载设置 → 快捷键设置 → 数据同步 → 网络设置 → 备份与恢复 → 其他 →（开发者）→ 软件更新 → 关于。括号里那项是坤音自己加的。
 
 跟着 LX 的几条归属约定，新增设置项时照此放：
 
 - 歌词**内容**开关（显示翻译/音译）在**播放设置**；歌词**呈现**（字体等）在**播放详情页设置**。
 - 「不喜欢的歌曲」规则在**其他**，不在播放设置。
 - 列表相关独立成**列表设置**，不并进基本设置。
+- 边听边调的项（音效、播放速度）**不进设置页**，放到播放页的弹层里（见上面「音效」一节）。
 - LX 有而坤音没有对应设置项的分类（搜索设置、开放 API、强迫症设置）**不建空页**。
 
 ## Vendored 第三方代码
 
 - 音效资源 vendored 在 `src/renderer/src/audio/`：`filters/*.wav`（13 条混响脉冲响应，来自 lx-music-desktop）与 `pitch-shifter.worklet.js`（olvb/phaze 的 phase vocoder）。后者是把上游三个文件拼成的单文件——AudioWorklet 在 Chromium 里不支持静态 `import`，而 Vite 的 `?url` 只拷贝不打包依赖。出处与改动登记在 `src/renderer/src/audio/README.md`，eslint/prettier 已忽略该 worklet。
-- 歌词引擎 vendored 在 `src/renderer/src/lyric/`（music-lyric-kit 解析 + music-lyric-player 渲染，纯 DOM、零框架依赖），背景在 `src/renderer/src/bg-render/`（AMLL MeshGradient，WebGL + gl-matrix）。eslint 已忽略 `lyric/**`、对 `bg-render` 关显式返回类型；对这些目录的改动须标 `[vendor patch]` 并登记 `src/renderer/src/lyric/README.md`，保持与上游可对照。别名让业务侧 import 名不变，将来换回 npm 包只动 `electron.vite.config.ts` 与 tsconfig。
+- 歌词引擎 vendored 在 `src/renderer/src/lyric/`（music-lyric-kit 解析 + music-lyric-player 渲染，纯 DOM、零框架依赖）。**上游没有倍速概念**：引擎自走一条 `performance.now()` 墙钟、逐字擦除又是 WAAPI 墙钟动画，倍速播放时两者都得乘上速率，否则歌词越放越落后。速率由 `stores/player.ts` 的 `playbackRate`（跟着 `<audio>` 的真值，含滑杆试听）经 `useLyricPlayer().setPlaybackRate()` 下发，桌面歌词走 `DesktopLyricState.playbackRate`；「这是 seek 不是自然推进」的重对齐阈值同样要按速率放大，否则 2× 下每帧都被当成 seek。改动登记在 lyric/README.md，背景在 `src/renderer/src/bg-render/`（AMLL MeshGradient，WebGL + gl-matrix）。eslint 已忽略 `lyric/**`、对 `bg-render` 关显式返回类型；对这些目录的改动须标 `[vendor patch]` 并登记 `src/renderer/src/lyric/README.md`，保持与上游可对照。别名让业务侧 import 名不变，将来换回 npm 包只动 `electron.vite.config.ts` 与 tsconfig。
 
 ## 发布与自动更新
 

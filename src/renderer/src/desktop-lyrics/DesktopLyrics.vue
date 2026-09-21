@@ -93,12 +93,17 @@ async function apply(state: DesktopLyricState): Promise<void> {
       }
     }
   }
+  // 倍速要在 play/seek 之前设好：引擎内部据此换算墙钟，晚设一拍会让本次对齐用错速率
+  const rate = state.playbackRate ?? 1
+  lyric.setPlaybackRate(rate)
   if (hasLyric.value) {
     if (state.playing) {
       // 以「歌词引擎是否在播」为准而非宿主上次推送的 playing：切歌后引擎 updateLyric
       // 内部会回到暂停，必须重新 play；宿主 playing 在歌词异步拉取期间已被推成 true，
       // 若再依赖它会被中间态卡住导致首次播放永不启动（歌词停在第一行不推进）。
-      if (!lyric.playing.value || Math.abs(state.currentTime - lastTime) > 400) {
+      // 阈值跟着倍速放大：宿主进度帧每帧推进 ≈ 间隔 × 倍速，钉死 400ms 的话
+      // 2× 下（timeupdate 那条路约 500ms/帧）每帧都会被当成 seek 重新 play，逐字动画不停重启。
+      if (!lyric.playing.value || Math.abs(state.currentTime - lastTime) > 400 * rate) {
         lyric.play(state.currentTime)
       }
     } else {

@@ -98,6 +98,8 @@ export class Dot {
       return
     }
 
+    // [vendor patch] Match the host rate: these are wall-clock WAAPI animations, the line clock is not.
+    animation.playbackRate = this.context.playbackRate
     animation.currentTime = relativeTime > 0 ? relativeTime : 0
     if (isPlay) {
       animation.play()

@@ -46,6 +46,8 @@ export class DomLyricPlayer {
     )
 
     const componentContext = new ComponentContext(config)
+    // [vendor patch] The player may already be sped up when the DOM layer is built.
+    componentContext.playbackRate = player.currentPlaybackRate
 
     const root = new Root()
     const container = new Container(componentContext, root.element)
@@ -68,6 +70,7 @@ export class DomLyricPlayer {
 
     this.player.event.add('play', this.onPlay)
     this.player.event.add('pause', this.onPause)
+    this.player.event.add('playbackRateUpdate', this.onPlaybackRateUpdate)
     this.player.event.add('lyricUpdate', this.onLyricUpdate)
     this.player.event.add('linesUpdate', this.onLinesUpdate)
 
@@ -143,6 +146,19 @@ export class DomLyricPlayer {
 
   private onPlay = (_currentTime: number) => {
     this.scheduleLayoutUpdate()
+  }
+
+  /**
+   * [vendor patch] Re-drive the active line's WAAPI animations at the new rate.
+   *
+   * `isSeek` forces `layout.update` to call `play` / `pause` on the active element even
+   * though the line did not change — that is the only path that re-applies
+   * `animation.playbackRate`, and in-flight wipes span whole lines, so without it a rate
+   * change would not take effect until the next line.
+   */
+  private onPlaybackRateUpdate = (rate: number) => {
+    this.context.component.context.playbackRate = rate
+    this.scheduleLayoutUpdate({ isSeek: true })
   }
 
   private onPause = (currentTime: number) => {
@@ -242,6 +258,7 @@ export class DomLyricPlayer {
   destroy() {
     this.player.event.remove('play', this.onPlay)
     this.player.event.remove('pause', this.onPause)
+    this.player.event.remove('playbackRateUpdate', this.onPlaybackRateUpdate)
     this.player.event.remove('lyricUpdate', this.onLyricUpdate)
     this.player.event.remove('linesUpdate', this.onLinesUpdate)
 

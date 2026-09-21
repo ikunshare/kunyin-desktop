@@ -85,7 +85,8 @@ export class FloatAnimation {
       return
     }
 
-    this.animation.playbackRate = 1
+    // [vendor patch] Match the host rate: these are wall-clock WAAPI animations, the line clock is not.
+    this.animation.playbackRate = this.context.playbackRate
     this.animation.currentTime = relativeTime > 0 ? relativeTime : 0
     if (isPlay) {
       this.animation.play()

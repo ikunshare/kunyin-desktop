@@ -8,11 +8,14 @@ import AppIcon from '../components/AppIcon.vue'
 import AmllBackground from '../components/AmllBackground.vue'
 import CommentDialog from '../components/CommentDialog.vue'
 import QualityDialog from '../components/QualityDialog.vue'
+import PlaybackRatePopover from '../components/PlaybackRatePopover.vue'
+import SoundEffectDialog from '../components/SoundEffectDialog.vue'
 import { usePlayerStore } from '../stores/player'
 import { useLibraryStore } from '../stores/library'
 import { useLyricPlayer } from '../composables/useLyricPlayer'
 import { useApi } from '../composables/useApi'
 import { useSettingsStore } from '../stores/settings'
+import { needsGraph } from '../audio/soundEffect'
 import { coverUrl } from '../utils/cover'
 
 const router = useRouter()
@@ -20,7 +23,7 @@ const player = usePlayerStore()
 const library = useLibraryStore()
 const settings = useSettingsStore()
 const api = useApi()
-const { current, playing, currentTime, duration, volume, muted, playMode, quality } =
+const { current, playing, currentTime, duration, volume, muted, playMode, quality, playbackRate } =
   storeToRefs(player)
 
 const track = computed(() => current.value)
@@ -141,6 +144,16 @@ function toggleTrans(): void {
   void settings.update({ lyrics: { showTranslation: !showTrans.value } })
 }
 
+// ============ 音效弹窗（均衡器/混响/环绕/升降调，与 LX 一样挂在播放页而非设置页） ============
+const showSoundEffect = ref(false)
+const soundEffectButton = ref<HTMLButtonElement>()
+/** 有任一项偏离默认值就高亮按钮（判据与「要不要建处理图」是同一个） */
+const soundEffectOn = computed(() => needsGraph(settings.settings.player.soundEffect))
+function closeSoundEffect(): void {
+  showSoundEffect.value = false
+  void nextTick(() => soundEffectButton.value?.focus())
+}
+
 // ============ 更多菜单（收藏 / 下载 / 播放音质） ============
 const moreOpen = ref(false)
 const showSleepTimer = ref(false)
@@ -249,11 +262,20 @@ async function loadLyric(): Promise<void> {
 }
 
 /**
+ * 「这是一次 seek 而不是自然推进」的判据（毫秒）。
+ *
+ * timeupdate 约 4 次/秒，每次推进 ≈ 250ms × 倍速，所以阈值必须跟着倍速放大：
+ * 钉死 800ms 的话，2× 下的正常推进（约 500ms，卡一帧就破 800）会被当成 seek，
+ * 歌词每帧重新对齐一次，逐字动画不停重启。
+ */
+const realignThreshold = computed(() => 800 * playbackRate.value)
+
+/**
  * 点击歌词行 → 跳到该行开头。
  *
  * 只驱动音频：歌词引擎的重对齐统一交给下方 currentTime 的跳变 watcher，
  * 避免这里和 watcher 各 play 一次导致逐字动画重启两遍。
- * 但 lastTime 必须在这里先对齐——点击的行离当前位置可能不到 800ms 阈值，
+ * 但 lastTime 必须在这里先对齐——点击的行离当前位置可能不到重对齐阈值，
  * watcher 会跳过重对齐，引擎就还停在原处，得手动补一次。
  */
 function seekToLyricLine(ms: number): void {
@@ -262,7 +284,7 @@ function seekToLyricLine(ms: number): void {
   const total = displayDuration.value
   const target = Math.max(0, total > 0 ? Math.min(ms, total) : ms)
   player.seek(target)
-  if (hasLyric.value && Math.abs(target - lastTime) <= 800) {
+  if (hasLyric.value && Math.abs(target - lastTime) <= realignThreshold.value) {
     if (playing.value) lyric.play(target)
     else lyric.seekMs(target)
   }
@@ -293,6 +315,8 @@ onMounted(() => {
   unsubscribeLineSeek = lyric.onLineSeek(seekToLyricLine)
   applyAnnotationVisible()
   applyLyricFont()
+  // 引擎自走墙钟时钟，倍速必须同步过去，否则歌词按 1× 推进、越放越落后
+  lyric.setPlaybackRate(playbackRate.value)
   loadLyric()
 })
 
@@ -310,6 +334,8 @@ watch(
   () => settings.settings.lyrics.font,
   () => applyLyricFont()
 )
+// 倍速跟着 <audio> 的真值走（含滑杆拖动中的试听），不是设置里的值
+watch(playbackRate, (rate) => lyric.setPlaybackRate(rate))
 
 // 切歌即重新拉取真实歌词
 watch(current, () => loadLyric())
@@ -323,7 +349,7 @@ watch(playing, (p) => {
 // 歌词引擎 play(ms) 后自走；仅在跳变（seek）时重对齐，避免与音频漂移
 let lastTime = 0
 watch(currentTime, (t) => {
-  if (hasLyric.value && current.value && Math.abs(t - lastTime) > 800) {
+  if (hasLyric.value && current.value && Math.abs(t - lastTime) > realignThreshold.value) {
     if (playing.value) lyric.play(t)
     else lyric.seekMs(t)
   }
@@ -404,6 +430,16 @@ watch(currentTime, (t) => {
           <div class="actions">
             <button class="abtn" :title="modeMeta.label" @click="player.cyclePlayMode()">
               <AppIcon :name="modeMeta.icon" :size="20" />
+            </button>
+            <PlaybackRatePopover />
+            <button
+              ref="soundEffectButton"
+              class="abtn"
+              :class="{ on: soundEffectOn }"
+              title="音效"
+              @click="showSoundEffect = true"
+            >
+              <AppIcon name="equalizer" :size="20" />
             </button>
             <button class="abtn" title="评论" @click="showComment = true">
               <AppIcon name="comment" :size="20" />
@@ -496,6 +532,7 @@ watch(currentTime, (t) => {
 
       <CommentDialog v-if="showComment" :track="track" @close="showComment = false" />
       <SleepTimerDialog v-if="showSleepTimer" @close="closeSleepTimer" />
+      <SoundEffectDialog v-if="showSoundEffect" @close="closeSoundEffect" />
 
       <QualityDialog
         v-if="showQualityDialog"
@@ -746,6 +783,11 @@ watch(currentTime, (t) => {
 }
 .abtn.off {
   opacity: 0.42;
+}
+/* 音效已偏离默认：用主色点亮，和播放速度弹层的高亮同一套 */
+.abtn.on {
+  opacity: 1;
+  color: #8be0a4;
 }
 .abtn:disabled {
   opacity: 0.38;

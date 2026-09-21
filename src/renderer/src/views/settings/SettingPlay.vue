@@ -86,21 +86,13 @@ function toggleAiQuality(id: QualityId, on: boolean): void {
         :label="option[1]"
         @update:model-value="store.update({ player: { [option[0]]: !!$event } })"
       />
-      <label class="control-row"
-        >播放速度
-        <BaseSelect
-          :model-value="settings.player.playbackRate"
-          :list="
-            [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((rate) => ({ id: rate, label: rate + '×' }))
-          "
-          @update:model-value="store.update({ player: { playbackRate: Number($event) } })"
-        />
-      </label>
       <BaseCheckbox
-        id="play-preserves-pitch"
-        :model-value="settings.player.preservesPitch"
-        label="倍速播放时保持音调（关掉即变速变调）"
-        @update:model-value="store.update({ player: { preservesPitch: !!$event } })"
+        id="play-max-output-channels"
+        :model-value="settings.player.soundEffect.maxOutputChannels"
+        label="最大声道输出（把输出声道数顶到设备支持的上限）"
+        @update:model-value="
+          store.update({ player: { soundEffect: { maxOutputChannels: !!$event } } })
+        "
       />
       <div class="control-row">
         <label for="play-output-device">输出设备</label>
@@ -118,6 +110,11 @@ function toggleAiQuality(id: QualityId, on: boolean): void {
         <BaseBtn min @click="player.refreshDevices()">刷新</BaseBtn>
       </div>
       <p v-if="player.deviceError" role="status">{{ player.deviceError }}</p>
+      <p>
+        立体声设备上限就是 2 声道，开了不会有变化；接 5.1／7.1 声卡或 HDMI 时才有意义。
+        播放速度与音效（均衡器 / 环境混响 / 3D 环绕 / 升降调）是边听边调的，和 lx-music-desktop
+        一样放在播放详情页右下角的两个按钮里。
+      </p>
     </div>
   </dd>
   <dd>
