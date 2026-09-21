@@ -80,6 +80,12 @@ nsis:
     - zh_CN
     - en_US
 mac:
+  # productName 是中文，而 zip target 默认模板带 ${productName}：落盘就成了「坤音-x.y.z-arm64-mac.zip」。
+  # zip 本身上传时会按模板改名，但**它的 blockmap 直接用磁盘文件名**，electron-publish 拼上传 URL
+  # 时不转义 →「Request path contains unescaped characters」，mac 任务从 v1.0.4 起就挂在这里，
+  # 后续的 latest-mac.yml 也跟着传不上去（= macOS 自动更新一直不可用）。所以这里必须给出 ASCII 名。
+  # dmg 有自己的 artifactName 覆盖，不受这条影响。
+  artifactName: ${name}-${version}-${arch}-mac.${ext}
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.

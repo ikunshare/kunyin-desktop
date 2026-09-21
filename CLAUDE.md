@@ -201,4 +201,5 @@ lx-music-desktop：`<audio> → source → analyser → 10 段 EQ →（变调 w
 ## 发布与自动更新
 
 - 版本号在 `package.json`，**不带 `v` 前缀**。打 `vX.Y.Z` 标签（须与 version 严格一致）并 push → `.github/workflows/release.yml` 自动建 Release 并在 Windows/macOS/Linux 三平台构建 + 上传安装包与 `latest*.yml`。
+- **打包产物名必须是 ASCII**：`productName` 是中文「坤音」，而各 target 的默认 `artifactName` 模板大多含 `${productName}`。产物本身上传时会按模板改名，但**它的 blockmap 用的是磁盘文件名**，electron-publish 拼上传 URL 时不转义就抛 `Request path contains unescaped characters`，整个平台任务挂掉、后续的 `latest*.yml` 也传不上去（= 该平台自动更新失效）。mac/dmg/nsis/appImage 都已显式覆盖 `artifactName`；**新加 target 时照做**。
 - 用户端自动更新走 electron-updater（GitHub Releases provider，`electron-builder.yml` 的 `publish`），设置页「软件更新」（`views/settings/SettingUpdate.vue`）手动检查，启动静默检查。
