@@ -29,8 +29,6 @@ export interface ThemeDef {
   ext: ThemeColors
 }
 
-/** 用户自定义主题配置（存于 settings.appearance.customThemes，跨进程传输的纯数据） */
-
 /** 由 primary/font 派生完整 --color-primary-* 与字色梯度 */
 export function createThemeColors(
   rgbaColor: string,

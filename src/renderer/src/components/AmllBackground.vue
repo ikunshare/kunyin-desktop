@@ -33,7 +33,7 @@ async function applyCover(src?: string): Promise<void> {
   } catch (e) {
     if (token !== applyToken || renderer !== r) return
     console.warn('[bg-render] 封面载入失败', e)
-    // 载入失败（缓存协议 502 等）：淡出到无封面，别让背景停在上一首的颜色上
+    // 载入失败：淡出到无封面，别让背景停在上一首的颜色上
     await r.setAlbum(undefined)
   }
 }

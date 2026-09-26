@@ -7,7 +7,7 @@ import { useDownloadStore } from './stores/download'
 import { usePlayerStore } from './stores/player'
 import { useMediaSession } from './composables/useMediaSession'
 import { useDesktopLyricBridge } from './composables/useDesktopLyricBridge'
-import { useQqListenReport } from './composables/useQqListenReport'
+import { useListenReport } from './composables/useListenReport'
 import { usePopupAnimation } from './composables/usePopupAnimation'
 import { useApi } from './composables/useApi'
 import { currentBackgroundImageUrl } from './theme/apply'
@@ -25,8 +25,8 @@ const unsubs: (() => void)[] = []
 useMediaSession()
 // 桌面歌词桥：把歌词/进度推给悬浮窗
 useDesktopLyricBridge()
-// QQ 音乐听歌上报（登录 + 设置开启时生效）
-useQqListenReport()
+// 听歌上报（QQ / 网易云，登录后生效）
+useListenReport()
 // 各弹窗保持原组件结构，通过 DOM 观察统一获得 LX 风格（可随机）的入场动画。
 usePopupAnimation(
   () => settings.settings.behavior.showAnimation,

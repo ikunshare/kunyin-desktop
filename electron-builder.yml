@@ -58,6 +58,11 @@ files:
   - '!resources/icons/{16x16,24x24,48x48,64x64,128x128,256x256,512x512,1024x1024}.png'
 asarUnpack:
   - resources/**
+# 杜比软解链接了 LibreMPEG 的 AC-3 / E-AC-3 / AC-4 解码器（native/dolby-wasm，GPL-3.0+）：许可证全文随包分发，
+# 「关于」页有署名与源码地址（见 native/dolby-wasm/README.md）。extraResources 不受上面 files 排除规则影响。
+extraResources:
+  - from: native/dolby-wasm/COPYING.GPLv3
+    to: licenses/LibreMPEG-GPL-3.0.txt
 win:
   executableName: kunyin-desktop
   icon: resources/icons/icon.ico

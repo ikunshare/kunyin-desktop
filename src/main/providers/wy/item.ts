@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** 网易云单曲解析与音质映射（移植自 NeteaseMusicItem.kt） */
-import type { NeteaseMusicItem, Quality, Singer } from '@common'
+import { qualityName, type NeteaseMusicItem, type Quality, type Singer } from '@common'
 
 export function num(v: any, def = 0): number {
   if (v == null) return def
@@ -50,13 +50,26 @@ export function parseTrackInfo(song: any): NeteaseMusicItem | null {
   }
 }
 
+/**
+ * 与后端请求一致的沉浸环绕声版本（immerseType=c51，5.1 声道 FLAC）。
+ * `sks` 里是各版本（`it` 为类型），`sk` 只是上游默认那一版；取不到 c51 才退回 `sk`。
+ * 后端的对应常量是 ikun-music-api-server 的 skyImmerseType，改一边要同步另一边。
+ */
+const SKY_IMMERSE_TYPE = 'c51'
+function skyQuality(data: any): any {
+  const sks: any[] = Array.isArray(data.sks) ? data.sks : []
+  return sks.find((s) => s?.it === SKY_IMMERSE_TYPE) ?? data.sk
+}
+
 export function enrichFromQualityDetail(item: NeteaseMusicItem, response: any): NeteaseMusicItem {
   const data = response?.data
   if (!data) return item
   const q: Record<string, Quality> = { ...item.qualities }
-  addQuality(q, 'master', '臻品母带', data.jm)
-  addQuality(q, 'atmos_plus', '臻品全景声 2.0', data.je)
-  addQuality(q, 'atmos', '臻品全景声', data.sk)
+  addQuality(q, 'master', qualityName('master', 'wy'), data.jm)
+  addQuality(q, 'atmos', qualityName('atmos', 'wy'), skyQuality(data))
+  addQuality(q, 'atmos_plus', qualityName('atmos_plus', 'wy'), data.je)
+  addQuality(q, 'dolby', qualityName('dolby', 'wy'), data.db)
+  addQuality(q, 'vivid', qualityName('vivid', 'wy'), data.vi)
   if (Object.keys(q).length === Object.keys(item.qualities).length) return item
   return { ...item, qualities: q }
 }

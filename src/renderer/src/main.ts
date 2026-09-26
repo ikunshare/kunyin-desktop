@@ -37,6 +37,10 @@ if (initialAppearance) {
     String((initialAppearance.fontSize ?? 16) / 16)
   )
   applyAppFont(initialAppearance.appFont ?? '')
+  document.documentElement.classList.toggle(
+    'square-window',
+    initialAppearance.windowRounded === false
+  )
 } else {
   initTheme('green')
 }

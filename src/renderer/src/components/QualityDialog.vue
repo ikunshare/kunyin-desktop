@@ -3,8 +3,8 @@ import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   QUALITY_IDS,
-  QUALITY_NAMES,
   blockedQualityIds,
+  qualityName,
   type AlbumDisc,
   type DownloadDisc,
   type MusicItem
@@ -43,23 +43,27 @@ interface QualityOption {
 }
 
 const options = computed<QualityOption[]>(() => {
+  // 同一平台（单曲、整专）用该平台的叫法、只列该平台有的档；多平台混在一起才用通用名
+  const first = props.items[0]?.type
+  const source = props.items.every((it) => it.type === first) ? first : undefined
   // 高 → 低；开启「屏蔽 AI 音质」后这些档位不出现在可选项里
-  const blocked = blockedQualityIds(settings.value)
+  const blocked = blockedQualityIds(settings.value, source)
   const ladder = [...QUALITY_IDS].reverse().filter((id) => !blocked.includes(id))
   const suffix = (id: string, size?: number): string =>
     `${size ? ` - ${fmtSize(size)}` : ''}${id === preferred.value ? '（优先）' : ''}`
+  const name = (id: string): string => qualityName(id, source)
   if (isBatch.value) {
-    return ladder.map((id) => ({ id, label: `${QUALITY_NAMES[id]}${suffix(id)}` }))
+    return ladder.map((id) => ({ id, label: `${name(id)}${suffix(id)}` }))
   }
   const item = props.items[0]
   const out: QualityOption[] = []
   for (const id of ladder) {
     const q = item?.qualities[id]
     if (!q) continue
-    out.push({ id, label: `${q.name || QUALITY_NAMES[id]}${suffix(id, q.filesize)}` })
+    out.push({ id, label: `${name(id)}${suffix(id, q.filesize)}` })
   }
   // 防御：qualities 为空时给全档位（主进程会再回退）
-  return out.length ? out : ladder.map((id) => ({ id, label: `${QUALITY_NAMES[id]}${suffix(id)}` }))
+  return out.length ? out : ladder.map((id) => ({ id, label: `${name(id)}${suffix(id)}` }))
 })
 
 /**

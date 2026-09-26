@@ -3,7 +3,7 @@ import SleepTimerDialog from '../components/SleepTimerDialog.vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
-import { QUALITY_IDS, QUALITY_NAMES, blockedQualityIds, type QualityId } from '@common'
+import { QUALITY_IDS, playbackBlockedQualityIds, qualityName, type QualityId } from '@common'
 import AppIcon from '../components/AppIcon.vue'
 import AmllBackground from '../components/AmllBackground.vue'
 import CommentDialog from '../components/CommentDialog.vue'
@@ -49,7 +49,6 @@ function applyPlayerFullscreen(nativeFullscreen: boolean): void {
 function syncPlayerFullscreen(): void {
   void api.window.fullscreen().then(applyPlayerFullscreen)
 }
-// 封面统一走主进程磁盘缓存协议（<img> 与背景渲染器同源）
 const cover = computed(() => coverUrl(track.value?.cover))
 
 const displayDuration = computed(() =>
@@ -149,6 +148,8 @@ const showSoundEffect = ref(false)
 const soundEffectButton = ref<HTMLButtonElement>()
 /** 有任一项偏离默认值就高亮按钮（判据与「要不要建处理图」是同一个） */
 const soundEffectOn = computed(() => needsGraph(settings.settings.player.soundEffect))
+
+const coverRounded = computed(() => settings.settings.player.coverRounded)
 function closeSoundEffect(): void {
   showSoundEffect.value = false
   void nextTick(() => soundEffectButton.value?.focus())
@@ -168,15 +169,15 @@ function closeSleepTimer(): void {
 }
 const showQualityDialog = ref(false)
 const dialogItems = computed(() => (track.value ? [track.value] : []))
-// 当前曲可用音质（高 → 低；被屏蔽的 AI 音质不列出）
+// 当前曲可用音质（高 → 低；被屏蔽的 AI 音质、该平台解不了的只能下载档不列出）
 const qualityOptions = computed<QualityId[]>(() => {
   const t = track.value
   if (!t) return []
-  const blocked = blockedQualityIds(settings.settings)
+  const blocked = playbackBlockedQualityIds(settings.settings, t.type)
   return [...QUALITY_IDS].reverse().filter((id) => t.qualities[id] && !blocked.includes(id))
 })
 function qualityLabel(id: QualityId): string {
-  return track.value?.qualities[id]?.name || QUALITY_NAMES[id]
+  return qualityName(id, track.value?.type)
 }
 function pickQuality(id: QualityId): void {
   moreOpen.value = false
@@ -371,7 +372,7 @@ watch(currentTime, (t) => {
 
       <div class="content" :class="{ 'no-lyric-panel': !lyricVisible }">
         <div class="left">
-          <div class="cover">
+          <div class="cover" :class="{ square: !coverRounded }">
             <img v-if="cover" :src="cover" alt="" />
             <div v-else class="cover-empty"><AppIcon name="library" :size="40" /></div>
           </div>
@@ -551,7 +552,7 @@ watch(currentTime, (t) => {
   inset: 0;
   z-index: 2000;
   overflow: hidden;
-  border-radius: 10px;
+  border-radius: var(--window-radius);
   color: #fff;
   /* 网格渐变画布按音量留出 ~5% 透明度，给个深色底，
      免得主题背景图从缝隙里透出来；渲染失败时也退化成深色而非主题图 */
@@ -653,7 +654,13 @@ watch(currentTime, (t) => {
   height: var(--player-cover-size);
   border-radius: 10px;
   overflow: hidden;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  /* 一层贴边的接触阴影 + 一层大而淡的环境阴影：浮起来但不压画面 */
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.1),
+    0 10px 28px rgba(0, 0, 0, 0.16);
+}
+.cover.square {
+  border-radius: 0;
 }
 .cover img {
   width: 100%;

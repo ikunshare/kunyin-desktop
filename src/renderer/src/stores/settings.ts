@@ -14,12 +14,13 @@ function applyFontZoom(fontSize: number): void {
 // 上次已应用的窗口尺寸档位；仅在实际变化时才 setSize，避免覆盖用户手动拉伸的窗口
 let lastWindowSizeId: number | null = null
 
-/** 把外观类设置应用到 DOM（主题变量 + 字体 + 缩放）。幂等，可在任意变更后重放。 */
+/** 把外观类设置应用到 DOM（主题变量 + 字体 + 缩放 + 窗口圆角）。幂等，可在任意变更后重放。 */
 function applyAppearance(s: AppSettings): void {
   setCustomThemes(s.appearance.customThemes)
   applyTheme(s.appearance.themeId, s.appearance.lightThemeId, s.appearance.darkThemeId)
   applyAppFont(s.appearance.appFont)
   applyFontZoom(s.appearance.fontSize)
+  document.documentElement.classList.toggle('square-window', !s.appearance.windowRounded)
   if (lastWindowSizeId !== null && lastWindowSizeId !== s.appearance.windowSizeId) {
     const conf = WINDOW_SIZE_LIST.find((i) => i.id === s.appearance.windowSizeId)
     if (conf) void window.api.window.setSize(conf.width, conf.height)

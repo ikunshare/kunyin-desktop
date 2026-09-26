@@ -15,6 +15,7 @@ import { randomBytes } from 'node:crypto'
 import { createReadStream, statSync } from 'node:fs'
 import { extname } from 'node:path'
 import { Readable } from 'node:stream'
+import type { SoftDecoder } from '@common'
 import { createAudioDecryptor, type AudioDecryptor } from '../crypto/decryptor'
 import {
   blockPath,
@@ -29,6 +30,8 @@ import {
 import { createLogger } from '../core/logger'
 import { netStats } from '../net/request'
 import { guardStream } from './streamGuard'
+import { createByteCursor, decodeToWav, loadTrack, wavLayout, type OpenBytes } from './dolbyStream'
+import { Mp4Error, type Mp4AudioTrack } from './mp4'
 
 const log = createLogger('audio')
 
@@ -56,6 +59,12 @@ export interface AudioStreamSpec {
    * 本地已有的块直接读文件，缺的块回源并顺手落盘，下次播放就少下一块。
    */
   cacheKey?: string
+  /**
+   * 需要主进程软解的格式（取值见 @common 的 softDecoder）。'dolby' = MP4 封装的杜比音轨
+   * （QQ 的 E-AC-3、网易的 AC-4，按样本描述自动分辨）：解成 WAV 交给 <audio>，见 audio/dolbyStream.ts。
+   * 缓存里存的仍是解密后的原文件。
+   */
+  decode?: SoftDecoder
 }
 
 /** 本地文件扩展名 → Content-Type（<audio> 靠它选解码器） */
@@ -861,6 +870,8 @@ export function installAudioProtocol(): void {
       return new Response(null, { status, headers })
     }
 
+    if (spec.decode === 'dolby') return serveDolby(spec, range, slot, ctx, fail)
+
     try {
       // 已有缓存条目（知道总长与已有块）：按块拼接，本地块直读、缺块回源补齐
       const key = spec.cacheKey
@@ -972,6 +983,146 @@ function tapToBlocks(
       return reader.cancel(reason)
     }
   })
+}
+
+// ============ 软解：杜比（AC-3 / E-AC-3 / AC-4 in MP4）→ WAV ============
+
+/** 回源失败的状态码，原样回给 <audio>（403 = 直链过期，渲染层据此失效缓存重取） */
+class SourceStatusError extends Error {
+  readonly status: number
+  constructor(status: number) {
+    super(`source status ${status}`)
+    this.name = 'SourceStatusError'
+    this.status = status
+  }
+}
+
+/** 丢掉前 skip 个字节（上游无视 Range、回了整文件 200 时对齐用） */
+function skipBytes(src: ReadableStream<Uint8Array>, skip: number): ReadableStream<Uint8Array> {
+  let left = skip
+  return src.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        if (left >= chunk.length) {
+          left -= chunk.length
+          return
+        }
+        controller.enqueue(left ? chunk.subarray(left) : chunk)
+        left = 0
+      }
+    })
+  )
+}
+
+/**
+ * 软解的取字节：解密后的原文件 [start, 文件尾]。与直通那条路一样缓存感知——有条目就按块拼
+ * （本地块直读、缺块回源补齐），没有就直连上游、按响应头建条目并顺手落块。
+ *
+ * 每次打开挂一个子闸：游标跳读时 cancel 旧流只掐这一段（整路的 slot 后面还要用），
+ * 整路结束或被取消（slot abort）时子闸一起落下，每条上游租约都还得回去。
+ */
+function plainBytesOpener(spec: AudioStreamSpec, ctx: StreamContext): OpenBytes {
+  return async (start) => {
+    const sub = new AbortController()
+    if (ctx.signal.aborted) sub.abort()
+    else ctx.signal.addEventListener('abort', () => sub.abort(), { once: true })
+    const subCtx: StreamContext = { token: ctx.token, signal: sub.signal }
+
+    const key = spec.cacheKey
+    const record = key ? getAudioCacheRecord(key) : null
+    if (key && record) {
+      if (start >= record.size) {
+        sub.abort()
+        return { body: new ReadableStream({ start: (c) => c.close() }), size: record.size }
+      }
+      const gen = assembleRange(spec, key, record, start, record.size - 1, subCtx)
+      return { body: streamFrom(gen, () => sub.abort()), size: record.size }
+    }
+
+    if (!spec.url) throw new SourceStatusError(404)
+    const result = await fetchUpstream(spec.url, upstreamHeaders(spec, `bytes=${start}-`), subCtx)
+    if (!result.ok) throw new SourceStatusError(result.error.status)
+    const lease = result.lease
+    const upstream = lease.response
+    const status = upstream.status
+    const size = parseTotalSize(
+      status,
+      upstream.headers.get('content-length'),
+      upstream.headers.get('content-range')
+    )
+    // 找 moov、算 WAV 总长都得知道原文件多长，拿不准就别硬解
+    if (!size || sub.signal.aborted) {
+      void upstream.body?.cancel().catch(() => {})
+      lease.release(size ? '已被顶替' : '缺总长')
+      throw new SourceStatusError(size ? 499 : 502)
+    }
+    const bodyStart = status === 206 ? start : 0
+    let body = decryptedBody(spec, leaseBody(lease), bodyStart)
+    if (key) {
+      const type = upstream.headers.get('content-type') ?? 'application/octet-stream'
+      const fresh = ensureAudioCacheRecord(key, size, type)
+      if (fresh) body = tapToBlocks(body, key, fresh, bodyStart)
+    }
+    return { body: bodyStart < start ? skipBytes(body, start - bodyStart) : body, size }
+  }
+}
+
+/** 解出的样本表按流记住：<audio> 每次 seek 都是一个新请求，不必每次重读文件头 */
+const trackMemo = new WeakMap<AudioStreamSpec, Mp4AudioTrack>()
+
+/**
+ * 杜比软解的响应。样本表要在回响应头之前拿到（WAV 总长由它算出），首播时读 moov 用的
+ * 就是后面解码要接着读的那条连接（faststart 布局，见 dolbyStream.loadTrack），不多开一条。
+ */
+async function serveDolby(
+  spec: AudioStreamSpec,
+  range: string | null,
+  slot: RequestSlot,
+  ctx: StreamContext,
+  fail: (status: number, headers?: Record<string, string>) => Response
+): Promise<Response> {
+  const cursor = createByteCursor(plainBytesOpener(spec, ctx))
+  try {
+    let track = trackMemo.get(spec)
+    if (!track) {
+      track = await loadTrack(cursor)
+      trackMemo.set(spec, track)
+      log.info('杜比软解', {
+        format: track.codec, // 键名别带 code：日志脱敏按键名匹配（logSanitize）
+        sampleRate: track.sampleRate,
+        seconds: Math.round(track.starts[track.starts.length - 1] / track.sampleRate)
+      })
+    }
+    const layout = wavLayout(track)
+    const resolved = resolveRange(range, layout.size)
+    if (!resolved) {
+      cursor.close()
+      return fail(416, { 'Content-Range': `bytes */${layout.size}` })
+    }
+    const { start, end, partial } = resolved
+    const headers = new Headers({
+      'Access-Control-Allow-Origin': '*',
+      'Accept-Ranges': 'bytes',
+      'Content-Type': 'audio/wav',
+      'Content-Length': String(end - start + 1)
+    })
+    if (partial) headers.set('Content-Range', `bytes ${start}-${end}/${layout.size}`)
+    const body = decodeToWav({ track, layout, cursor, start, end })
+    return new Response(bindToRequest(body, slot) as BodyInit, {
+      status: partial ? 206 : 200,
+      headers
+    })
+  } catch (e) {
+    cursor.close()
+    if (e instanceof SourceStatusError) return fail(e.status)
+    if (ctx.signal.aborted) return fail(499)
+    if (e instanceof Mp4Error) {
+      log.warn('杜比码流解析失败', e.message)
+      return fail(415)
+    }
+    log.error('杜比软解失败', e)
+    return fail(500)
+  }
 }
 
 /**

@@ -10,7 +10,6 @@ const experienceOptions = [
   ['autoSkipOnError', '播放失败后自动跳过'],
   ['autoSwitchSource', '播放失败后尝试其他音源'],
   ['pauseOnDeviceChange', '音频设备断开或切换时暂停'],
-  ['qqListenReport', 'QQ 音乐听歌上报（登录后同步最近播放与听歌记录）'],
   ['powerSaveBlocker', '播放时阻止系统休眠'],
   ['taskbarProgress', '在任务栏按钮上显示播放进度']
 ] as const
@@ -18,7 +17,7 @@ import {
   AI_QUALITY_CANDIDATES,
   QUALITY_IDS,
   QUALITY_NAMES,
-  blockedQualityIds,
+  playbackBlockedQualityIds,
   qualityFallbackOrder,
   type QualityId
 } from '@common'
@@ -29,7 +28,7 @@ import BaseBtn from '../../components/BaseBtn.vue'
 const store = useSettingsStore()
 const { settings } = storeToRefs(store)
 
-const blocked = computed(() => blockedQualityIds(settings.value))
+const blocked = computed(() => playbackBlockedQualityIds(settings.value))
 
 // 音质从高到低（与下载设置、下载弹窗、播放页音质菜单一致）
 // 被屏蔽的档位不作为首选（当前值若已被屏蔽仍保留在列表里，避免下拉显示空白）
@@ -89,7 +88,7 @@ function toggleAiQuality(id: QualityId, on: boolean): void {
       <BaseCheckbox
         id="play-max-output-channels"
         :model-value="settings.player.soundEffect.maxOutputChannels"
-        label="最大声道输出（把输出声道数顶到设备支持的上限）"
+        label="最大声道输出"
         @update:model-value="
           store.update({ player: { soundEffect: { maxOutputChannels: !!$event } } })
         "
@@ -110,11 +109,6 @@ function toggleAiQuality(id: QualityId, on: boolean): void {
         <BaseBtn min @click="player.refreshDevices()">刷新</BaseBtn>
       </div>
       <p v-if="player.deviceError" role="status">{{ player.deviceError }}</p>
-      <p>
-        立体声设备上限就是 2 声道，开了不会有变化；接 5.1／7.1 声卡或 HDMI 时才有意义。
-        播放速度与音效（均衡器 / 环境混响 / 3D 环绕 / 升降调）是边听边调的，和 lx-music-desktop
-        一样放在播放详情页右下角的两个按钮里。
-      </p>
     </div>
   </dd>
   <dd>
@@ -132,6 +126,16 @@ function toggleAiQuality(id: QualityId, on: boolean): void {
         label="显示歌词音译（如果可用）"
         @update:model-value="store.update({ lyrics: { showRomanization: $event as boolean } })"
       />
+      <BaseCheckbox
+        id="setting_lyric_bluetooth"
+        :model-value="settings.lyrics.bluetoothLyric"
+        label="蓝牙歌词（车机 / 蓝牙耳机的歌名位置显示当前歌词）"
+        @update:model-value="store.update({ lyrics: { bluetoothLyric: $event as boolean } })"
+      />
+      <p v-if="settings.lyrics.bluetoothLyric" class="lyric-tip">
+        歌词经系统媒体信息下发，系统媒体面板与锁屏的歌名也会变成歌词。能否显示取决于设备与系统对
+        AVRCP 元数据的支持；Linux 需运行 BlueZ 的 mpris-proxy。
+      </p>
     </div>
   </dd>
   <dd>
@@ -197,5 +201,11 @@ function toggleAiQuality(id: QualityId, on: boolean): void {
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
+}
+.lyric-tip {
+  max-width: 460px;
+  margin-top: 4px;
+  color: var(--color-font-label);
+  font-size: 12px;
 }
 </style>

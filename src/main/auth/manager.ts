@@ -95,7 +95,6 @@ export async function checkOnStartup(): Promise<void> {
   state.message = valid ? '' : message
 }
 
-/** 清除卡密 */
 export function clearAuth(): void {
   saveToDisk('')
   state.authst = ''

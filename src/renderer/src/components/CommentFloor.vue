@@ -3,7 +3,7 @@
  * 评论楼层（递归渲染回复链）。
  *
  * 各音源的「楼中楼」深度不一，Provider 已统一归一化成 CommentItem.reply 树，
- * 这里只按树递归即可。头像走主进程封面缓存协议，与播放页其它图片同源。
+ * 这里只按树递归即可。
  */
 import type { CommentItem } from '@common'
 import { ref } from 'vue'

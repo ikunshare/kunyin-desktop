@@ -80,7 +80,8 @@ const api: WindowApi = {
     lyric: (item) => ipcRenderer.invoke(IpcChannels.PLAYER_LYRIC, toPlain(item)),
     invalidateUrl: (item, qualityId) =>
       ipcRenderer.invoke(IpcChannels.PLAYER_URL_INVALIDATE, toPlain(item), qualityId),
-    qqReport: (event) => ipcRenderer.invoke(IpcChannels.PLAYER_QQ_REPORT, toPlain(event))
+    qqReport: (event) => ipcRenderer.invoke(IpcChannels.PLAYER_QQ_REPORT, toPlain(event)),
+    wyReport: (event) => ipcRenderer.invoke(IpcChannels.PLAYER_WY_REPORT, toPlain(event))
   },
   comment: {
     supported: (source) => ipcRenderer.invoke(IpcChannels.COMMENT_SUPPORTED, source),

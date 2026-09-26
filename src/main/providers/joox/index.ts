@@ -5,7 +5,7 @@
  * 播放走后端 getUrl（platform=joox, musicId=mid）——不覆写 resolveMediaInfo。
  *
  * TODO(繁→简)：源码 decodeB64/getLyric 末尾统一过 ChineseConverter.toSimplified，
- *   桌面端尚未接入 OpenCC，标题/歌手/歌词暂保持港区繁体（见 item.ts decodeB64 注释）。
+ *   JOOX 这边还没接 OpenCC，标题/歌手/歌词暂保持港区繁体（见 item.ts decodeB64 注释）。
  */
 import {
   EMPTY_LYRIC,
@@ -100,7 +100,7 @@ export class JooxProvider extends BaseProvider {
 
   async getLyric(item: MusicItem): Promise<Lyric> {
     if (item.type !== 'joox') return { ...EMPTY_LYRIC }
-    // 源码策略1（QQ 逐字歌词回退）依赖 QQ getLyric，待 QQ 歌词移植后再前置。
+    // 源码的策略 1（先试 QQ 逐字歌词）还没移植，这里只走 JOOX 自己的歌词接口。
     return this.fetchJooxLyric(item.id)
   }
 

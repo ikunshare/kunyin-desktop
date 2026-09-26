@@ -1,7 +1,7 @@
 /*
  * [vendor] 变调（phase vocoder）AudioWorklet 处理器。
  *
- * 来源：olvb/phaze（MIT），经 lx-music-desktop（Apache-2.0, © lyswhut）
+ * 来源：olvb/phaze（Unlicense），经 lx-music-desktop（Apache-2.0, © lyswhut）
  * renderer/plugins/player/pitch-shifter/ 取得（fft.js + ola-processor.js + phase-vocoder.js）。
  *
  * [vendor patch] 唯一改动：按 fft → ola-processor → phase-vocoder 的依赖序拼成**一个**文件，

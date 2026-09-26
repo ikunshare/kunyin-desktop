@@ -1,9 +1,16 @@
+import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { defineConfig } from 'electron-vite'
+import { version as viteVersion } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
 // src/common 为主进程 / preload / 渲染层三端共享的类型与常量层
 const commonAlias = { '@common': resolve('src/common') }
+
+// 「关于」页显示的构建工具版本：只有构建期知道，经 define 注入渲染层（见 renderer/src/env.d.ts）
+const electronViteVersion: string = JSON.parse(
+  readFileSync(resolve('node_modules/electron-vite/package.json'), 'utf-8')
+).version
 
 export default defineConfig({
   main: {
@@ -13,6 +20,10 @@ export default defineConfig({
     resolve: { alias: commonAlias }
   },
   renderer: {
+    define: {
+      'import.meta.env.VITE_VERSION': JSON.stringify(viteVersion),
+      'import.meta.env.ELECTRON_VITE_VERSION': JSON.stringify(electronViteVersion)
+    },
     resolve: {
       alias: {
         ...commonAlias,

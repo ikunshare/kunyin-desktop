@@ -19,7 +19,6 @@ export function registerSettingsHandlers(): void {
     // 广播给主窗口与桌面歌词窗口，便于设置和悬浮工具栏双向同步
     sendToAllRenderers(IpcChannels.SETTINGS_CHANGED, next)
     appEvent.emit('settings-updated', next)
-    // 代理设置变更即时生效
     if (patch.network?.proxy) void applyProxy()
     // 上限调小/关闭后立刻收敛，别等下一次落盘时才淘汰
     if (patch.player?.audioCacheBytes !== undefined) applyAudioCacheLimit()

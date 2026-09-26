@@ -92,8 +92,13 @@
   -webkit-user-drag: none;
 }
 
+/* 窗口圆角：#app 与 Teleport 到 body 的全屏播放页共用；设置关掉时 html.square-window 置 0 */
 html {
   font-size: 16px;
+  --window-radius: 10px;
+}
+html.square-window {
+  --window-radius: 0;
 }
 html,
 body {
@@ -118,7 +123,7 @@ body {
   background-size: var(--background-image-size);
   background-color: var(--color-content-background);
   /* 主窗口使用透明 BrowserWindow：圆角在内容层裁切，保留圆角但不带 Windows DWM 蓝边/阴影。 */
-  border-radius: 10px;
+  border-radius: var(--window-radius);
   overflow: hidden;
   transition: background-color var(--transition-normal);
 }

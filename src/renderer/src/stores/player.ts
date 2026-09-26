@@ -13,8 +13,8 @@ import {
 import type { AudioStreamResult, MusicItem, MusicSource, PlayMode, QualityId } from '@common'
 import {
   DEFAULT_SETTINGS,
-  blockedQualityIds,
   getMusicItemKey,
+  playbackBlockedQualityIds,
   qualityFallbackOrder,
   qualityUpgradeOrder
 } from '@common'
@@ -586,12 +586,14 @@ export const usePlayerStore = defineStore('player', () => {
    *
    * 早先这里自带一份档位表并从最低档往上爬，首选档取流失败就直接掉到 128K——
    * 明明有 HiRes 权限也只能听标准音质。改为真正的降级后，拿到的是最接近首选的可用档。
-   * 开启「屏蔽 AI 音质」后，被屏蔽的档位（全景声等）整条链路都不参与取流。
+   * 开启「屏蔽 AI 音质」后，被屏蔽的档位（全景声等）整条链路都不参与取流；
+   * 该平台解不了的杜比 / Audio Vivid 也不参与（网易 / QQ 的杜比由主进程软解，照常参与，
+   * 但排在最顶上，只有明确选了或更低档全不可用时才会取到它）。
    */
   function qualityOrder(item: MusicItem): string[] {
     const settings = useSettingsStore().settings
     const preferred = settings.player.preferredQuality
-    const blocked = blockedQualityIds(settings)
+    const blocked = playbackBlockedQualityIds(settings, item.type)
     const order = qualityFallbackOrder(preferred, item.qualities, blocked)
     order.push(...qualityUpgradeOrder(preferred, item.qualities, blocked))
     // 各源自定义的非标准档位键兜底（与下载侧 pickQuality 的收尾同理）

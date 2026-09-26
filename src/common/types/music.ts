@@ -10,7 +10,8 @@
 export type MusicSource = 'wy' | 'qq' | 'qqc' | 'kg' | 'kw' | 'joox' | 'local'
 
 /** 跨平台统一的音质键 */
-export type QualityId = '128k' | '320k' | 'flac' | 'hires' | 'master' | 'atmos' | 'atmos_plus'
+export type QualityId =
+  '128k' | '320k' | 'flac' | 'hires' | 'master' | 'atmos' | 'atmos_plus' | 'dolby' | 'vivid'
 
 /** 单个音质档位（对应 Quality.kt） */
 export interface Quality {
@@ -103,14 +104,6 @@ export interface LocalMusicItem extends BaseMusicItem {
   filePath: string
 }
 
-/**
- * 本地文件（「添加本地歌曲」导入）。id 为文件路径哈希（确定性，重复导入自动去重）。
- */
-export interface LocalMusicItem extends BaseMusicItem {
-  type: 'local'
-  filePath: string
-}
-
 export type MusicItem =
   NeteaseMusicItem | QQMusicItem | KugouMusicItem | KuwoMusicItem | JooxMusicItem | LocalMusicItem
 
@@ -158,7 +151,6 @@ export interface KgLyricCandidate {
   typeBadges: string[]
 }
 
-/** 空歌词 */
 export const EMPTY_LYRIC: Lyric = {
   lrc: '',
   trans: '',

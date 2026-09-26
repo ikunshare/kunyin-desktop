@@ -21,6 +21,7 @@ npm run lint         # eslint --cache .
 npm run format       # prettier --write .
 npm test             # node --test tools/*.test.mjs（带 ts-resolve 钩子，可直接 import 仓库 .ts）
 npm run build:wasm   # 重编 native/qmc-wasm 并回写 src/main/crypto/qmcWasmBinary.ts（需 Rust）
+npm run gen:licenses # 重新生成「关于」页的开源许可列表（要联网，gh 已登录或设 GITHUB_TOKEN）
 
 npm run build:unpack # 构建 + 解包目录（不产安装包）
 npm run build:win    # 构建 + Windows 安装包
@@ -50,7 +51,10 @@ Electron 三进程，源码分三棵 + 一个共享层：
 
 - `MusicItem`：按 `type`（`MusicSource`）分发的**可辨识联合**。公共字段在 `BaseMusicItem`，各源有专属字段（qq 有 `mid`，kg 有 `hash` 等）。`local` 只出现在歌单里、不走 Provider/后端。
 - 唯一键 `getMusicItemKey(item)`：一般 `type_id`，酷狗 `kg_hash`（无 hash 的歌词重定向目标用 `kg_lyric_<downloadId>`）。列表去重、歌词缓存都靠它。
-- 音质 `QualityId`（`128k|320k|flac|hires|master|atmos|atmos_plus`）：**唯一排序真源是 `QUALITY_IDS`**（低→高，`src/common/constants.ts`），徽标/降级/取流/下载顺序全从它派生。AI 音质的屏蔽与降级见 `blockedQualityIds` / `qualityFallbackOrder` / `qualityUpgradeOrder`。
+- 音质 `QualityId`（`128k|320k|flac|hires|atmos_plus|atmos|master|dolby|vivid`）：**唯一排序真源是 `QUALITY_IDS`**（低→高，`src/common/constants.ts`），徽标/降级/取流/下载顺序全从它派生。AI 音质的屏蔽与降级见 `blockedQualityIds` / `qualityFallbackOrder` / `qualityUpgradeOrder`。
+  - **显示名按平台走 `qualityName(id, source)`**，别读 `Quality.name`（存量歌单里是改名前的叫法）。各平台叫法在 `SOURCE_QUALITY_NAMES`，取自 Android 版，但网易的沉浸环绕声（`sk`/sky）与高清臻音（`je`/jyeffect）Android 标反了、母带用的是旧名「鲸云母带」（现为超清母带），以后端实测为准。
+  - `atmos_plus` = 网易高清臻音，**只认网易**（`SOURCE_ONLY_QUALITIES`）：它以前还装过已下线的 QQ「臻品全景声 2.0」/ 酷我 20501，存量歌单里还有。所以 `blockedQualityIds` / `playbackBlockedQualityIds` 落到具体歌上时**要传 `item.type`**。
+  - `dolby` / `vivid`（AV3A）**只能下载**：Chromium 解不了，播放侧用 `playbackBlockedQualityIds` 跳过。例外是 `softDecoder(id, source)` 登记的平台：网易（AC-4）与 QQ / QQ音乐云（E-AC-3）的杜比都由主进程软解后能播（见「杜比软解」）；Audio Vivid 还没有解码器。它们排在母带之上只是为了降级时掉不进去，所以列表徽标一律不显示它们（否则会盖掉母带 / HiRes）。
 - `Lyric`：主进程产出的原始歌词容器（`lrc/trans/roma/char/chroma/phonetic`），渲染层再交给 vendored 歌词引擎解析。
 
 ## Provider 架构（音源）
@@ -61,6 +65,13 @@ Electron 三进程，源码分三棵 + 一个共享层：
 - `index.ts` 的 `registry` 注册六大源，`getProvider(source)` 按源取实例；登录态由 `src/main/auth/credentials.ts` 启动时读 cookie 注入 `provider.credentials`。
 
 **移植铁律**：音源实现是 Android Kotlin/C++ 的**逐字移植**，禁止凭记忆或网络试错（签名/加密/设备指纹风控极敏感）。改某源前先读 Android 版坤音（<https://github.com/ikunshare/kunyin>）对应 Kotlin 源。非显然坑已散落在 `src/main/providers/` 与 `src/main/crypto/` 的注释里，例如：QQ 搜索必须走签名 `musics.fcg`（不是 `musicu.fcg`）；QRC 是改版 DES（`crypto/qqDes.ts`）；移植 C 位运算加密务必逐处 `>>>0` 保证 uint32 回绕（否则 mflac 解密输出=输入）。
+
+### 听歌上报
+
+两家各一条旁路，渲染层统一由 `composables/useListenReport.ts` 触发（真实播放墙钟计时，拖动不虚增），主进程失败一律静默，绝不影响播放：
+
+- QQ：`providers/qq/report.ts`，三段上报（听歌记录 / 最近播放 / imusic_tj 播放流水），逐字移植 Android。
+- 网易云：`providers/wy/report.ts`，走 PC 客户端**埋点**通道而非公开 API——一条 `_plv`（开播）+ 一条 `_pld`（本段播放秒数，听歌记录吃这条），封成 NCBL（`crypto/ncbl.ts`：ChaCha20 + 裸 RSA 包裹记录密钥 + zstd，回归在 `tools/ncbl.test.mjs`）后 multipart 传给 clientlog3。移植自 <https://github.com/folltoshe/netease-report-listen-song>（`src/desktop`）。登录态与设备指纹要**同时**出现在 cookie 与 NCBL 元信息块且两处一致；客户端版本 `3.1.35.205293` 与 `_addrefer` 里的构建号 `c9156c3`、页面 spm 路径是成套的抓包值，别只改其中一个。zstd 用的是 `node:zlib`（Node ≥ 22.15）。
 
 ## 播放地址解析与音频流（关键链路）
 
@@ -91,6 +102,44 @@ QMC2（mflac/mgg）的两条**逐字节热循环**在 Rust 里：`native/qmc-was
 - **两条实现必须逐字节一致**：`mflac.ts` 的 `MapCipher`/`Rc4Cipher` 退为回退实现兼对照基准，wasm 拿不到时自动降级（`createCipher`）。`tools/qmc.test.mjs` 跨实现比对 2000+ 组用例，并钉死了 4 组输出摘要——**摘要挂了说明两边被一起改坏了，不要改期望值**。启动日志有一条「QMC 解密后端：wasm / 纯 JS」，排查解密变慢先看它。
 - 移植坑（`lib.rs` 注释里有对应说明）：`rc4_segment_key` 是**浮点**除法，换整数除法结果就变了；它的结果在 JS 侧分别经历 `% n` 与 `& 0x1ff`（ToInt32 截断），Rust 侧要按同样顺序复现；`rc4_hash` 是 uint32 乘法回绕（`wrapping_mul`）。
 - 解密器状态是 wasm 的模块级 static，所以**每个解密器一个 `WebAssembly.Instance`**（单实例线性内存 192KB，实例化约 30µs），并发的播放流与下载任务不会互相踩。
+
+### 杜比软解（AC-3 / E-AC-3 / AC-4 → WAV）
+
+Chromium 不带杜比解码器，`native/dolby-wasm` 把 **LibreMPEG**（FFmpeg 的分支，只有它有 AC-4 解码器）的
+ac3/eac3/ac4 解码器 + `shim.c` 编成 wasm，JS 封装是 `src/main/audio/dolbyDecoder.ts`。两家的杜比是两种东西：
+
+- **网易：AC-4 IMS**（immersive stereo，256kbps）。Dolby 在编码端就做好了两声道的耳机双耳渲染，
+  解出来就是空间效果——用户 A/B 过，要的就是这个。按包喂（一个 MP4 样本 = 一帧），**第一个 I 帧之前不出声**。
+- **QQ：E-AC-3 JOC 5.1**（448kbps，`D0M1*.mmp4` 需 QMC 解密）。JOC 对象 / 高度信息 LibreMPEG 与 FFmpeg
+  都不解，只能解出 5.1 床声道，再由解码器按码流系数（`stereo`）下混，听感接近普通立体声，而且下混后只有
+  ~-25 LUFS，比普通 FLAC 低 15dB 左右。按字节流喂，过 ac3 parser。
+
+播放链路：`PLAYER_STREAM` 按 `softDecoder()` 给流打上 `decode: 'dolby'`，`kunyin://` 转去 `serveDolby`
+（`audio/protocol.ts`）。两家实测都是 faststart 的 MP4。`audio/mp4.ts` 从 moov 解出样本表（含 `stss`
+I 帧表，按样本描述分辨 ac-3/ec-3/ac-4），`audio/dolbyStream.ts` 把 `<audio>` 的 Range 换算成
+PCM 帧 → MP4 样本 → 原文件偏移，只回源那一段，解成**立体声 float32 WAV** 吐出去——
+WAV 的字节与时间是线性的，seek 就是普通的 Range（Electron 44 实测正常，且不会去探文件尾）。
+音效图、频谱、倍速、媒体会话全都照常挂在 `<audio>` 上，不另起播放器。
+
+- **Content-Length 必须兑现**：WAV 长度由样本表算死，解码器少吐的在尾部补静音、多吐的截掉；
+  AC-4 更进一步**逐包对齐**（坏帧 / 等 I 帧期间补静音），否则一次解坏后面整体错位。上游真出错要照常报错，
+  不能拿静音顶替。
+- **seek 要往前多解几帧再扔掉**（`warmupStart`）：AC-3 系退 1 帧（MDCT 重叠，冷启动那帧误差 ~0.1；预热后
+  仍有 ~1e-3 差异，是解码器给零尾数加的随机抖动，多预热也不收敛，**别当 bug 追**）。AC-4 退到目标之前
+  **至少 2 帧**处最近的 I 帧：从 I 帧起解第 1 帧误差 0.3、第 2 帧 5e-2，第 3 帧起逐样本一致。
+- **取字节只走 `plainBytesOpener`**：它和直通路径一样缓存感知（缓存里存的是解密后的原 MP4，不是 WAV），
+  且每次打开挂一个**子闸**——游标跳读时 cancel 旧流只能掐这一段，掐整路的 slot 会把后面的回源一起杀掉。
+  faststart 首播时读 moov 和读音频是同一条连接，别在中间重开。
+- 只出立体声：音效图里的压缩器 / 声像节点本来就把声道数夹到 2，多声道原样送出也到不了扬声器。
+- 构建：LibreMPEG 让 **avcodec 依赖 avfilter**（`avcodec_deps="avfilter"`），`--disable-avfilter` 会让
+  avcodec 整个消失、只编出 libavutil。整体按 GPLv3+（`--enable-gpl --enable-version3`，与实际一致），
+  许可证全文经 `extraResources` 随包分发，「关于」页有署名与源码地址。许可证问题用户已明确不管。
+- 产物同样内联成 TS（`dolbyWasmBinary.ts`，~870KB，提交进仓库），但写成**字符串数组 + `join`**：
+  用 `'…' +` 串接是几千层深的表达式树，Node 的 TS 类型剥离会栈溢出。
+- 重编 `npm run build:dolby-wasm`：Windows 走 WSL，源码包在宿主机下载校验（WSL 常常没 DNS）。
+  回归在 `tools/dolbyDecoder.test.mjs`（AC-3 系解码器）与 `tools/dolbyStream.test.mjs`（MP4 → WAV、Range、
+  取消，以及 AC-4 的 I 帧 / 预热 / 坏帧对齐）。**AC-4 没有开源编码器、做不出夹具**，测试里现场拼 MP4 +
+  假解码器；升级 LibreMPEG 后要拿真实网易文件对照一次原生 ffmpeg 的输出。
 
 ## 音效（EQ / 混响 / 3D 环绕 / 升降调 / 最大声道输出）
 
@@ -192,6 +241,19 @@ lx-music-desktop：`<audio> → source → analyser → 10 段 EQ →（变调 w
 - 列表相关独立成**列表设置**，不并进基本设置。
 - 边听边调的项（音效、播放速度）**不进设置页**，放到播放页的弹层里（见上面「音效」一节）。
 - LX 有而坤音没有对应设置项的分类（搜索设置、开放 API、强迫症设置）**不建空页**。
+
+### 「关于坤音」的开源许可列表
+
+`views/settings/ossLicenses.ts` 是 `scripts/gen-licenses.mjs` 生成的（提交进仓库，别手改）。收录范围是
+**真正进了安装包的代码**：主进程按 lockfile 顺着 `dependencies` 走（**不走 peer**——electron 是
+@electron-toolkit/utils 的 peer，它的下载器依赖不进 app.asar）；渲染层以带 sourcemap 的构建产物为准
+（按依赖树算会把 vue 的 compiler-sfc 那一串都算进来）；Electron 内核、内嵌 / 移植代码、编进 wasm 的库在脚本的
+`RUNTIME` / `EMBEDDED` 里手工登记。
+
+**用户定的规矩：查不到在线 LICENSE 的项目不显示**（「那是这个项目的事」）。脚本逐个在线核实，核实不了的只记进
+`OSS_EXCLUDED`（目前是 fft.js、lazy-val、@tokenizer/token，它们的仓库里确实没有许可证文件）。装 / 删依赖或新增
+内嵌代码后重跑并提交产物；`tools/ossLicenses.test.mjs` 会拦住忘了重跑的情况。技术栈版本里 Vite / electron-vite
+只在构建期存在，经 `electron.vite.config.ts` 的 `define` 以 `import.meta.env.*` 注入。
 
 ## Vendored 第三方代码
 

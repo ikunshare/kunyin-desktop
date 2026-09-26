@@ -5,6 +5,7 @@
  */
 import {
   EMPTY_LYRIC,
+  type AlbumDisc,
   type AlbumInfoResult,
   type AlbumSearchResult,
   type ArtistInfoResult,
@@ -32,6 +33,40 @@ import { wyGetComment, wyGetHotComment } from './comment'
 function formatMvSize(bytes: number): string {
   const mb = bytes / 1024 / 1024
   return mb >= 1024 ? `${(mb / 1024).toFixed(2)}GB` : `${mb.toFixed(1)}MB`
+}
+
+/**
+ * 由各曲的 `cd` 字段切出专辑分碟（与 QQ 的 buildAlbumDiscs 对齐）。
+ *
+ * 网易的 `cd` 是**字符串**，两种形态：默认只有碟号（`"01"`），启用自定义碟名时是
+ * 「碟号 + 空格 + 碟名」（`"01 漫卷霜色 Swept in Frost"`）——前导数字才是碟号，
+ * 余下部分是碟名。脏值（`"null"`、空串）按出现顺序补碟号、退回默认名 `CDn`。
+ *
+ * 按返回顺序切连续段（专辑接口本就按碟号+碟内轨号排好），段长之和 = 曲目数。
+ * 只有一段（单碟）时返回 undefined，详情页退回普通列表。
+ */
+function buildAlbumDiscs(cds: string[]): AlbumDisc[] | undefined {
+  const discs: AlbumDisc[] = []
+  let lastRaw: string | null = null
+  for (const raw of cds) {
+    if (lastRaw !== null && raw === lastRaw) {
+      discs[discs.length - 1].count++
+      continue
+    }
+    lastRaw = raw
+    discs.push({ ...parseDiscTag(raw, discs.length + 1), count: 1 })
+  }
+  return discs.length > 1 ? discs : undefined
+}
+
+/** 拆 `cd` 字段：前导数字为碟号，其后为自定义碟名；取不到碟号时用 fallbackNo */
+function parseDiscTag(raw: string, fallbackNo: number): { no: number; name: string } {
+  const text = raw.trim()
+  const m = /^(\d+)\s*(.*)$/.exec(text)
+  const parsed = m ? Number(m[1]) : 0
+  const no = parsed > 0 ? parsed : fallbackNo
+  const custom = m ? m[2].trim() : text.toLowerCase() === 'null' ? '' : text
+  return { no, name: custom || `CD${no}` }
 }
 
 export class WyProvider extends BaseProvider {
@@ -187,11 +222,25 @@ export class WyProvider extends BaseProvider {
   async getAlbumSongs(albumId: string): Promise<MusicListResult> {
     const p = await this.fetchAlbumPayload(albumId)
     if (!p) return this.emptyList()
-    const items = (p.songs ?? [])
-      .map((s: any) => parseTrackInfo(s))
-      .filter((x: any): x is NeteaseMusicItem => !!x)
+    const items: NeteaseMusicItem[] = []
+    // 与 items 一一对应的 cd 原值；解析失败的曲目一并跳过，避免分碟切点错位
+    const cds: string[] = []
+    for (const s of p.songs ?? []) {
+      const item = parseTrackInfo(s)
+      if (!item) continue
+      items.push(item)
+      cds.push(typeof s?.cd === 'string' ? s.cd : '')
+    }
+    // enrichAll 按下标 1:1 回填音质，不增删不重排，所以分碟切点仍与 result 对齐
     const result = await this.enrichAll(items)
-    return { source: 'wy', hasNext: false, page: 0, size: result.length, result }
+    return {
+      source: 'wy',
+      hasNext: false,
+      page: 0,
+      size: result.length,
+      result,
+      discs: buildAlbumDiscs(cds)
+    }
   }
 
   // —— 歌手 ——

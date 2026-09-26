@@ -3,10 +3,10 @@
 `soundEffect.ts` 是本目录唯一的业务代码（均衡器 / 环境混响 / 3D 环绕 / 升降调 / 最大声道输出），
 结构逐条移植自 lx-music-desktop。它旁边的两份资源来自上游，属于 vendored 内容。
 
-| 路径                       | 来源                                                                                                                      | 说明                              |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `filters/*.wav`            | lx-music-desktop（Apache-2.0, © lyswhut）`src/renderer/assets/medias/filters/`                                            | 13 条环境混响脉冲响应，共约 6.6MB |
-| `pitch-shifter.worklet.js` | [olvb/phaze](https://github.com/olvb/phaze)（MIT），经 lx-music-desktop `src/renderer/plugins/player/pitch-shifter/` 取得 | 变调用的 phase vocoder            |
+| 路径                       | 来源                                                                                                                            | 说明                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `filters/*.wav`            | lx-music-desktop（Apache-2.0, © lyswhut）`src/renderer/assets/medias/filters/`                                                  | 13 条环境混响脉冲响应，共约 6.6MB |
+| `pitch-shifter.worklet.js` | [olvb/phaze](https://github.com/olvb/phaze)（Unlicense），经 lx-music-desktop `src/renderer/plugins/player/pitch-shifter/` 取得 | 变调用的 phase vocoder            |
 
 `filters/` 里只收了 `@common/audio` 的 `CONVOLUTION_PRESETS` 实际引用到的那几条；
 上游还有一个 `medium-room1.wav` 没有被任何预设用到，没有一起拿过来。

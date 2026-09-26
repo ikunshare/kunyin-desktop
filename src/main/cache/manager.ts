@@ -95,12 +95,10 @@ export async function clearResourceCache(): Promise<void> {
   )
 }
 
-/** 清理播放地址缓存 */
 export function clearUrlCache(): void {
   clearMediaInfoCache()
 }
 
-/** 清理歌词缓存 */
 export function clearLyricCacheAll(): void {
   clearLyricCache()
 }

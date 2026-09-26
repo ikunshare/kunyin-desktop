@@ -68,10 +68,10 @@ export interface MediaInfoResult {
   encryptionInfo?: EncryptionInfo
 }
 
-/** 本地音频代理结果：可直接喂 <audio> 的 127.0.0.1 URL */
+/** 音频流注册结果（见 main/audio/protocol.ts） */
 export interface AudioStreamResult {
   ok: boolean
-  /** 本地代理 URL（http://127.0.0.1:port/s/...） */
+  /** `kunyin://stream/<token>`，直接喂 <audio> */
   url: string
   /** 直链过期时间戳（毫秒） */
   expire: number

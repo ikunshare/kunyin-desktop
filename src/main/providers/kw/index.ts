@@ -363,12 +363,12 @@ export class KwProvider extends BaseProvider {
     return s ? parseMusicPayItem(s) : null
   }
 
-  /** 搜索/专辑/歌手歌曲无封面，批量从 musicpay 补 500x500 */
   /** 供发现模块（排行榜）补封面 */
   async fillCovers(items: KuwoMusicItem[]): Promise<void> {
     await this.fetchCovers(items).catch(() => {})
   }
 
+  /** 搜索/专辑/歌手歌曲无封面，批量从 musicpay 补 500x500 */
   private async fetchCovers(items: KuwoMusicItem[]): Promise<void> {
     if (!items.length) return
     const ids = items.map((i) => i.id).join(',')

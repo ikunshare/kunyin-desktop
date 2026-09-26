@@ -75,7 +75,8 @@ export function parseTrackInfo(item: any): QQMusicItem | null {
   addQ(q, 'hires', '无损音质 HiRes', num(file.size_hires, 0), mediaMid)
   addSpecial(q, 'master', '臻品母带', sizeNew, 0, vs, 3)
   addSpecial(q, 'atmos', '臻品全景声', sizeNew, 1, vs, 4)
-  addSpecial(q, 'atmos_plus', '臻品全景声 2.0', sizeNew, 2, vs, 4)
+  // 杜比全景声：AC-3 系码流的 .mp4（加密版 .mmp4），与普通档共用 media_mid
+  addQ(q, 'dolby', '杜比全景声', num(file.size_dolby, 0), mediaMid)
 
   return {
     type: 'qq',

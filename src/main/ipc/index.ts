@@ -1,5 +1,5 @@
 /**
- * 注册所有 IPC handler。分域拆分在 handlers/ 下，随分阶段实施补齐。
+ * 注册所有 IPC handler。分域拆分在 handlers/ 下。
  */
 import { registerAppHandlers } from './handlers/app'
 import { registerWindowHandlers } from './handlers/window'

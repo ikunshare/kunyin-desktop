@@ -4,8 +4,6 @@
  * - `IpcChannels`：通道名常量（按域分组，避免撞名）。
  * - `WindowApi`：preload 通过 contextBridge 暴露、渲染层消费的 `window.api` 形状。
  *   主进程按 `IpcChannels` 注册 handler，preload 逐一转发到 `ipcRenderer.invoke`。
- *
- * 各域方法随分阶段实施逐步补齐；Phase 0 先立骨架（app/settings 真实实现，search/player 占位）。
  */
 import type { LogEntry, LogFileInfo } from './log'
 import type { KgLyricCandidate, Lyric, MusicItem, MusicSource } from './music'
@@ -36,6 +34,17 @@ export type QQReportEvent =
   | { kind: 'listening'; item: MusicItem; playTimeMs: number; playList: number[] }
   | { kind: 'recently'; item: MusicItem }
   | { kind: 'stream'; item: MusicItem; playTimeSec: number }
+
+/**
+ * 网易云听歌上报事件（渲染层 → 主进程）。走 PC 客户端埋点通道，一首歌两条：
+ * - start：开始播放（_plv）
+ * - end：这一段结束（_pld），playTimeSec 是实际播放秒数，听歌记录吃这一条
+ *
+ * sourceId 是播放来源的网易云歌单 id（队列来自网易云歌单/专辑时才有），拿不到时按 '0' 上报。
+ */
+export type WyReportEvent =
+  | { kind: 'start'; item: MusicItem; qualityId: string; sourceId?: string }
+  | { kind: 'end'; item: MusicItem; qualityId: string; sourceId?: string; playTimeSec: number }
 
 export const IpcChannels = {
   // 应用
@@ -73,6 +82,7 @@ export const IpcChannels = {
   PLAYER_LYRIC: 'player:lyric',
   PLAYER_URL_INVALIDATE: 'player:urlInvalidate',
   PLAYER_QQ_REPORT: 'player:qqReport',
+  PLAYER_WY_REPORT: 'player:wyReport',
 
   // 歌曲评论
   COMMENT_NEW: 'comment:new',
@@ -226,7 +236,6 @@ export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]
 /** 递归可选，用于 settings.set 的局部更新 */
 export type DeepPartial<T> = T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T
 
-/** 取消订阅 */
 export type Unsubscribe = () => void
 
 /** 系统媒体命令（全局媒体键 / 托盘 → 渲染层播放器） */
@@ -289,7 +298,6 @@ export interface SyncStatusSnapshot {
   serverName: string
 }
 
-/** 备份文件摘要 */
 export interface BackupSummary {
   version: number
   type: string
@@ -336,7 +344,6 @@ export type UpdaterEvent =
 /** 支持登录的平台 key */
 export type AccountProvider = 'qq' | 'wy' | 'kg'
 
-/** 单个平台的登录态 */
 export interface AccountStatus {
   provider: AccountProvider
   displayName: string
@@ -361,24 +368,20 @@ export interface KgQRCode {
   ticket: string
 }
 
-/** kg 扫码轮询结果 */
 export interface KgQRPoll {
   status: 'waiting' | 'success' | 'expired' | 'error'
 }
 
-/** wy 扫码二维码信息 */
 export interface WyQRCode {
   unikey: string
   /** 二维码内容（渲染层用 qrcode 生成图） */
   url: string
 }
 
-/** wy 扫码轮询结果 */
 export interface WyQRPoll {
   status: 'waiting' | 'scanned' | 'success' | 'expired' | 'error'
 }
 
-/** qq 扫码二维码信息 */
 export interface QQQRCodeInfo {
   /** 二维码图片 data URL（直接给 <img>） */
   image: string
@@ -512,7 +515,7 @@ export interface WindowApi {
   player: {
     /** 解析播放地址（走自建后端，可能返回 ekey 表示加密流） */
     resolveUrl(item: MusicItem, qualityId: string): Promise<MediaInfoResult>
-    /** 解析并注册到本地音频代理，返回可直接喂 <audio> 的 127.0.0.1 URL */
+    /** 解析并注册音频流，返回可直接喂 <audio> 的 `kunyin://stream/<token>` */
     stream(item: MusicItem, qualityId: string): Promise<AudioStreamResult>
     lyric(item: MusicItem): Promise<Lyric>
     /** 播放失败时上报，使该曲该音质的 URL 缓存失效（下次重新解析） */
@@ -524,15 +527,19 @@ export interface WindowApi {
      * - stream：播放流水，playTimeSec 为本段实际播放秒数
      */
     qqReport(event: QQReportEvent): Promise<boolean>
+    /**
+     * 网易云听歌上报（仅网易云曲目、已登录时有效；失败静默）。
+     * - start：开始播放（_plv）
+     * - end：这一段播放结束（_pld），playTimeSec 为本段实际播放秒数
+     */
+    wyReport(event: WyReportEvent): Promise<boolean>
   }
 
   /** 歌曲评论（播放页评论面板） */
   comment: {
     /** 该音源是否支持评论（不支持时面板显示占位） */
     supported(source: MusicSource): Promise<boolean>
-    /** 最新评论 */
     latest(item: MusicItem, page?: number, limit?: number): Promise<CommentResult>
-    /** 热门评论 */
     hot(item: MusicItem, page?: number, limit?: number): Promise<CommentResult>
   }
 
@@ -542,7 +549,6 @@ export interface WindowApi {
     get(): Promise<AuthState>
     /** 提交卡密校验并保存，返回最新状态 */
     validate(authst: string): Promise<AuthState>
-    /** 清除卡密 */
     clear(): Promise<AuthState>
   }
 
@@ -683,7 +689,6 @@ export interface WindowApi {
     userPlaylists(source: MusicSource): Promise<PlayListInfoResult[]>
     /** MV 可用清晰度（需 item.mvid，仅 wy/qq 支持） */
     mvQualities(item: MusicItem): Promise<MvQuality[]>
-    /** MV 播放地址 */
     mvUrl(item: MusicItem, quality: string): Promise<MvUrlResult>
   }
 
@@ -756,7 +761,6 @@ export interface WindowApi {
     qqQrStart(): Promise<QQQRCodeInfo | null>
     /** qq 扫码：停止监听（关窗时调用） */
     qqQrStop(): Promise<void>
-    /** 订阅 qq 扫码事件 */
     onQQEvent(cb: (e: QQQRStatusEvent) => void): Unsubscribe
     /** qq 网页登录：打开 y.qq.com 登录窗（结果经 onQQWebEvent 推送；用户关窗时自动尝试提取） */
     qqWebOpen(): Promise<void>
@@ -764,7 +768,6 @@ export interface WindowApi {
     qqWebFinish(): Promise<boolean>
     /** qq 网页登录：放弃并关窗（关闭登录弹窗时调用） */
     qqWebClose(): Promise<void>
-    /** 订阅 qq 网页登录结果 */
     onQQWebEvent(cb: (e: QQWebLoginEvent) => void): Unsubscribe
     /** 订阅登录态变更（主进程广播） */
     onChange(cb: () => void): Unsubscribe
@@ -789,14 +792,12 @@ export interface WindowApi {
 
   /** LX Music 同步 */
   sync: {
-    /** 当前状态快照 */
     status(): Promise<SyncStatusSnapshot>
     /** 按 settings.sync 连接 */
     connect(): Promise<void>
     disconnect(): Promise<void>
     /** 清会话（下次连接重新 CDK 激活） */
     reset(): Promise<void>
-    /** 订阅状态变更 */
     onStatus(cb: (s: SyncStatusSnapshot) => void): Unsubscribe
   }
 
@@ -809,9 +810,7 @@ export interface WindowApi {
       filePath: string,
       opts: { includeFavorites: boolean; includeTrial: boolean; playlistIds: number[] }
     ): Promise<void>
-    /** 解析备份文件摘要 */
     parse(filePath: string): Promise<BackupSummary>
-    /** 恢复备份 */
     restore(filePath: string, options: BackupRestoreOptions): Promise<BackupRestoreResult>
     /** 解析 LX 歌单文件（.lxmc / json）摘要，非法返回 null */
     lxParse(filePath: string): Promise<LxImportSummary | null>

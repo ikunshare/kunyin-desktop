@@ -1,5 +1,5 @@
 /**
- * Provider 注册与分发。随平台移植逐个接入。
+ * Provider 注册与分发。
  */
 import type { MusicSource } from '@common'
 import type { BaseProvider } from './base'

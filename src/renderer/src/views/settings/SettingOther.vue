@@ -9,7 +9,6 @@ import BaseBtn from '../../components/BaseBtn.vue'
 import BaseInput from '../../components/BaseInput.vue'
 import BaseSelect from '../../components/BaseSelect.vue'
 
-// 其他设置：平台账号登录管理 + 卡密激活
 const api = useApi()
 
 // —— 平台账号 ——

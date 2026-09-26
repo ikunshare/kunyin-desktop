@@ -30,7 +30,6 @@ export function wyBuildQRUrl(unikey: string): string {
   return `https://music.163.com/login?codekey=${unikey}`
 }
 
-/** 轮询二维码状态。 */
 export async function wyPollStatus(unikey: string): Promise<WyPollResult> {
   try {
     const { json, setCookie } = await eapiPostRaw<{ code?: number }>(

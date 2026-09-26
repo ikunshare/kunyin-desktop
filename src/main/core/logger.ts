@@ -24,7 +24,6 @@ import { appDataPath } from './paths'
 const MAX_FILE_BYTES = 8 * 1024 * 1024
 /** 日志目录总量上限，超过按时间从旧到新删 */
 const MAX_DIR_BYTES = 64 * 1024 * 1024
-/** 保留天数 */
 const RETAIN_DAYS = 7
 /** 内存环形缓冲容量（设置页「查看最近日志」与导出用） */
 const RING_SIZE = 600

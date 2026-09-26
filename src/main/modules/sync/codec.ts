@@ -163,9 +163,6 @@ function parseTxQualities(m: Json, mediaMid: string): Record<string, Quality> {
       case 'atmos':
         mk('atmos', '臻品全景声')
         break
-      case 'atmos_plus':
-        mk('atmos_plus', '臻品全景声 2.0')
-        break
     }
   }
   return out
@@ -198,9 +195,6 @@ function parseKgQualities(qs: Json | undefined): Record<string, Quality> {
         break
       case 'atmos':
         mk('atmos', '臻品全景声')
-        break
-      case 'atmos_plus':
-        mk('atmos_plus', '臻品全景声 2.0')
         break
       case 'master':
         mk('master', '臻品母带', 20900)
@@ -242,7 +236,7 @@ function parseStdQualities(qs: Json | undefined): Record<string, Quality> {
         mk('atmos', '臻品全景声')
         break
       case 'atmos_plus':
-        mk('atmos_plus', '臻品全景声 2.0')
+        mk('atmos_plus', '高清臻音')
         break
     }
   }

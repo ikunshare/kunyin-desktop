@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** 酷狗解析：清洗、音质、搜索项、专辑歌曲(嵌套)、歌手歌曲(平铺) */
-import type { KugouMusicItem, Quality, Singer } from '@common'
+import { qualityName, type KugouMusicItem, type Quality, type Singer } from '@common'
 
 export const SQ_ZERO_HASH = '00000000000000000000000000000000'
 
@@ -284,7 +284,7 @@ function buildQualitiesFromSupport(support: string): Record<string, Quality> {
   if (has('SQ', 'PQ')) addQ(q, '320k', '高品音质 320K', 320, 0)
   if (has('VCQ')) addQ(q, 'flac', '无损音质 FLAC', 2000, 0)
   if (has('TQ')) addQ(q, 'hires', '无损音质 HiRes', 4000, 0)
-  if (has('AQ')) addQ(q, 'master', '蝰蛇超清', 20900, 0)
+  if (has('AQ')) addQ(q, 'master', qualityName('master', 'kg'), 20900, 0)
   return q
 }
 

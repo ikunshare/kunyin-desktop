@@ -134,7 +134,6 @@ export function scheduleLoginRefresh(delayMs = 5000, intervalMs = 6 * 60 * 60 * 
   setInterval(run, intervalMs).unref()
 }
 
-/** 已登录的平台 key 列表。 */
 export function loggedInKeys(): CredProviderKey[] {
   ensureLoaded()
   return KEYS.filter((k) => store.has(k))

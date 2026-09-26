@@ -6,3 +6,4 @@ out
 *.log*
 reference
 docs
+native/dolby-wasm/.cache

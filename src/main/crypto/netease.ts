@@ -22,7 +22,8 @@ const RSA_E = 0x10001n
 
 const APP_VER = '3.1.17.204416'
 const VERSION_CODE = '140'
-const OS_VER = 'Microsoft-Windows-10-Professional-build-19045-64bit'
+/** 伪装的系统版本（听歌上报也用同一份，保持同一台「设备」的指纹一致） */
+export const OS_VER = 'Microsoft-Windows-10-Professional-build-19045-64bit'
 const RESOLUTION = '1920x1080'
 const CHANNEL = 'netease'
 
@@ -77,7 +78,8 @@ function randomSecKey(): string {
 
 // —— deviceId（52 位大写 hex，持久化复用）——
 let deviceIdCache: string | null = null
-function getDeviceId(): string {
+/** 本机的网易云 deviceId：eapi 与听歌上报共用一份，换一份等于换一台设备 */
+export function getDeviceId(): string {
   if (deviceIdCache) return deviceIdCache
   const path = appDataPath('wy_device.txt')
   try {
@@ -159,7 +161,6 @@ export async function eapiPost<T = any>(path: string, data: unknown, musicU?: st
   return json
 }
 
-/** weapi 请求。 */
 export async function weapiPost<T = any>(path: string, data: unknown, musicU?: string): Promise<T> {
   const params = typeof data === 'string' ? data : JSON.stringify(data)
   const secKey = randomSecKey()

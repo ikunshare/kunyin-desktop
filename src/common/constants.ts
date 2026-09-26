@@ -4,7 +4,7 @@
 import type { MusicSource, QualityId } from './types/music'
 import type { AppSettings } from './types/settings'
 
-/** 五大在线音源顺序（云盘上游已删库，不再实现；local 为本地文件不在其列） */
+/** 六大在线音源顺序（云盘上游已删库，不再实现；local 为本地文件不在其列） */
 export const PLATFORMS: readonly MusicSource[] = ['wy', 'qq', 'qqc', 'kg', 'kw', 'joox'] as const
 
 /** 音源显示名（取自 Android 各 Provider.displayName） */
@@ -48,20 +48,29 @@ export const BACKEND_PLATFORM: Record<MusicSource, string> = {
  * 音质档位顺序（从低到高）——全端唯一的档位排序真源。
  * 徽标取值、下载降级/升档、播放取流顺序、各处音质列表都由它派生，改这里即全局生效。
  *
- * 高低次序：臻品母带 > 全景声 2.0 > 全景声 > HiRes > FLAC > 320K > 128K。
+ * 高低次序：臻品母带 > 全景声 > 高清臻音 > HiRes > FLAC > 320K > 128K。
  * 母带排在全景声之上——全景声是由立体声上混而来的特殊版本，母带才是保真度最高的一档。
+ * 高清臻音（仅网易，键名 atmos_plus 沿用后端）排在沉浸环绕声之下，与网易自己的档位次序一致。
+ *
+ * 杜比全景声 / Audio Vivid 排在母带之上**不是**因为保真度更高（杜比是 256kbps 的 AC-4），
+ * 而是它们换了格式：放在最顶上，从任何常规档往下降级都掉不进去，只有明确选了才会下到。
  */
 export const QUALITY_IDS: readonly QualityId[] = [
   '128k',
   '320k',
   'flac',
   'hires',
-  'atmos',
   'atmos_plus',
-  'master'
+  'atmos',
+  'master',
+  'dolby',
+  'vivid'
 ] as const
 
-/** 音质显示名（全端统一口径；flac24bit 在解码层归一化到 hires） */
+/**
+ * 音质通用名：跨平台的场合用（设置页的首选音质、多源混合的批量下载）。
+ * 落到某一首歌上时用 qualityName(id, source)，各平台对特殊档位的叫法不一样。
+ */
 export const QUALITY_NAMES: Record<QualityId, string> = {
   '128k': '普通音质 128K',
   '320k': '高品音质 320K',
@@ -69,12 +78,63 @@ export const QUALITY_NAMES: Record<QualityId, string> = {
   hires: '无损音质 HiRes',
   master: '臻品母带',
   atmos: '臻品全景声',
-  atmos_plus: '臻品全景声 2.0'
+  atmos_plus: '高清臻音',
+  dolby: '杜比全景声',
+  vivid: '臻音全景声'
 }
 
 /**
- * 「AI 音质」候选档位：全景声系列由立体声算法上混而来；母带虽非 AI 生成，但同属特殊版本，
- * 一并列入让用户自行勾选（settings.quality.aiQualities 的可选项，默认只屏蔽两档全景声）。
+ * 各平台对特殊档位的叫法（取自 Android 版各源的 Quality 名），没列出的沿用 QUALITY_NAMES
+ * （QQ / JOOX 的叫法就是通用名）。网易母带 Android 写的是旧名「鲸云母带」，现在叫超清母带。
+ *
+ * 网易这两档跟 Android 是反的：Android 把 sk 标成高清臻音、je 标成沉浸环绕声，
+ * 后端实测 sk（level=sky，5.1 声道 FLAC）才是沉浸环绕声，je（jyeffect）是高清臻音。
+ */
+const SOURCE_QUALITY_NAMES: Partial<Record<MusicSource, Partial<Record<QualityId, string>>>> = {
+  wy: { master: '超清母带', atmos: '沉浸环绕声' },
+  kw: { master: '至臻母带', atmos: '至臻全景声' },
+  kg: { master: '蝰蛇超清' }
+}
+
+/**
+ * 某平台上该档位的显示名。展示一律走这里而不读 Quality.name：
+ * 歌单里存着的旧歌还带着改名前的叫法，读存量会新旧混杂。
+ */
+export function qualityName(id: string, source?: MusicSource): string {
+  const q = id as QualityId
+  return (source && SOURCE_QUALITY_NAMES[source]?.[q]) || QUALITY_NAMES[q] || id
+}
+
+/**
+ * 只能下载、Chromium 解不了的档位：杜比全景声（网易是 AC-4，QQ 是 E-AC-3）、Audio Vivid（AV3A），
+ * Electron 44 实测 canPlayType 均为空。播放取流、播放页音质菜单、首选播放音质都跳过它们，
+ * 下载照常可选（存 .mp4）。例外是主进程能软解的平台，见 SOFT_DECODERS——目前杜比两家都能播，
+ * Audio Vivid 还没有解码器。
+ */
+export const DOWNLOAD_ONLY_QUALITY_IDS: readonly QualityId[] = ['dolby', 'vivid'] as const
+
+/** 主进程软解器（src/main/audio/protocol.ts 按它把码流解成 <audio> 认得的格式） */
+export type SoftDecoder = 'dolby'
+
+/**
+ * 只能下载的档位里，能在主进程软解后播放的平台（src/main/audio/dolbyStream.ts，
+ * LibreMPEG 的解码器编成 wasm）。两家的杜比全景声都是 MP4 封装，但编码不同：
+ * - 网易：AC-4 IMS（immersive stereo），Dolby 在编码端做好的两声道耳机渲染，解出来就是空间效果；
+ * - QQ（QQ 音乐云取的是同一份文件）：E-AC-3 JOC，开源解码器都不解 JOC，只能解出 5.1 床声道再下混，
+ *   听感接近普通立体声。
+ */
+const SOFT_DECODERS: Partial<Record<QualityId, Partial<Record<MusicSource, SoftDecoder>>>> = {
+  dolby: { wy: 'dolby', qq: 'dolby', qqc: 'dolby' }
+}
+
+/** 这首歌的这一档要不要软解、用哪个软解器；不需要返回 undefined */
+export function softDecoder(qualityId: string, source?: MusicSource): SoftDecoder | undefined {
+  return source ? SOFT_DECODERS[qualityId as QualityId]?.[source] : undefined
+}
+
+/**
+ * 「AI 音质」候选档位：全景声、高清臻音都由立体声算法处理而来；母带虽非 AI 生成，但同属特殊版本，
+ * 一并列入让用户自行勾选（settings.quality.aiQualities 的可选项，默认屏蔽全景声与高清臻音）。
  */
 export const AI_QUALITY_CANDIDATES: readonly QualityId[] = [
   'atmos',
@@ -82,10 +142,41 @@ export const AI_QUALITY_CANDIDATES: readonly QualityId[] = [
   'master'
 ] as const
 
-/** 当前设置下需要跳过的音质档位（播放取流、下载解析、音质选择列表共用）。 */
-export function blockedQualityIds(settings: AppSettings): readonly string[] {
+/**
+ * 只在个别平台有效的档位。atmos_plus 以前还装过 QQ 的「臻品全景声 2.0」和酷我的 20501，
+ * 那两档已下线，但存量歌单里的 QQ / 酷我歌还带着这个键：不按平台挡掉，
+ * 就会被当成网易的高清臻音列出来、拿去取流。
+ */
+const SOURCE_ONLY_QUALITIES: Partial<Record<QualityId, readonly MusicSource[]>> = {
+  atmos_plus: ['wy']
+}
+
+function foreignQualityIds(source?: MusicSource): QualityId[] {
+  if (!source) return []
+  const entries = Object.entries(SOURCE_ONLY_QUALITIES) as [QualityId, readonly MusicSource[]][]
+  return entries.filter(([, only]) => !only.includes(source)).map(([id]) => id)
+}
+
+/**
+ * 当前设置下需要跳过的音质档位（下载解析、下载音质选择列表用）。
+ * 给了 `source` 时一并跳过不属于该平台的档位（见 SOURCE_ONLY_QUALITIES）。
+ */
+export function blockedQualityIds(settings: AppSettings, source?: MusicSource): readonly string[] {
   const q = settings.quality
-  return q?.blockAi ? (q.aiQualities ?? []) : []
+  const ai = q?.blockAi ? (q.aiQualities ?? []) : []
+  return [...ai, ...foreignQualityIds(source)]
+}
+
+/**
+ * 播放侧要跳过的档位：blockedQualityIds 加上该平台解不了的只能下载档（取流、音质菜单、徽标共用）。
+ * 不给 `source`（首选播放音质这种跨平台的场合）时一律跳过：只有个别平台能播，不该当全局首选。
+ */
+export function playbackBlockedQualityIds(
+  settings: AppSettings,
+  source?: MusicSource
+): readonly string[] {
+  const undecodable = DOWNLOAD_ONLY_QUALITY_IDS.filter((id) => !softDecoder(id, source))
+  return [...blockedQualityIds(settings, source), ...undecodable]
 }
 
 /** 列表行音质徽标（对应 lx-music 的 tag__high_quality / tag__lossless / tag__lossless_24bit） */
@@ -103,12 +194,16 @@ const QUALITY_BADGES: Record<QualityId, QualityBadgeInfo> = {
   hires: { label: 'HiRes', tier: 'primary' },
   master: { label: '母带', tier: 'primary' },
   atmos: { label: '全景声', tier: 'primary' },
-  atmos_plus: { label: '全景声 2.0', tier: 'primary' }
+  atmos_plus: { label: '臻音', tier: 'primary' },
+  dolby: { label: '杜比', tier: 'primary' },
+  vivid: { label: 'Vivid', tier: 'primary' }
 }
 
 /**
  * 取该曲可用的最高音质徽标：HiRes / SQ / HQ / 标准（母带、全景声用各自短标签）。
- * `blocked` 为被屏蔽的档位（AI 音质），既然播放/下载都不会用它，徽标也不显示它。
+ * `blocked` 传 playbackBlockedQualityIds：徽标表示「点开能听到的最高档」，被屏蔽的 AI 音质听不到，
+ * 所以不显示。杜比 / Audio Vivid 则一律不当徽标，哪怕杜比能软解播放：它们排在最顶上只是为了
+ * 降级时掉不进去，按档位序取最高会把母带、HiRes 都盖掉，而有损的杜比（256～448kbps）并不比它们保真。
  * 无任何可用音质返回 null。
  */
 export function qualityBadge(
@@ -118,7 +213,7 @@ export function qualityBadge(
   const ladder = [...QUALITY_IDS].reverse() // 高 → 低
   for (const q of ladder) {
     if (!qualities[q]) continue
-    if (blocked?.includes(q)) continue
+    if (blocked?.includes(q) || DOWNLOAD_ONLY_QUALITY_IDS.includes(q)) continue
     return QUALITY_BADGES[q]
   }
   return null

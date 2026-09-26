@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** 酷我解析：音质表、搜索项(JSON)、歌曲元素(XML)、详情项(musicpay JSON) */
-import type { KuwoMusicItem, Quality, Singer } from '@common'
+import { qualityName, type KuwoMusicItem, type Quality, type Singer } from '@common'
 
 export function num(v: any, def = 0): number {
   if (v == null) return def
@@ -15,9 +15,8 @@ const KW_QUALITY: Record<string, [string, string, number]> = {
   '320': ['320k', '高品音质 320K', 320],
   '2000': ['flac', '无损音质 FLAC', 2000],
   '4000': ['hires', '无损音质 HiRes', 4000],
-  '20201': ['atmos', '臻品全景声', 20201],
-  '20501': ['atmos_plus', '臻品全景声 2.0', 20501],
-  '20900': ['master', '臻品母带', 20900]
+  '20201': ['atmos', qualityName('atmos', 'kw'), 20201],
+  '20900': ['master', qualityName('master', 'kw'), 20900]
 }
 
 export function parseMinfo(minfo: string): Record<string, Quality> {

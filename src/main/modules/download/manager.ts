@@ -36,13 +36,12 @@ import type {
   Lyric,
   MediaInfoResult,
   MusicItem,
-  MusicSource,
-  QualityId
+  MusicSource
 } from '@common'
 import {
   QUALITY_IDS,
-  QUALITY_NAMES,
   blockedQualityIds,
+  qualityName,
   qualityFallbackOrder,
   qualityUpgradeOrder
 } from '@common'
@@ -56,6 +55,8 @@ import { appDataPath } from '../../core/paths'
 import { buildLyrics, encodeLyric } from './lyric'
 
 const MP3_QUALITY_IDS = new Set(['128', '320', '128k', '320k', 'mp3'])
+/** 杜比全景声（网易 AC-4 / QQ AC-3 系，QQ 加密版解密后同为 mp4）与 Audio Vivid 都是 MP4 封装；标签写入按扩展名跳过它们 */
+const MP4_QUALITY_IDS = new Set(['dolby', 'vivid'])
 const PROGRESS_INTERVAL_MS = 500
 
 // —— 运行时状态 ——
@@ -88,7 +89,8 @@ function defaultDownloadDir(): string {
 }
 
 function extFor(qualityId: string): string {
-  return MP3_QUALITY_IDS.has(qualityId) ? '.mp3' : '.flac'
+  if (MP3_QUALITY_IDS.has(qualityId)) return '.mp3'
+  return MP4_QUALITY_IDS.has(qualityId) ? '.mp4' : '.flac'
 }
 
 function sanitize(s: string): string {
@@ -185,18 +187,18 @@ export function listTasks(): DownloadTask[] {
   return [...tasks.values()]
 }
 
-/** 当前设置下被屏蔽的音质档（AI 音质），下载全程跳过。 */
-function blockedQualities(): readonly string[] {
-  return blockedQualityIds(getSettings())
+/** 该曲下载全程跳过的音质档：屏蔽的 AI 音质，以及不属于该平台的档位。 */
+function blockedQualities(item: MusicItem): readonly string[] {
+  return blockedQualityIds(getSettings(), item.type)
 }
 
 /**
  * 选音质：以「指定档 →（无则）设置里的优先下载音质」为目标，先按档位向下降级，
  * 目标档及更低档都没有时才向上取最接近的可用档。
- * 绝不直接跳到该曲最高档——否则整专下载选 HiRes 时，没有 HiRes 的曲子会被抓成全景声 2.0。
+ * 绝不直接跳到该曲最高档——否则整专下载选 HiRes 时，没有 HiRes 的曲子会被抓成臻品母带。
  */
 function pickQuality(item: MusicItem, preferred?: string): string | undefined {
-  const blocked = blockedQualities()
+  const blocked = blockedQualities(item)
   const target = preferred || getSettings().download.preferredQuality
   const down = qualityFallbackOrder(target, item.qualities, blocked)
   if (down.length) return down[0]
@@ -218,7 +220,7 @@ async function resolveWithFallback(
   song: MusicItem,
   qualityId: string
 ): Promise<{ qualityId: string; info: MediaInfoResult }> {
-  const blocked = blockedQualities()
+  const blocked = blockedQualities(song)
   const order = qualityFallbackOrder(qualityId, song.qualities, blocked)
   // 目标档及更低档全无可用档时（如该曲只有 HiRes 而任务档为 FLAC），向上取最接近的
   if (!order.length) order.push(...qualityUpgradeOrder(qualityId, song.qualities, blocked))
@@ -322,7 +324,7 @@ export function addTask(input: AddDownloadInput): void {
     album: item.album,
     cover: item.cover,
     qualityId,
-    qualityName: isMv ? `MV ${input.mvQuality}` : (q?.name ?? qualityId),
+    qualityName: isMv ? `MV ${input.mvQuality}` : qualityName(qualityId, source),
     status: 'waiting',
     progress: 0,
     speedBytesPerSec: 0,
@@ -342,7 +344,7 @@ export function addTask(input: AddDownloadInput): void {
 
 /** 该曲可用档位是否已被「屏蔽 AI 音质」全部挡下（无档可下）。 */
 function onlyBlockedQualities(item: MusicItem): boolean {
-  const blocked = blockedQualities()
+  const blocked = blockedQualities(item)
   if (!blocked.length) return false
   const keys = Object.keys(item.qualities)
   return keys.length > 0 && keys.every((k) => blocked.includes(k))
@@ -367,7 +369,7 @@ function addBlockedTask(item: MusicItem, target: string, input: AddDownloadInput
     album: item.album,
     cover: item.cover,
     qualityId: target,
-    qualityName: QUALITY_NAMES[target as QualityId] ?? target,
+    qualityName: qualityName(target, item.type),
     status: 'failed',
     progress: 0,
     speedBytesPerSec: 0,
@@ -445,7 +447,7 @@ async function executeDownload(taskKey: string): Promise<void> {
     if (actualQuality !== task.qualityId) {
       const q = song.qualities[actualQuality]
       totalBytes = q?.filesize ?? 0
-      patchTask(taskKey, { qualityName: q?.name ?? actualQuality, totalBytes })
+      patchTask(taskKey, { qualityName: qualityName(actualQuality, song.type), totalBytes })
     }
     const ekey =
       info.encryptionInfo?.isEncrypt && info.encryptionInfo.ekey ? info.encryptionInfo.ekey : null
@@ -727,7 +729,6 @@ async function downloadToFile(
   let lastTick = Date.now()
   let lastBytes = 0
   const ws = createWriteStream(path)
-  // Web ReadableStream → Node Readable
   const nodeStream = Readable.fromWeb(resp.body as Parameters<typeof Readable.fromWeb>[0])
   nodeStream.on('data', (chunk: Buffer) => {
     downloaded += chunk.length

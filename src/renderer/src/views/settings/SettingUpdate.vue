@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 软件更新（对应 lx-music-desktop 的「软件更新」）。原先并在「关于」页里，按 LX 的分类拆出来。 */
+/** 软件更新（对应 lx-music-desktop 的「软件更新」）。 */
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useApi } from '../../composables/useApi'
 import type { UpdaterEvent } from '@common'

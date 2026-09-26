@@ -7,8 +7,11 @@ import {
   type Lyric,
   type MediaInfoResult,
   type MusicItem,
+  type NeteaseMusicItem,
   type QQMusicItem,
-  type QQReportEvent
+  type QQReportEvent,
+  type WyReportEvent,
+  softDecoder
 } from '@common'
 import { handle } from '../helpers'
 import { getProvider } from '../../providers'
@@ -18,13 +21,18 @@ import { audioCacheKey, dropCachedAudio, isAudioFullyCached } from '../../cache/
 import { getCachedLyric, setCachedLyric } from '../../cache/lyricCache'
 import { getRedirect } from '../../store/library'
 import { getKgFallbackLyric } from '../../providers/kg/lyric'
-import { getSettings } from '../../store/settings'
 import {
   qqReportListening,
   qqReportPlayRecently,
   qqReportPlayStream,
   type QQReportCreds
 } from '../../providers/qq/report'
+import {
+  toReportSong,
+  wyReportPlayEnd,
+  wyReportPlayStart,
+  type WyReportSource
+} from '../../providers/wy/report'
 
 /**
  * 播放/歌词相关 IPC。
@@ -79,9 +87,11 @@ export function registerPlayerHandlers(): void {
       // 完整命中音频缓存：所有块都在，连后端 getUrl 都不必发。
       // 判定必须在解析之前，所以键用「请求的」音质档（见 audioCacheKey）。
       const cacheKey = audioCacheKey(item, qualityId)
+      // Chromium 解不了的码流（网易 / QQ 杜比）由协议层软解成 WAV；缓存里存的仍是原文件
+      const decode = softDecoder(qualityId, item.type)
       if (isAudioFullyCached(cacheKey)) {
         // 不带 url：协议层看到条目齐全，全程走本地块
-        const url = registerAudioStream({ cacheKey })
+        const url = registerAudioStream({ cacheKey, decode })
         return { ok: true, url, expire: 0, quality: qualityId }
       }
       const info = await resolveMedia(item, qualityId)
@@ -101,7 +111,8 @@ export function registerPlayerHandlers(): void {
       const url = registerAudioStream({
         url: info.playUrl,
         ekey: info.encryptionInfo?.ekey,
-        cacheKey
+        cacheKey,
+        decode
       })
       return { ok: true, url, expire: info.expire ?? 0, quality: info.quality || qualityId }
     }
@@ -148,7 +159,6 @@ export function registerPlayerHandlers(): void {
 
   // QQ 音乐听歌上报：设置关闭 / 未登录 / 非 QQ 曲目一律跳过；失败静默
   handle(IpcChannels.PLAYER_QQ_REPORT, async (event: QQReportEvent): Promise<boolean> => {
-    if (!getSettings().player.qqListenReport) return false
     if (event.item.type !== 'qq') return false
     const creds = getProvider('qq')?.credentials as QQReportCreds | null | undefined
     if (!creds?.uin || !creds.authst) return false
@@ -160,6 +170,25 @@ export function registerPlayerHandlers(): void {
         return qqReportPlayRecently(creds, song)
       case 'stream':
         return qqReportPlayStream(creds, song, event.playTimeSec)
+      default:
+        return false
+    }
+  })
+
+  // 网易云听歌上报：非网易云曲目 / 未登录一律跳过；失败静默
+  handle(IpcChannels.PLAYER_WY_REPORT, async (event: WyReportEvent): Promise<boolean> => {
+    if (event.item.type !== 'wy') return false
+    const cookie = getProvider('wy')?.credentials?.cookie
+    if (!cookie) return false
+    const song = toReportSong(event.item as NeteaseMusicItem, event.qualityId)
+    // 来源三元组照上游抓包原样用（refer 串里嵌着「我喜欢的音乐」那条 spm 路径，成套不拆），
+    // 只有列表 id 换成实际在放的网易云歌单。
+    const source: WyReportSource = { id: event.sourceId || '0', type: 'track', name: 'likeMusic' }
+    switch (event.kind) {
+      case 'start':
+        return wyReportPlayStart(cookie, song, source)
+      case 'end':
+        return wyReportPlayEnd(cookie, song, source, event.playTimeSec)
       default:
         return false
     }

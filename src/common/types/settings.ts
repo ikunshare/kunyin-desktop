@@ -63,6 +63,8 @@ export interface AppSettings {
     windowSizeId: number
     /** 界面字体大小 px（14~19，经 #app zoom 实现整体缩放） */
     fontSize: number
+    /** 窗口圆角（关掉是直角窗口）。放在 appearance 里是为了让 preload 首屏就读到，启动不闪 */
+    windowRounded: boolean
   }
 
   /** 桌面端窗口与动效行为（对应 lx-music-desktop 基础设置） */
@@ -106,6 +108,8 @@ export interface AppSettings {
     powerSaveBlocker: boolean
     /** 在任务栏按钮上显示播放进度（Windows/macOS 的 dock 进度条） */
     taskbarProgress: boolean
+    /** 播放详情页的封面用圆角（关掉是直角方图） */
+    coverRounded: boolean
     /** 每行一个歌名；以 @ 开头表示屏蔽歌手。 */
     dislikeRules: string
     /** 自定义全局快捷键；空字符串为禁用。 */
@@ -122,11 +126,6 @@ export interface AppSettings {
      * 都不必发；超出上限按 LRU 淘汰最久未播的。比上限还大的单曲不缓存。
      */
     audioCacheBytes: number
-    /**
-     * QQ 音乐听歌上报：登录 QQ 音乐后，播放 QQ 曲目时把听歌记录 / 最近播放 / 播放时长
-     * 同步到 QQ 音乐账号（影响推荐与「最近播放」列表）。
-     */
-    qqListenReport: boolean
     /**
      * 音效（移植自 lx-music-desktop 的「音效设置」，常量见 @common/audio）。
      *
@@ -168,6 +167,11 @@ export interface AppSettings {
   lyrics: {
     showTranslation: boolean
     showRomanization: boolean
+    /**
+     * 蓝牙歌词：把当前一句歌词当作系统媒体信息的标题上报（歌名 - 歌手挪到艺术家栏），
+     * 车机 / 蓝牙耳机经 AVRCP 读到的就是歌词。系统媒体面板、锁屏也会跟着显示歌词。
+     */
+    bluetoothLyric: boolean
     fontSize: number
     /** 歌词字体（字体族名，空=跟随软件字体） */
     font: string
@@ -329,7 +333,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     lang: 'zh-cn',
     appFont: '',
     windowSizeId: 3,
-    fontSize: 16
+    fontSize: 16,
+    windowRounded: true
   },
   behavior: {
     showAnimation: true,
@@ -355,13 +360,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
     powerSaveBlocker: true,
     // 默认关：任务栏忽然多出一条进度条对老用户是「意外行为」，想要的人自己开
     taskbarProgress: false,
+    coverRounded: true,
     dislikeRules: '',
     shortcuts: {},
     playMode: 'listLoop',
     preferredQuality: 'flac',
     autoPlay: false,
     audioCacheBytes: 4 * 1024 ** 3,
-    qqListenReport: true,
     soundEffect: {
       eq: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
       eqPreset: '',
@@ -383,6 +388,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lyrics: {
     showTranslation: true,
     showRomanization: false,
+    bluetoothLyric: false,
     fontSize: 22,
     font: '',
     desktopEnabled: false,

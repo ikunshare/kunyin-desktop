@@ -1,14 +1,8 @@
 /**
  * 主进程常驻模块注册器（参照 lx-music-desktop 的 registerModules）。
  *
- * 已接入：
- * - devtools：Ctrl+F12 开发者工具（Release 亦可）、窗口级崩溃/白屏日志
- * - media：全局媒体键、托盘、开机自启（SMTC 显示走渲染层 Web MediaSession）
- * - sync：LX Music 同步客户端（Phase 5.2）
- * - backup：备份/导入（Phase 5.3）
- * - updater：自动更新（Phase 5.3）
- * - power：播放时阻止系统休眠 + 任务栏播放进度
- * 说明：下载队列走 IPC handler 按需初始化；音频代理走 audio/protocol（app ready 时装）。
+ * 不在这里的：系统媒体面板（SMTC）走渲染层 Web MediaSession；下载队列由 IPC handler
+ * 按需初始化；音频流协议在 app ready 时由 audio/protocol 挂上。
  */
 import { registerDevToolsModule } from './devtools'
 import { registerMediaModule } from './media'

@@ -1,6 +1,3 @@
-/**
- * 主窗口管理。
- */
 import { app, BrowserWindow, Menu, shell } from 'electron'
 import { join } from 'node:path'
 import { is } from '@electron-toolkit/utils'

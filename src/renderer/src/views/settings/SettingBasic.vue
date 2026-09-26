@@ -59,6 +59,12 @@ function setAppFont(font: string): void {
         @update:model-value="store.update({ behavior: { startInFullscreen: $event as boolean } })"
       />
       <BaseCheckbox
+        id="setting_window_rounded"
+        :model-value="settings.appearance.windowRounded"
+        label="窗口使用圆角"
+        @update:model-value="store.update({ appearance: { windowRounded: $event as boolean } })"
+      />
+      <BaseCheckbox
         id="setting_close_to_tray"
         :model-value="settings.behavior.closeToTray"
         label="关闭窗口时不退出软件，将其最小化到系统托盘"

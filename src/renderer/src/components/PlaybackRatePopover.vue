@@ -28,7 +28,7 @@ const open = ref(false)
  */
 const rate = computed(() => player.playbackRate)
 const preservesPitch = computed(() => cfg.value.player.preservesPitch)
-/** 常用倍速快捷档，与设置页原来的下拉档位一致 */
+/** 常用倍速快捷档 */
 const presets = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
 function percentOf(e: Event): number {

@@ -90,6 +90,7 @@ function resetAll(): void {
   const {
     showTranslation: _showTranslation,
     showRomanization: _showRomanization,
+    bluetoothLyric: _bluetoothLyric,
     fontSize: _fontSize,
     font: _font,
     ...desktopDefaults

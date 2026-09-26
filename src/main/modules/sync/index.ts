@@ -50,7 +50,6 @@ export function registerSyncModule(): void {
     sendToRenderer(IpcChannels.SYNC_STATUS_CHANGED, snapshot())
   })
 
-  // 启动自动连接
   const s = getSettings().sync
   if (s.enable && s.autoConnect && s.serverUrl.trim() && s.cdk.trim()) {
     doConnect()

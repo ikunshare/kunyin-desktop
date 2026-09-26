@@ -22,7 +22,6 @@ const emit = defineEmits<{ playAll: []; download: [] }>()
 
 const router = useRouter()
 
-// 封面走主进程磁盘缓存协议
 const cachedCover = computed(() => coverUrl(props.cover))
 </script>
 
