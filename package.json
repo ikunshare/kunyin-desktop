@@ -45,7 +45,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.2",
-    "electron": "^44.0.0",
+    "electron": "^44.9.3",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "eslint": "^10.8.0",
