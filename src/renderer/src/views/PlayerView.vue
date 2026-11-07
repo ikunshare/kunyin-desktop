@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import SleepTimerDialog from '../components/SleepTimerDialog.vue'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { QUALITY_IDS, playbackBlockedQualityIds, qualityName, type QualityId } from '@common'
@@ -198,9 +198,17 @@ const lyric = useLyricPlayer()
 /** 制作人信息；歌词只有幕后名单、没有唱词时，由「纯音乐」占位块直接列出 */
 const lyricCredits = lyric.credits
 const hasLyric = ref(false)
+const lyricLoading = ref(false)
 const hasTranslation = ref(false)
 // 每次加载自增，避免异步竞态（旧请求回来覆盖新歌）
 let loadToken = 0
+let relayoutFrame: number | null = null
+
+function cancelRelayout(): void {
+  if (relayoutFrame === null) return
+  cancelAnimationFrame(relayoutFrame)
+  relayoutFrame = null
+}
 
 /** 忽略 LRC 时间戳/元数据标签后，判断翻译轨是否含有实际文本。 */
 function hasLyricText(raw: string): boolean {
@@ -215,37 +223,45 @@ function hasLyricText(raw: string): boolean {
 
 async function loadLyric(): Promise<void> {
   const token = ++loadToken
+  cancelRelayout()
+  // 请求期间就清掉上一首的唱词、制作人信息和播放时钟，避免旧内容跟着新歌继续显示。
+  lyric.clear()
+  hasLyric.value = false
+  lyricLoading.value = !!current.value
   hasTranslation.value = false
-  if (!current.value) {
-    lyric.clear()
-    hasLyric.value = false
-    return
-  }
+  if (!current.value) return
   try {
     const plain = JSON.parse(JSON.stringify(current.value))
     const ly = await api.player.lyric(plain)
     if (token !== loadToken) return
     const original = ly.char || ly.lrc
-    if (original) {
-      hasTranslation.value = hasLyricText(ly.trans)
-      // 先露出宿主（visibility 而非 display:none），再加载，避免行高测成 0 叠行
-      hasLyric.value = true
-      await nextTick()
-      if (token !== loadToken) return
+    // Apple Music 带原始 TTML：逐字结束时间、和声、对唱、ruby 都在里面，优先用它
+    const ttml = ly.ttml ?? ''
+    if (original || ttml.trim()) {
+      // 隐藏宿主仍保留布局尺寸，解析完成后再一次性更新显示状态。
       const roman = ly.chroma || ly.roma
-      const hasLines = lyric.loadLyric(original, ly.trans, roman, {
-        name: plain.title,
-        singer: plain.artist ? [plain.artist] : []
-      })
+      const hasLines = lyric.loadLyric(
+        original,
+        ly.trans,
+        roman,
+        {
+          name: plain.title,
+          singer: plain.artist ? [plain.artist] : []
+        },
+        ttml
+      )
+      hasLyric.value = hasLines
+      hasTranslation.value = hasLines && (hasLyricText(ly.trans) || lyric.hasTranslate.value)
       if (!hasLines) {
         // 只有制作人信息、没有唱词：按纯音乐处理，credits 留在 lyric.credits 里由占位块展示
-        hasLyric.value = false
-        hasTranslation.value = false
         return
       }
       await nextTick()
       if (token !== loadToken) return
-      requestAnimationFrame(() => lyric.relayout())
+      relayoutFrame = requestAnimationFrame(() => {
+        relayoutFrame = null
+        if (token === loadToken) lyric.relayout()
+      })
       if (playing.value) lyric.play(currentTime.value)
       else lyric.seekMs(currentTime.value)
     } else {
@@ -259,6 +275,8 @@ async function loadLyric(): Promise<void> {
     lyric.clear()
     hasLyric.value = false
     hasTranslation.value = false
+  } finally {
+    if (token === loadToken) lyricLoading.value = false
   }
 }
 
@@ -325,6 +343,12 @@ onUnmounted(() => {
   unsubscribeFullscreen?.()
   unsubscribeLineSeek?.()
   window.removeEventListener('resize', syncPlayerFullscreen)
+})
+
+onBeforeUnmount(() => {
+  // 卸载同样使请求失效，防止迟到的响应重新驱动已销毁的歌词引擎。
+  loadToken++
+  cancelRelayout()
 })
 
 watch(
@@ -519,7 +543,7 @@ watch(currentTime, (t) => {
 
         <div v-show="lyricVisible" class="right">
           <div ref="lyricHost" class="lyric-host" :class="{ hidden: !hasLyric }" />
-          <div v-if="!hasLyric" class="no-lyric">
+          <div v-if="!hasLyric && !lyricLoading" class="no-lyric">
             <div class="no-lyric-title">纯音乐，请欣赏</div>
             <div v-if="lyricCredits.length" class="no-lyric-credits">
               <div v-for="item in lyricCredits" :key="item.role" class="no-lyric-credits-row">
@@ -877,9 +901,10 @@ watch(currentTime, (t) => {
   width: 100%;
   height: 100%;
 }
-/* visibility:hidden 保留布局尺寸，避免 display:none 导致行高测 0 叠字 */
+/* 保留布局尺寸；opacity 同时挡住引擎内显式 visibility:visible 的子节点。 */
 .lyric-host.hidden {
   visibility: hidden;
+  opacity: 0;
   pointer-events: none;
   position: absolute;
   inset: 0;

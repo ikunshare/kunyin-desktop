@@ -14,10 +14,17 @@ import {
   softDecoder
 } from '@common'
 import { handle } from '../helpers'
+import { createLogger } from '../../core/logger'
+
+const log = createLogger('appleMusic')
+
 import { getProvider } from '../../providers'
 import { resolveMediaInfo as resolveMedia, invalidateMediaUrl } from '../../providers/getUrl'
 import { registerAudioStream } from '../../audio/protocol'
+import { prepareAppleAudio } from '../../audio/appleMusic'
+import { openAppleHlsTrack } from '../../audio/appleHls'
 import { audioCacheKey, dropCachedAudio, isAudioFullyCached } from '../../cache/audioCache'
+import { dropAppleAudio, getAppleAudio } from '../../cache/appleCache'
 import { getCachedLyric, setCachedLyric } from '../../cache/lyricCache'
 import { getRedirect } from '../../store/library'
 import { getKgFallbackLyric } from '../../providers/kg/lyric'
@@ -58,7 +65,9 @@ function readSidecarLrc(filePath?: string): string {
 }
 
 function hasMainLyric(lyric: Lyric): boolean {
-  return !!(lyric.char.trim() || lyric.lrc.trim())
+  // TTML 也算主歌词：Apple Music 的原始 TTML 是渲染层的首选来源，
+  // 万一 lrc/char 那份降级产物为空，不能因此判成「无歌词」去跨平台找歌。
+  return !!(lyric.ttml.trim() || lyric.char.trim() || lyric.lrc.trim())
 }
 
 async function loadKgFallback(item: MusicItem): Promise<Lyric> {
@@ -84,11 +93,69 @@ export function registerPlayerHandlers(): void {
         const url = registerAudioStream({ filePath: item.filePath })
         return { ok: true, url, expire: 0, quality: qualityId }
       }
+      const cacheKey = audioCacheKey(item, qualityId)
+      // Chromium 解不了的码流由协议层软解成 WAV；缓存里存的仍是原文件
+      const decode = softDecoder(qualityId, item.type)
+      if (item.type === 'am') {
+        try {
+          let expire = 0
+          const cached = getAppleAudio(cacheKey)
+          if (cached) {
+            const url = registerAudioStream({ filePath: cached, decode })
+            return { ok: true, url, expire: 0, quality: qualityId }
+          }
+          const info = await resolveMedia(item, qualityId)
+          if (!info.isSuccess || !info.playUrl || info.kind !== 'apple-hls') {
+            return {
+              ok: false,
+              url: '',
+              expire: 0,
+              quality: qualityId,
+              reason: info.rejectReason ?? 'Apple Music 未返回 HLS 播放信息'
+            }
+          }
+          expire = info.expire
+          const spec = {
+            url: info.playUrl,
+            adamId: info.adamId ?? String(item.id),
+            keyEndpoint: info.keyEndpoint ?? '/music/key'
+          }
+          // 先试流式：把 HLS 分片拼成一个虚拟 MP4 边播边取，首段解出来就出声，
+          // 不必等整首 40MB 下载完再解密重封装。失败就回退到整首那条路。
+          if (info.codec === 'alac') {
+            try {
+              const track = await openAppleHlsTrack(spec, { cacheKey })
+              const url = registerAudioStream({
+                openBytes: track.open,
+                dispose: track.dispose,
+                decode,
+                contentType: 'audio/mp4'
+              })
+              return { ok: true, url, expire, quality: qualityId }
+            } catch (error) {
+              log.warn('Apple Music 流式播放不可用，回退整首下载', {
+                id: item.id,
+                reason: error instanceof Error ? error.message : String(error)
+              })
+            }
+          }
+          const filePath = await prepareAppleAudio(spec, cacheKey)
+          const url = registerAudioStream({ filePath, decode })
+          return { ok: true, url, expire, quality: qualityId }
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : 'Apple Music 音频处理失败'
+          log.warn('Apple Music 播放准备失败', { id: item.id, qualityId, reason })
+          return {
+            ok: false,
+            url: '',
+            expire: 0,
+            quality: qualityId,
+            reason
+          }
+        }
+      }
       // 完整命中音频缓存：所有块都在，连后端 getUrl 都不必发。
       // 判定必须在解析之前，所以键用「请求的」音质档（见 audioCacheKey）。
-      const cacheKey = audioCacheKey(item, qualityId)
-      // Chromium 解不了的码流（网易 / QQ 杜比）由协议层软解成 WAV；缓存里存的仍是原文件
-      const decode = softDecoder(qualityId, item.type)
       if (isAudioFullyCached(cacheKey)) {
         // 不带 url：协议层看到条目齐全，全程走本地块
         const url = registerAudioStream({ cacheKey, decode })
@@ -155,6 +222,7 @@ export function registerPlayerHandlers(): void {
     invalidateMediaUrl(item, qualityId)
     // 命中音频缓存的那一路不碰网络，只失效直链缓存的话重试还会撞上同一个坏文件
     dropCachedAudio(audioCacheKey(item, qualityId))
+    if (item.type === 'am') dropAppleAudio(audioCacheKey(item, qualityId))
   })
 
   // QQ 音乐听歌上报：设置关闭 / 未登录 / 非 QQ 曲目一律跳过；失败静默

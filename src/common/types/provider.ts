@@ -66,6 +66,14 @@ export interface MediaInfoResult {
   musicItem?: MusicItem
   rejectReason?: string
   encryptionInfo?: EncryptionInfo
+  kind?: 'apple-hls'
+  adamId?: string
+  keyEndpoint?: string
+  codec?: string
+  audioGroup?: string
+  bitrate?: number
+  sampleRate?: number
+  bitDepth?: number
 }
 
 /** 音频流注册结果（见 main/audio/protocol.ts） */

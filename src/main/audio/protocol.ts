@@ -60,11 +60,18 @@ export interface AudioStreamSpec {
    */
   cacheKey?: string
   /**
-   * 需要主进程软解的格式（取值见 @common 的 softDecoder）。'dolby' = MP4 封装的杜比音轨
-   * （QQ 的 E-AC-3、网易的 AC-4，按样本描述自动分辨）：解成 WAV 交给 <audio>，见 audio/dolbyStream.ts。
-   * 缓存里存的仍是解密后的原文件。
+   * 需要主进程软解的格式（取值见 @common 的 softDecoder）。'dolby' = MP4 封装的杜比 / ALAC 音轨
+   * （QQ 的 E-AC-3、网易的 AC-4、Apple Music 的 ALAC，按样本描述自动分辨）：解成 WAV 交给 <audio>。
+   * 缓存里存的仍是解密后的原文件，本地 MP4 也走同一条软解路径。
    */
   decode?: SoftDecoder
+  /**
+   * 自带字节源，给了就完全绕过 url / filePath / cacheKey（取流不受本文件的上游租约管理）。
+   * 目前只有 Apple Music 的 HLS 流式播放用它：虚拟 MP4 的字节按需回源、解密、拼出来。
+   */
+  openBytes?: OpenBytes
+  /** 这一路被注册表淘汰时释放资源（关临时文件、关密钥模板）。 */
+  dispose?: () => void
 }
 
 /** 本地文件扩展名 → Content-Type（<audio> 靠它选解码器） */
@@ -859,8 +866,9 @@ export function installAudioProtocol(): void {
 
     const range = request.headers.get('Range')
 
-    // 本地文件：直接 fs 流式响应，不走网络栈
-    if (spec.filePath) return serveLocalFile(spec.filePath, range, spec.contentType)
+    // 本地明文直接 fs 流式响应；需要软解的本地 MP4 同样进入 decode 分支
+    if (spec.filePath && spec.decode !== 'dolby')
+      return serveLocalFile(spec.filePath, range, spec.contentType)
 
     const slot = openSlot(token, request.signal)
     const ctx: StreamContext = { token, signal: slot.abort.signal }
@@ -1022,11 +1030,21 @@ function skipBytes(src: ReadableStream<Uint8Array>, skip: number): ReadableStrea
  * 整路结束或被取消（slot abort）时子闸一起落下，每条上游租约都还得回去。
  */
 function plainBytesOpener(spec: AudioStreamSpec, ctx: StreamContext): OpenBytes {
+  // 自带字节源（Apple Music 流式）：它自己管上游连接与取消，这里不再包一层
+  if (spec.openBytes) return spec.openBytes
   return async (start) => {
     const sub = new AbortController()
     if (ctx.signal.aborted) sub.abort()
     else ctx.signal.addEventListener('abort', () => sub.abort(), { once: true })
     const subCtx: StreamContext = { token: ctx.token, signal: sub.signal }
+
+    if (spec.filePath) {
+      const size = statSync(spec.filePath).size
+      const body = Readable.toWeb(
+        createReadStream(spec.filePath, { start })
+      ) as ReadableStream<Uint8Array>
+      return { body, size }
+    }
 
     const key = spec.cacheKey
     const record = key ? getAudioCacheRecord(key) : null
@@ -1133,6 +1151,7 @@ export function registerAudioStream(spec: AudioStreamSpec): string {
   while (registry.size >= MAX_ENTRIES) {
     const oldest = registry.keys().next().value
     if (oldest === undefined) break
+    registry.get(oldest)?.dispose?.()
     registry.delete(oldest)
   }
   const token = randomBytes(8).toString('hex')

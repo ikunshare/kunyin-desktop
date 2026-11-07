@@ -1,5 +1,5 @@
 /*
- * LibreMPEG 杜比解码器（AC-3 / E-AC-3 / AC-4）的 wasm 薄封装（坤音自写）。
+ * LibreMPEG 音频解码器（AC-3 / E-AC-3 / AC-4 / ALAC）的 wasm 薄封装（坤音自写）。
  *
  * 一路解码一个 Dec。两种喂法，按编码选：
  *
@@ -10,6 +10,8 @@
  * - AC-4：按包。MP4 里一个样本就是一个完整的 raw_ac4_frame，JS 攒齐一个样本写进缓冲后调
  *   dec_packet。不走 parser：AC-4 的 parser 认的是带 0xAC40 同步字的裸流，MP4 样本没有同步字；
  *   而且一包进一帧出，JS 能按样本对齐时间轴（解码器在第一个 I 帧之前一律不出声，见 dec_packet）。
+ * - ALAC：同样按 MP4 样本整包喂。dec_open 需要帧长、位深、声道数、采样率来构造 alac 初始化数据；
+ *   16/24bit 整型 PCM 与 AC-3 系的 float PCM 都统一追加成交错 float 输出。
  *
  * PCM 追加进交错的 float 输出缓冲；JS 读完 dec_out_ptr()/dec_out_frames() 后调 dec_out_clear。
  */
@@ -21,11 +23,12 @@
 #include <libavutil/channel_layout.h>
 #include <libavutil/log.h>
 #include <libavutil/opt.h>
+#include <libavutil/samplefmt.h>
 
 #define EXPORT(name) __attribute__((export_name(name)))
 
 /* 与 JS 侧（src/main/audio/dolbyDecoder.ts 的 CODEC_IDS）一一对应 */
-enum { DEC_AC3 = 0, DEC_AC4 = 1 };
+enum { DEC_AC3 = 0, DEC_AC4 = 1, DEC_ALAC = 2 };
 
 typedef struct Dec {
     AVCodecContext *ctx;
@@ -62,11 +65,41 @@ static int open_parser(Dec *d)
  * codec 见 DEC_*。stereo=1 时让 AC-3 系解码器按码流里的下混系数自己混成立体声
  * （比事后通用下混准）；AC-4 没有这个选项，IMS（immersive stereo）本来就是两声道。
  */
+static void put_be32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v;
+}
+
+static int config_alac(Dec *d, int frame_length, int bit_depth, int channels, int sample_rate)
+{
+    if (!frame_length) frame_length = 4096;
+    if (!bit_depth) bit_depth = 16;
+    if (!channels) channels = 2;
+    if (!sample_rate) sample_rate = 44100;
+    uint8_t cookie[36] = {0};
+    put_be32(cookie, 36);
+    memcpy(cookie + 4, "alac", 4);
+    put_be32(cookie + 12, (uint32_t)frame_length);
+    cookie[17] = (uint8_t)bit_depth;
+    cookie[18] = 40; cookie[19] = 10; cookie[20] = 14;
+    cookie[21] = (uint8_t)channels;
+    cookie[22] = 0; cookie[23] = 255;
+    put_be32(cookie + 32, (uint32_t)sample_rate);
+    d->ctx->extradata = av_mallocz(36 + AV_INPUT_BUFFER_PADDING_SIZE);
+    if (!d->ctx->extradata) return 0;
+    memcpy(d->ctx->extradata, cookie, 36);
+    d->ctx->extradata_size = 36;
+    return 1;
+}
+
 EXPORT("dec_open")
-Dec *dec_open(int codec, int stereo)
+Dec *dec_open(int codec, int stereo, int frame_length, int bit_depth, int channels, int sample_rate)
 {
     av_log_set_callback(quiet_log);
-    const AVCodec *c = avcodec_find_decoder(codec == DEC_AC4 ? AV_CODEC_ID_AC4 : AV_CODEC_ID_EAC3);
+    const AVCodec *c;
+    if (codec == DEC_AC4) c = avcodec_find_decoder(AV_CODEC_ID_AC4);
+    else if (codec == DEC_ALAC) c = avcodec_find_decoder(AV_CODEC_ID_ALAC);
+    else c = avcodec_find_decoder(AV_CODEC_ID_EAC3);
     if (!c) return NULL;
     Dec *d = calloc(1, sizeof(*d));
     if (!d) return NULL;
@@ -74,10 +107,11 @@ Dec *dec_open(int codec, int stereo)
     d->pkt = av_packet_alloc();
     d->frame = av_frame_alloc();
     if (!d->ctx || !d->pkt || !d->frame || !open_parser(d)) goto fail;
-    if (stereo && codec != DEC_AC4) {
+    if (stereo && codec == DEC_AC3) {
         AVChannelLayout st = AV_CHANNEL_LAYOUT_STEREO;
         if (av_opt_set_chlayout(d->ctx->priv_data, "downmix", &st, 0) < 0) goto fail;
     }
+    if (codec == DEC_ALAC && !config_alac(d, frame_length, bit_depth, channels, sample_rate)) goto fail;
     if (avcodec_open2(d->ctx, c, NULL) < 0) goto fail;
     return d;
 fail:
@@ -121,7 +155,8 @@ static int append_frame(Dec *d)
 {
     AVFrame *f = d->frame;
     int ch = f->ch_layout.nb_channels;
-    if (f->format != AV_SAMPLE_FMT_FLTP || ch <= 0) return -1;
+    if (ch <= 0) return -1;
+    if (f->format != AV_SAMPLE_FMT_FLTP && f->format != AV_SAMPLE_FMT_S16P && f->format != AV_SAMPLE_FMT_S32P) return -1;
     d->channels = ch;
     d->sample_rate = f->sample_rate;
     int need = (d->out_frames + f->nb_samples) * ch;
@@ -134,9 +169,13 @@ static int append_frame(Dec *d)
         d->out_cap = cap;
     }
     float *dst = d->out + (size_t)d->out_frames * ch;
-    for (int i = 0; i < f->nb_samples; i++)
-        for (int c = 0; c < ch; c++)
-            *dst++ = ((const float *)f->extended_data[c])[i];
+    for (int i = 0; i < f->nb_samples; i++) {
+        for (int c = 0; c < ch; c++) {
+            if (f->format == AV_SAMPLE_FMT_FLTP) *dst++ = ((const float *)f->extended_data[c])[i];
+            else if (f->format == AV_SAMPLE_FMT_S16P) *dst++ = ((const int16_t *)f->extended_data[c])[i] / 32768.0f;
+            else *dst++ = ((const int32_t *)f->extended_data[c])[i] / 2147483648.0f;
+        }
+    }
     d->out_frames += f->nb_samples;
     return 0;
 }

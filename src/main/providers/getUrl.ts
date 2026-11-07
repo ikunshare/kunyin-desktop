@@ -32,6 +32,14 @@ interface GetUrlResponse {
   ekey?: string
   _cacheTTL?: number
   message?: string
+  kind?: 'apple-hls'
+  adamId?: string
+  keyEndpoint?: string
+  codec?: string
+  audioGroup?: string
+  bitrate?: number
+  sampleRate?: number
+  bitDepth?: number
 }
 
 export async function fetchMediaUrl(
@@ -78,7 +86,15 @@ export async function fetchMediaUrl(
     isSuccess: true,
     quality: qualityId,
     musicItem: item,
-    encryptionInfo: ekey ? { isEncrypt: true, ekey } : undefined
+    encryptionInfo: ekey ? { isEncrypt: true, ekey } : undefined,
+    kind: resp.kind,
+    adamId: resp.adamId,
+    keyEndpoint: resp.keyEndpoint,
+    codec: resp.codec,
+    audioGroup: resp.audioGroup,
+    bitrate: resp.bitrate,
+    sampleRate: resp.sampleRate,
+    bitDepth: resp.bitDepth
   }
 }
 

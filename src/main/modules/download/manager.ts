@@ -49,6 +49,7 @@ import { getSettings } from '../../store/settings'
 import { resolveMediaInfo } from '../../providers/getUrl'
 import { getProvider } from '../../providers'
 import { decryptAudioFile } from '../../crypto/decryptor'
+import { downloadAppleAudio, embedAppleMetadata } from '../../audio/appleMusic'
 import { fillAudioTags, sniffImageMime } from '../../tag'
 import { drainResponse, requestBuffer, requestRaw } from '../../net/request'
 import { appDataPath } from '../../core/paths'
@@ -88,7 +89,8 @@ function defaultDownloadDir(): string {
   return join(app.getPath('music'), 'KUNYIN')
 }
 
-function extFor(qualityId: string): string {
+function extFor(qualityId: string, source: MusicSource): string {
+  if (source === 'am') return qualityId === 'dolby' || qualityId === 'atmos' ? '.mp4' : '.m4a'
   if (MP3_QUALITY_IDS.has(qualityId)) return '.mp3'
   return MP4_QUALITY_IDS.has(qualityId) ? '.mp4' : '.flac'
 }
@@ -122,6 +124,21 @@ function buildFileName(task: DownloadTask): string {
     return `${String(trackNo).padStart(2, '0')}.${base}`
   }
   return base
+}
+
+function appleMetadata(task: DownloadTask): Record<string, string> {
+  const metadata: Record<string, string> = {
+    title: task.title,
+    artist: task.artist,
+    album: task.album
+  }
+  const track = task.disc?.trackNumber ?? task.trackNumber
+  if (track > 0) metadata.track = String(track)
+  if (task.disc) {
+    metadata.disc = String(task.disc.no)
+    if (task.disc.name) metadata.discName = task.disc.name
+  }
+  return metadata
 }
 
 /** 嗅探音频真实容器扩展名（QQ mflac 解密后可能是 Ogg），无法识别返回 null。 */
@@ -463,7 +480,7 @@ async function executeDownload(taskKey: string): Promise<void> {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
     let baseName = buildFileName(task)
-    const ext = extFor(actualQuality)
+    const ext = extFor(actualQuality, song.type)
     let fileName = `${baseName}${ext}`
     let finalPath = join(dir, fileName)
 
@@ -499,10 +516,46 @@ async function executeDownload(taskKey: string): Promise<void> {
     }
     if (existsSync(tmpPath)) unlinkSync(tmpPath)
 
-    // 流式下载到 .tmp（支持刷新一次播放链接重试）
-    await downloadToFile(taskKey, info.playUrl, tmpPath, totalBytes, controller.signal, () =>
-      resolveMediaInfo(song, actualQuality)
-    )
+    if (info.kind === 'apple-hls') {
+      let downloaded = 0
+      let lastTick = Date.now()
+      let lastBytes = 0
+      await downloadAppleAudio(
+        {
+          url: info.playUrl,
+          adamId: info.adamId ?? String(song.id),
+          keyEndpoint: info.keyEndpoint ?? '/music/key'
+        },
+        tmpPath,
+        {
+          signal: controller.signal,
+          metadata: appleMetadata(task),
+          onProgress: (received, total) => {
+            downloaded = received
+            const now = Date.now()
+            if (now - lastTick < PROGRESS_INTERVAL_MS && (!total || received < total)) return
+            if (total > 0) totalBytes = total
+            patchTask(taskKey, {
+              progress: total > 0 ? Math.min(0.99, received / total) : 0,
+              speedBytesPerSec: Math.round(
+                ((received - lastBytes) * 1000) / Math.max(1, now - lastTick)
+              ),
+              downloadedBytes: received,
+              totalBytes
+            })
+            notify()
+            lastTick = now
+            lastBytes = received
+          }
+        }
+      )
+      patchTask(taskKey, { progress: 1, downloadedBytes: downloaded, speedBytesPerSec: 0 })
+    } else {
+      // 流式下载到 .tmp（支持刷新一次播放链接重试）
+      await downloadToFile(taskKey, info.playUrl, tmpPath, totalBytes, controller.signal, () =>
+        resolveMediaInfo(song, actualQuality)
+      )
+    }
 
     // .tmp → 最终文件
     if (existsSync(finalPath)) unlinkSync(finalPath)
@@ -521,9 +574,12 @@ async function executeDownload(taskKey: string): Promise<void> {
       }
     }
 
-    // 采样率/位深标记（仅无损）
+    // 采样率/位深标记（仅无损；Apple 取 HLS 选流结果，不必再读整个文件）
     if (s.appendQualityTag) {
-      const tag = flacQualityTag(finalPath)
+      const tag =
+        song.type === 'am' && info.bitDepth && info.sampleRate
+          ? `[${info.bitDepth}Bit-${(info.sampleRate / 1000).toFixed(1).replace(/\.0$/, '')}kHz]`
+          : flacQualityTag(finalPath)
       if (tag && !baseName.endsWith(tag)) {
         const curExt = finalPath.slice(finalPath.lastIndexOf('.'))
         const renamed = join(dir, `${baseName} ${tag}${curExt}`)
@@ -590,6 +646,17 @@ async function executeDownload(taskKey: string): Promise<void> {
       })
     } catch (e) {
       log.warn('标签写入失败（非致命）', e)
+    }
+    if (song.type === 'am' && (s.embedCover || embedLyricText)) {
+      try {
+        await embedAppleMetadata(finalPath, {
+          metadata: appleMetadata(task),
+          lyrics: embedLyricText || undefined,
+          cover: s.embedCover && coverBytes ? coverBytes : undefined
+        })
+      } catch (e) {
+        log.warn('Apple Music 标签写入失败（非致命）', e)
+      }
     }
 
     // 保存 .lrc 歌词文件（按设置的编码 utf8/gbk 写出）

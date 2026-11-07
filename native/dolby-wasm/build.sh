@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把 LibreMPEG 的杜比解码器（AC-3 / E-AC-3 / AC-4）+ shim.c 编成一个独立的 wasm（wasm32-wasip1 reactor）。
+# 把 LibreMPEG 的音频解码器（AC-3 / E-AC-3 / AC-4 / ALAC）+ shim.c 编成一个独立的 wasm（wasm32-wasip1 reactor）。
 #
 # 用 LibreMPEG（FFmpeg 的分支，https://github.com/librempeg/librempeg）而不是 FFmpeg：
 # 网易的杜比全景声是 AC-4，只有它带 AC-4 解码器。AC-3 系两边同源，行为一致。
@@ -10,7 +10,7 @@
 # 用法：build.sh <缓存目录> <输出 .wasm 路径>
 #   缓存目录里需有 librempeg-$LIBREMPEG_COMMIT.tar.gz 与 wasi-sdk-$WASI_SDK-$WASI_ARCH.tar.gz
 #
-# 配置只留三个解码器 + ac3 parser。LibreMPEG 整体按 GPLv3+ 发布（见其 LICENSE.md，AC-4 解码器
+# 配置只留四个解码器 + ac3 parser。LibreMPEG 整体按 GPLv3+ 发布（见其 LICENSE.md，AC-4 解码器
 # 文件头就是 GPLv3），所以显式 --enable-gpl --enable-version3，让 configure 报出的许可证与实际一致；
 # 这两个开关在这份精简配置里不会多带进任何代码。
 #
@@ -61,7 +61,7 @@ cd "$BUILD"
   --disable-asm --disable-inline-asm --disable-runtime-cpudetect \
   --disable-avdevice --disable-avformat --disable-swscale --disable-swresample \
   --disable-debug --disable-faan --enable-small \
-  --enable-decoder=ac3,eac3,ac4 --enable-parser=ac3 >configure.log
+  --enable-decoder=ac3,eac3,ac4,alac --enable-parser=ac3 >configure.log
 
 grep '^License' configure.log
 

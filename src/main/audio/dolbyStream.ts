@@ -1,5 +1,6 @@
 /**
- * 杜比软解流：MP4 封装的 AC-3 / E-AC-3（QQ 杜比全景声）、AC-4（网易杜比全景声）→ 立体声 float32 WAV 字节流。
+ * 音频软解流：MP4 封装的 AC-3 / E-AC-3（QQ 杜比全景声）、AC-4（网易杜比全景声）、
+ * ALAC（Apple Music 无损）→ 立体声 float32 WAV 字节流。
  *
  * Chromium 解不了杜比，而播放链路的一切（音效图、频谱、媒体会话、倍速、seek）都挂在 <audio> 上，
  * 所以不另起一套播放器，而是在 kunyin:// 里把它变成 <audio> 认得的格式：WAV 的「字节 ↔ 时间」
@@ -260,8 +261,10 @@ function toStereo(chunk: PcmChunk): Float32Array {
  * - AC-4：只能从 I 帧（stss 里的同步样本）起解，之前的帧解码器一律不出声；而 I 帧只重置码流状态，
  *   变换重叠和 QMF 滤波器还要靠前面的帧——从 I 帧起解，第 1 帧误差 0.3、第 2 帧 5e-2、第 3 帧起
  *   逐样本一致（网易实测）。所以退到目标之前至少 2 帧处最近的那个 I 帧。
+ * - ALAC：样本可独立解码，不需要预热。
  */
 function warmupStart(track: Mp4AudioTrack, target: number): number {
+  if (track.codec === 'alac') return target
   if (track.codec === 'ac-4') return syncAtOrBefore(track, Math.max(0, target - 2))
   return Math.max(0, target - 1)
 }
@@ -294,11 +297,16 @@ export interface WavStreamOptions {
 export function decodeToWav(opts: WavStreamOptions): ReadableStream<Uint8Array> {
   const { track, layout, cursor } = opts
   const ac4 = track.codec === 'ac-4'
+  const packetMode = ac4 || track.codec === 'alac'
   const decoder: DolbyDecoder | null = (opts.createDecoder ?? createDolbyDecoder)({
-    codec: ac4 ? 'ac4' : 'ac3',
-    stereo: true
+    codec: ac4 ? 'ac4' : track.codec === 'alac' ? 'alac' : 'ac3',
+    stereo: true,
+    frameLength: track.alac?.frameLength,
+    bitDepth: track.alac?.bitDepth,
+    channels: track.alac?.channels,
+    sampleRate: track.sampleRate
   })
-  if (!decoder) throw new Error('杜比解码器不可用')
+  if (!decoder) throw new Error('音频解码器不可用')
 
   let remaining = opts.end - opts.start + 1
   let header: Uint8Array | null =
@@ -394,7 +402,7 @@ export function decodeToWav(opts: WavStreamOptions): ReadableStream<Uint8Array> 
       if (o >= q) break
       const s = Math.max(o, p)
       const t = Math.min(e, q)
-      if (ac4) {
+      if (packetMode) {
         if (s === o && t === e) decodePacket(sample, chunk.subarray(o - p, e - p))
         else if (s < t) {
           partial ??= new Uint8Array(e - o)

@@ -146,7 +146,8 @@ function decodeKrcContent(content: string): Lyric {
     roma: r.roma,
     char: r.char,
     chroma: r.chroma,
-    phonetic: r.phonetic
+    phonetic: r.phonetic,
+    ttml: ''
   }
 }
 

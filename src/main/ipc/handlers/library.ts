@@ -11,6 +11,7 @@ import {
 } from '@common'
 import { handle, sendToRenderer } from '../helpers'
 import * as library from '../../store/library'
+import { getSettings } from '../../store/settings'
 import { importRemotePlaylist, refreshRemotePlaylist } from '../../modules/playlist-refresh'
 import { parseLocalSong, pickLocalSongs } from '../../modules/local-music'
 
@@ -93,14 +94,16 @@ export function registerLibraryHandlers(): void {
       let added = 0
       let skipped = 0
       const before = new Set(library.queryPlaylistSongs(playlistId).map((m) => `${m.id}_${m.type}`))
-      for (const p of paths) {
+      const position = getSettings().list.addToPlaylistPosition
+      // 头插时倒着放，选中的第一首才落在最上面（每插一首其余都会后移）
+      for (const p of position === 'top' ? [...paths].reverse() : paths) {
         try {
           const item = await parseLocalSong(p)
           if (before.has(`${item.id}_${item.type}`)) {
             skipped++
             continue
           }
-          library.addToPlaylist(playlistId, item)
+          library.addToPlaylist(playlistId, item, position)
           added++
         } catch {
           skipped++

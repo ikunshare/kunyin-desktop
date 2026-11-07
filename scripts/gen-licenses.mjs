@@ -135,13 +135,26 @@ const EMBEDDED = [
     licensePath: 'COPYING.GPLv3',
     ref: LIBREMPEG_COMMIT,
     license: 'GPL-3.0-or-later',
-    usage: '杜比软解：AC-3 / E-AC-3 / AC-4 解码器（编译进 wasm）'
+    usage: '音频软解：AC-3 / E-AC-3 / AC-4 / ALAC 解码器（编译进 wasm）'
+  },
+  {
+    name: 'Temari',
+    repo: 'WorldObservationLog/Temari',
+    usage: 'Apple Music FairPlay 样本解密（编译进 wasm）'
+  },
+  {
+    name: 'FFmpeg (ffmpeg-static)',
+    url: 'https://ffmpeg.org/',
+    repo: 'FFmpeg/FFmpeg',
+    licensePath: 'LICENSE.md',
+    license: 'GPL-3.0-or-later',
+    usage: 'Apple Music 音频容器无损重封装、封面与歌词写入'
   },
   {
     name: 'wasi-libc',
     repo: 'WebAssembly/wasi-libc',
     license: 'Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT',
-    usage: '杜比解码 wasm 静态链接的 C 库'
+    usage: '音频解码 wasm 静态链接的 C 库'
   },
   {
     name: 'Rust',
@@ -149,7 +162,7 @@ const EMBEDDED = [
     repo: 'rust-lang/rust',
     licensePath: 'LICENSE-MIT',
     license: 'MIT OR Apache-2.0',
-    usage: 'QMC 解密 wasm 链接的 core 库'
+    usage: 'QMC 与 Temari 解密 wasm 链接的 core 库'
   },
   {
     name: 'netease-report-listen-song',

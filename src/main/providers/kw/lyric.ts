@@ -60,7 +60,7 @@ async function fetchKwLyric(id: number, withRoma: boolean): Promise<Lyric | null
   if (!text) return null
   const { lrc, char, trans, roma, chroma } = parseKuwo(text)
   if (!lrc && !char) return null
-  return { lrc, trans, roma, char, chroma, phonetic: '' }
+  return { lrc, trans, roma, char, chroma, phonetic: '', ttml: '' }
 }
 
 export async function getKwLyric(id: number): Promise<Lyric> {
@@ -86,6 +86,7 @@ export async function getKwLyric(id: number): Promise<Lyric> {
     trans: base.trans || romaVer.trans,
     roma: romaVer.roma,
     chroma: romaVer.chroma,
-    phonetic: ''
+    phonetic: '',
+    ttml: ''
   }
 }

@@ -11,6 +11,7 @@ import {
   getCacheStats
 } from '../../cache/manager'
 import { applyAudioCacheLimit } from '../../cache/audioCache'
+import { applyAppleAudioLimit } from '../../cache/appleCache'
 
 export function registerSettingsHandlers(): void {
   handle(IpcChannels.SETTINGS_GET, () => getSettings())
@@ -21,7 +22,10 @@ export function registerSettingsHandlers(): void {
     appEvent.emit('settings-updated', next)
     if (patch.network?.proxy) void applyProxy()
     // 上限调小/关闭后立刻收敛，别等下一次落盘时才淘汰
-    if (patch.player?.audioCacheBytes !== undefined) applyAudioCacheLimit()
+    if (patch.player?.audioCacheBytes !== undefined) {
+      applyAudioCacheLimit()
+      applyAppleAudioLimit()
+    }
     return next
   })
   handle(IpcChannels.SETTINGS_PROXY_STATUS, () => getProxyStatus())

@@ -1,24 +1,30 @@
 /**
- * MP4（ISO BMFF）里杜比音轨（AC-3 / E-AC-3 / AC-4）的样本表——只为杜比软解（audio/dolbyStream.ts）
- * 服务，够用即止。
+ * MP4（ISO BMFF）里杜比 / ALAC 音轨（AC-3 / E-AC-3 / AC-4 / ALAC）的样本表——只为音频软解
+ * （audio/dolbyStream.ts）服务，够用即止。
  *
- * 两家的杜比全景声实测都是 faststart 布局（ftyp → moov → mdat）、单条音轨：
+ * 常规杜比文件是 faststart 布局（ftyp → moov → mdat）、单条音轨：
  * - QQ（D001*.mp4 / 加密版 D0M1*.mmp4）：ec-3，每样本 1536 帧，定长 1792 字节（448kbps），没有 stss；
- * - 网易：ac-4（IMS），每样本 2048 帧、不定长（256kbps），stss 标出每 24 帧一个 I 帧。
+ * - 网易：ac-4（IMS），每样本 2048 帧、不定长（256kbps），stss 标出每 24 帧一个 I 帧；
+ * - Apple Music：ALAC，样本描述里的 alac atom 提供解码初始化参数。
  * 这里仍按规范完整展开 stsz / stsc / stco(co64) / stts / stss，不依赖「定长、连续」这些巧合；
  * 只有分片 MP4（moof）不支持。
  *
  * 纯函数、不 import electron，tools/dolbyStream.test.mjs 直接跑。
  */
 
-export type DolbySampleEntry = 'ac-3' | 'ec-3' | 'ac-4'
+export type DolbySampleEntry = 'ac-3' | 'ec-3' | 'ac-4' | 'alac'
 
-const DOLBY_ENTRIES: readonly string[] = ['ac-3', 'ec-3', 'ac-4']
+const DOLBY_ENTRIES: readonly string[] = ['ac-3', 'ec-3', 'ac-4', 'alac']
 
 export interface Mp4AudioTrack {
   codec: DolbySampleEntry
   /** 输出采样率（取样本描述里的，mdhd 的 timescale 不一定等于它） */
   sampleRate: number
+  alac?: {
+    frameLength: number
+    bitDepth: number
+    channels: number
+  }
   /** 各样本在文件中的起始偏移 */
   offsets: Float64Array
   sizes: Uint32Array
@@ -77,7 +83,10 @@ function need(buf: Uint8Array, parent: Box, type: string): Box {
 }
 
 /** 音轨的编码与采样率：stsd 第一个样本描述（AudioSampleEntry） */
-function sampleEntry(buf: Uint8Array, stsd: Box): { codec: string; sampleRate: number } | null {
+function sampleEntry(
+  buf: Uint8Array,
+  stsd: Box
+): { codec: string; sampleRate: number; alac?: Mp4AudioTrack['alac'] } | null {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
   // FullBox(4) + entry_count(4)，随后是第一个样本描述盒
   const first = boxes(buf, stsd.start + 8, stsd.end).next()
@@ -86,7 +95,19 @@ function sampleEntry(buf: Uint8Array, stsd: Box): { codec: string; sampleRate: n
   // SampleEntry 6 保留 + 2 data_ref_index，AudioSampleEntry 8 保留 + 声道 2 + 位深 2 + 4 + 采样率 16.16
   if (entry.end - entry.start < 28) return null
   const sampleRate = dv.getUint32(entry.start + 24) >>> 16
-  return { codec: entry.type, sampleRate }
+  let alac: Mp4AudioTrack['alac'] | undefined
+  if (entry.type === 'alac') {
+    for (const cookie of boxes(buf, entry.start + 28, entry.end)) {
+      if (cookie.type !== 'alac' || cookie.end - cookie.start < 24) continue
+      alac = {
+        frameLength: dv.getUint32(cookie.start + 4),
+        bitDepth: buf[cookie.start + 9],
+        channels: buf[cookie.start + 13]
+      }
+      break
+    }
+  }
+  return { codec: entry.type, sampleRate, ...(alac ? { alac } : {}) }
 }
 
 /**
@@ -186,6 +207,7 @@ export function parseMoov(moov: Uint8Array): Mp4AudioTrack {
     return {
       codec: entry.codec as DolbySampleEntry,
       sampleRate,
+      ...(entry.alac ? { alac: entry.alac } : {}),
       offsets,
       sizes,
       starts,

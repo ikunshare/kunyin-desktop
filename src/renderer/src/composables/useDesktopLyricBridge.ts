@@ -31,8 +31,9 @@ export function useDesktopLyricBridge(): void {
   function markContentChanged(): void {
     const c = current.value
     pendingContent = {
-      hasLyric: !!(cached && (cached.char || cached.lrc)),
+      hasLyric: !!(cached && (cached.ttml || cached.char || cached.lrc)),
       lyric: cached ? cached.char || cached.lrc : '',
+      ttml: cached?.ttml ?? '',
       translate: cached?.trans ?? '',
       roman: (cached?.chroma || cached?.roma) ?? '',
       title: c ? `${c.title} - ${c.artist}` : '',

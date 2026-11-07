@@ -72,17 +72,23 @@ async function apply(state: DesktopLyricState): Promise<void> {
   // 指纹也因此从每帧一次（12.5 次/秒拼接整份 QRC）降到每首歌一次。
   if (state.lyric !== undefined) {
     title.value = state.title ?? ''
-    const key = `${state.lyric}\0${state.translate}\0${state.roman}\0${state.musicName ?? ''}\0${state.musicSinger?.join('/') ?? ''}`
+    const key = `${state.ttml}\0${state.lyric}\0${state.translate}\0${state.roman}\0${state.musicName ?? ''}\0${state.musicSinger?.join('/') ?? ''}`
     if (key !== lastLyricKey) {
       lastLyricKey = key
-      if (state.hasLyric && state.lyric) {
+      if (state.hasLyric && (state.lyric || state.ttml)) {
         hasLyric.value = true
         await nextTick()
         // 只有制作人信息、没有唱词（纯器乐曲）时返回 false：引擎已置空，回到占位态
-        hasLyric.value = lyric.loadLyric(state.lyric, state.translate, state.roman, {
-          name: state.musicName,
-          singer: state.musicSinger
-        })
+        hasLyric.value = lyric.loadLyric(
+          state.lyric,
+          state.translate,
+          state.roman,
+          {
+            name: state.musicName,
+            singer: state.musicSinger
+          },
+          state.ttml
+        )
         if (hasLyric.value) {
           await nextTick()
           requestAnimationFrame(() => lyric.relayout())

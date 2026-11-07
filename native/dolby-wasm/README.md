@@ -1,12 +1,16 @@
 # dolby-wasm
 
-LibreMPEG（FFmpeg 的分支，<https://github.com/librempeg/librempeg>）的杜比解码器编成的 wasm，
-给主进程做杜比码流软解（Chromium 不带杜比解码器）：
+LibreMPEG（FFmpeg 的分支，<https://github.com/librempeg/librempeg>）的音频解码器编成的 wasm，
+给主进程做杜比 / ALAC 码流软解（Chromium 不带这些解码器）：
 
-| 解码器       | 用在哪                          | 喂法                        |
-| ------------ | ------------------------------- | --------------------------- |
-| `ac3`/`eac3` | QQ 杜比全景声（E-AC-3 JOC 5.1） | 任意切分的字节流，过 parser |
-| `ac4`        | 网易杜比全景声（AC-4 IMS）      | 一次一个完整帧（MP4 样本）  |
+| 解码器       | 用在哪                                    | 喂法                        |
+| ------------ | ----------------------------------------- | --------------------------- |
+| `ac3`/`eac3` | QQ 杜比全景声（E-AC-3 JOC 5.1）           | 任意切分的字节流，过 parser |
+| `ac4`        | 网易杜比全景声（AC-4 IMS）                | 一次一个完整帧（MP4 样本）  |
+| `alac`       | Apple Music 无损 / 高解析无损（16/24bit） | 一次一个完整 MP4 样本       |
+
+ALAC 打开解码器前会从样本描述里的 `alac` atom 读取帧长、位深、声道数和采样率，
+16/24bit 整型 PCM 与杜比一样统一成交错 float WAV。
 
 用 LibreMPEG 而不用 FFmpeg，是因为只有它带 AC-4 解码器。AC-3 系两边同源，换过来之后
 `tools/dolbyDecoder.test.mjs` 原样通过。提交钉的是 Zencok/mpv-libre-runtime 当时 Release 用的那个

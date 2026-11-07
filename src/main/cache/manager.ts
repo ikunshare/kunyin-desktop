@@ -17,6 +17,7 @@ import type { CacheStats } from '@common'
 import { clearMediaInfoCache, countCachedMediaInfo } from './urlCache'
 import { clearLyricCache, countCachedLyric } from './lyricCache'
 import { audioCacheStats, clearAudioCache } from './audioCache'
+import { appleAudioStats, clearAppleAudio } from './appleCache'
 import { LEGACY_DATA_CACHE_DIR } from '../core/paths'
 
 /** Chromium 落盘缓存的目录名（相对 userData） */
@@ -73,12 +74,13 @@ export async function getCacheStats(): Promise<CacheStats> {
   const userData = app.getPath('userData')
   const sizes = await Promise.all(SIZE_DIRS.map((d) => dirSize(join(userData, d))))
   const audio = audioCacheStats()
+  const apple = appleAudioStats()
   return {
     resourceBytes: sizes.reduce((a, b) => a + b, 0),
     urlCount: countCachedMediaInfo(),
     lyricCount: countCachedLyric(),
-    audioBytes: audio.bytes,
-    audioCount: audio.count
+    audioBytes: audio.bytes + apple.bytes,
+    audioCount: audio.count + apple.count
   }
 }
 
@@ -103,7 +105,7 @@ export function clearLyricCacheAll(): void {
   clearLyricCache()
 }
 
-/** 清理音频缓存（整个 data/cache/audio 目录） */
+/** 清理音频缓存（分块缓存与 Apple 处理后音频） */
 export async function clearAudioCacheAll(): Promise<void> {
-  await clearAudioCache()
+  await Promise.all([clearAudioCache(), clearAppleAudio()])
 }

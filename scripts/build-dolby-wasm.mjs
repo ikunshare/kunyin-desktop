@@ -1,5 +1,5 @@
 /**
- * 编译 native/dolby-wasm（LibreMPEG 的 AC-3 / E-AC-3 / AC-4 解码器）并把产物内联成 TS 模块（base64）。
+ * 编译 native/dolby-wasm（LibreMPEG 的 AC-3 / E-AC-3 / AC-4 / ALAC 解码器）并把产物内联成 TS 模块（base64）。
  *
  * 跟 build-wasm.mjs 同一个思路：产物 src/main/audio/dolbyWasmBinary.ts **已提交进仓库**，
  * `npm run build` 和 CI 都不需要这套工具链。只有升级 LibreMPEG 或改了 shim.c 才要跑一次。

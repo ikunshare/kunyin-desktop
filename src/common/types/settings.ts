@@ -83,6 +83,11 @@ export interface AppSettings {
   list: {
     /** 显示列表操作按钮（歌曲行 hover 的试听/添加/下载） */
     showOperationButtons: boolean
+    /**
+     * 往歌单/收藏里添加歌曲时插在哪（对应 LX 的「添加歌曲到列表时的位置」）。
+     * 只管用户主动「添加到列表」的动作；试听列表是播放时自动累积的，仍按播放顺序追加。
+     */
+    addToPlaylistPosition: 'top' | 'bottom'
     /** 歌手页专辑用列表视图（false=网格；对应 Android albumListMode） */
     albumListMode: boolean
     /** 歌手页专辑按发行时间升序排列（false=新→旧，true=旧→新） */
@@ -344,6 +349,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   list: {
     showOperationButtons: true,
+    // 默认追到末尾，与旧版本行为一致
+    addToPlaylistPosition: 'bottom',
     albumListMode: false,
     albumSortAsc: false
   },

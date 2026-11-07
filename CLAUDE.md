@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-坤音（KunYin）桌面端：Electron + Vue 3 + TypeScript 的多音源聚合音乐播放器，是 Android 版坤音（Kotlin/Compose，`com.ikunshare.sound`）的桌面重写。聚合六大在线音源（`wy` 网易云 / `qq` / `qqc` / `kg` 酷狗 / `kw` 酷我 / `joox`），提供统一搜索、播放、歌单、下载、歌词、平台登录、LX 同步体验。代码纯 AI 生成。
+坤音（KunYin）桌面端：Electron + Vue 3 + TypeScript 的多音源聚合音乐播放器，是 Android 版坤音（Kotlin/Compose，`com.ikunshare.sound`）的桌面重写。聚合七大在线音源（`wy` 网易云 / `qq` / `qqc` / `kg` 酷狗 / `kw` 酷我 / `joox` / `am` Apple Music），提供统一搜索、播放、歌单、下载、歌词、平台登录、LX 同步体验。代码纯 AI 生成。
 
 构建链：electron-vite（开发/构建）+ electron-builder（打包），包管理器 npm。
 
@@ -21,6 +21,8 @@ npm run lint         # eslint --cache .
 npm run format       # prettier --write .
 npm test             # node --test tools/*.test.mjs（带 ts-resolve 钩子，可直接 import 仓库 .ts）
 npm run build:wasm   # 重编 native/qmc-wasm 并回写 src/main/crypto/qmcWasmBinary.ts（需 Rust）
+npm run build:dolby-wasm # 重编 AC-3 / E-AC-3 / AC-4 / ALAC 音频解码 WASM
+npm run build:temari-wasm # 重编 Temari FairPlay 解密 WASM 并回写 src/main/audio/temariWasmBinary.ts
 npm run gen:licenses # 重新生成「关于」页的开源许可列表（要联网，gh 已登录或设 GITHUB_TOKEN）
 
 npm run build:unpack # 构建 + 解包目录（不产安装包）
@@ -62,7 +64,7 @@ Electron 三进程，源码分三棵 + 一个共享层：
 `src/main/providers/` 是音源抽象层：
 
 - `base.ts` 的 `BaseProvider` 抽象类定义全接口（search / 专辑歌手 / 歌单 / MV / getLyric / resolveMediaInfo / 评论等），各源在 `providers/<source>/` 实现，默认方法返回空结果。
-- `index.ts` 的 `registry` 注册六大源，`getProvider(source)` 按源取实例；登录态由 `src/main/auth/credentials.ts` 启动时读 cookie 注入 `provider.credentials`。
+- `index.ts` 的 `registry` 注册七大源，`getProvider(source)` 按源取实例；登录态由 `src/main/auth/credentials.ts` 启动时读 cookie 注入 `provider.credentials`。Apple Music 不需要用户登录，账号能力由服务端 wrapper-lite 提供。
 
 **移植铁律**：音源实现是 Android Kotlin/C++ 的**逐字移植**，禁止凭记忆或网络试错（签名/加密/设备指纹风控极敏感）。改某源前先读 Android 版坤音（<https://github.com/ikunshare/kunyin>）对应 Kotlin 源。非显然坑已散落在 `src/main/providers/` 与 `src/main/crypto/` 的注释里，例如：QQ 搜索必须走签名 `musics.fcg`（不是 `musicu.fcg`）；QRC 是改版 DES（`crypto/qqDes.ts`）；移植 C 位运算加密务必逐处 `>>>0` 保证 uint32 回绕（否则 mflac 解密输出=输入）。
 
@@ -103,20 +105,22 @@ QMC2（mflac/mgg）的两条**逐字节热循环**在 Rust 里：`native/qmc-was
 - 移植坑（`lib.rs` 注释里有对应说明）：`rc4_segment_key` 是**浮点**除法，换整数除法结果就变了；它的结果在 JS 侧分别经历 `% n` 与 `& 0x1ff`（ToInt32 截断），Rust 侧要按同样顺序复现；`rc4_hash` 是 uint32 乘法回绕（`wrapping_mul`）。
 - 解密器状态是 wasm 的模块级 static，所以**每个解密器一个 `WebAssembly.Instance`**（单实例线性内存 192KB，实例化约 30µs），并发的播放流与下载任务不会互相踩。
 
-### 杜比软解（AC-3 / E-AC-3 / AC-4 → WAV）
+### 音频软解（AC-3 / E-AC-3 / AC-4 / ALAC → WAV）
 
-Chromium 不带杜比解码器，`native/dolby-wasm` 把 **LibreMPEG**（FFmpeg 的分支，只有它有 AC-4 解码器）的
-ac3/eac3/ac4 解码器 + `shim.c` 编成 wasm，JS 封装是 `src/main/audio/dolbyDecoder.ts`。两家的杜比是两种东西：
+Chromium 不带杜比 / ALAC 解码器，`native/dolby-wasm` 把 **LibreMPEG**（FFmpeg 的分支，只有它有 AC-4 解码器）的
+ac3/eac3/ac4/alac 解码器 + `shim.c` 编成 wasm，JS 封装是 `src/main/audio/dolbyDecoder.ts`。两家的杜比是两种东西：
 
 - **网易：AC-4 IMS**（immersive stereo，256kbps）。Dolby 在编码端就做好了两声道的耳机双耳渲染，
   解出来就是空间效果——用户 A/B 过，要的就是这个。按包喂（一个 MP4 样本 = 一帧），**第一个 I 帧之前不出声**。
 - **QQ：E-AC-3 JOC 5.1**（448kbps，`D0M1*.mmp4` 需 QMC 解密）。JOC 对象 / 高度信息 LibreMPEG 与 FFmpeg
   都不解，只能解出 5.1 床声道，再由解码器按码流系数（`stereo`）下混，听感接近普通立体声，而且下混后只有
   ~-25 LUFS，比普通 FLAC 低 15dB 左右。按字节流喂，过 ac3 parser。
+- **Apple Music：ALAC**。按 MP4 样本整包喂；`audio/mp4.ts` 从 `alac` atom 读帧长、位深、声道数和采样率，
+  `shim.c` 据此构造解码器初始化数据，16/24bit 整型 PCM 统一转 float。ALAC 每帧可独立起解，seek 不需要预热。
 
 播放链路：`PLAYER_STREAM` 按 `softDecoder()` 给流打上 `decode: 'dolby'`，`kunyin://` 转去 `serveDolby`
-（`audio/protocol.ts`）。两家实测都是 faststart 的 MP4。`audio/mp4.ts` 从 moov 解出样本表（含 `stss`
-I 帧表，按样本描述分辨 ac-3/ec-3/ac-4），`audio/dolbyStream.ts` 把 `<audio>` 的 Range 换算成
+（`audio/protocol.ts`）。实测都是 faststart 的 MP4。`audio/mp4.ts` 从 moov 解出样本表（含 `stss`
+I 帧表，按样本描述分辨 ac-3/ec-3/ac-4/alac），`audio/dolbyStream.ts` 把 `<audio>` 的 Range 换算成
 PCM 帧 → MP4 样本 → 原文件偏移，只回源那一段，解成**立体声 float32 WAV** 吐出去——
 WAV 的字节与时间是线性的，seek 就是普通的 Range（Electron 44 实测正常，且不会去探文件尾）。
 音效图、频谱、倍速、媒体会话全都照常挂在 `<audio>` 上，不另起播放器。
@@ -140,6 +144,14 @@ WAV 的字节与时间是线性的，seek 就是普通的 Range（Electron 44 �
   回归在 `tools/dolbyDecoder.test.mjs`（AC-3 系解码器）与 `tools/dolbyStream.test.mjs`（MP4 → WAV、Range、
   取消，以及 AC-4 的 I 帧 / 预热 / 坏帧对齐）。**AC-4 没有开源编码器、做不出夹具**，测试里现场拼 MP4 +
   假解码器；升级 LibreMPEG 后要拿真实网易文件对照一次原生 ffmpeg 的输出。
+
+## Apple Music / FairPlay
+
+- `providers/am` 调自建后端 `/music/search|info|album|artist|lyric`，支持单曲/专辑/歌手搜索与详情；歌单暂未接入。`BACKEND_PLATFORM.am = apple`，播放统一走 `/app/getUrl`，卡密只从 `currentAuthst()` 注入，不能写进日志。
+- 播放返回 `kind=apple-hls`、`adamId`、`keyEndpoint`、codec/采样率/位深，不是普通直链。`PLAYER_STREAM` 对 `am` 先查 `cache/appleCache`；未命中时 `audio/appleMusic.ts` 拉取 Media Playlist 和完整分片文件，`audio/fairplayMp4.ts` 解析 `cbcs`、按 `EXT-X-KEY` 获取 Temari 模板、解密样本、移除加密盒并修正 `trun`，再用 FFmpeg 无损重封装成普通 `.m4a`。**首次播放需要完整下载并处理该曲，命中处理后缓存才不碰后端。**
+- Temari 来自 `WorldObservationLog/Temari`，`npm run build:temari-wasm` 把指定提交编为 WASM 并内联 `audio/temariWasmBinary.ts`（提交进仓库，正常构建无需 Rust）。`audio/temari.ts` 每个密钥模板一个实例，临时内存在样本间复用；`TEMARI_WASM_PATH` 可复用现成产物，避开工具链下载。
+- FFmpeg 只做容器重封装与标签/封面/歌词写入，**下载时不重编码**：AAC/ALAC 都是 `.m4a`，杜比 `.mp4`。依赖 `ffmpeg-static`，打包经 `asarUnpack` 释放，`audio/ffmpeg.ts` 在 packaged 下把 `app.asar` 路径替成 `app.asar.unpacked`。ALAC 播放不经过 FFmpeg，而是走 `serveDolby` 的本地 MP4 → float WAV 软解，支持 Range seek、音效与频谱；AAC 直接播重封装后的文件。
+- `cache/appleCache.ts` 按 `am_id_quality` 存处理后的音频，与 `player.audioCacheBytes` 共用上限；用量统计、清理和播放失败失效都要同时覆盖它与原分块缓存。
 
 ## 音效（EQ / 混响 / 3D 环绕 / 升降调 / 最大声道输出）
 
@@ -251,7 +263,7 @@ lx-music-desktop：`<audio> → source → analyser → 10 段 EQ →（变调 w
 `RUNTIME` / `EMBEDDED` 里手工登记。
 
 **用户定的规矩：查不到在线 LICENSE 的项目不显示**（「那是这个项目的事」）。脚本逐个在线核实，核实不了的只记进
-`OSS_EXCLUDED`（目前是 fft.js、lazy-val、@tokenizer/token，它们的仓库里确实没有许可证文件）。装 / 删依赖或新增
+`OSS_EXCLUDED`（以生成日志为准）。装 / 删依赖或新增
 内嵌代码后重跑并提交产物；`tools/ossLicenses.test.mjs` 会拦住忘了重跑的情况。技术栈版本里 Vite / electron-vite
 只在构建期存在，经 `electron.vite.config.ts` 的 `define` 以 `import.meta.env.*` 注入。
 

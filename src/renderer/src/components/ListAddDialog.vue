@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import AppIcon from './AppIcon.vue'
 import type { MusicItem } from '@common'
 import { useLibraryStore } from '../stores/library'
+import { useSettingsStore } from '../stores/settings'
 
 // 「添加到列表」弹窗，交互对齐 lx-music-desktop 的 ListAddModal / ListAddMultipleModal：
 // 居中弹窗列出可选列表（我的收藏 + 自建歌单），点击即添加并关闭；底部可直接新建列表。
@@ -13,6 +14,7 @@ const props = defineProps<{
 const emit = defineEmits<{ close: []; added: [playlistName: string] }>()
 
 const library = useLibraryStore()
+const settings = useSettingsStore()
 
 const title = computed(() =>
   props.items.length === 1
@@ -31,7 +33,12 @@ async function addTo(playlistId: number, playlistName: string): Promise<void> {
   if (busy.value) return
   busy.value = true
   try {
-    for (const item of props.items) await library.addToPlaylist(playlistId, item)
+    // 插到顶部时倒着加：每首都会插到最前面，反过来才能让选中的第一首留在最上面
+    const items =
+      settings.settings.list.addToPlaylistPosition === 'top'
+        ? [...props.items].reverse()
+        : props.items
+    for (const item of items) await library.addToPlaylist(playlistId, item)
     emit('added', playlistName)
     emit('close')
   } finally {

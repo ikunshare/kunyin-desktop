@@ -12,6 +12,28 @@ import { Lyric } from '../../lyric'
 
 import { processText } from './utils'
 
+/**
+ * [vendor patch] 整行除分隔符/标点外是否都由歌名、歌手构成。
+ *
+ * 上游把歌名歌手当成普通 rule 交给 exact 阈值（默认 40%）判定，于是歌名恰好是
+ * 首行一部分的真歌词会被整行删掉：[00:20.87]皇后大道西又皇后大道东，11 字里命中
+ * 歌名「皇后大道东」5 字 = 40% → 首句消失。这里改成「必须整行覆盖」：
+ * 「歌名 - 歌手」这种头行仍旧剔除，真歌词留下来。
+ */
+function isMusicInfoLine(text: string, extra: string[]): boolean {
+  let rest = text.toLowerCase()
+
+  for (const item of [...extra].sort((a, b) => b.length - a.length)) {
+    const token = item.toLowerCase()
+    if (!token) {
+      continue
+    }
+    rest = rest.split(token).join('')
+  }
+
+  return !/[\p{L}\p{N}]/u.test(rest)
+}
+
 export class Clean extends ParserPlugin {
   private matcher: Matcher
 
@@ -66,6 +88,10 @@ export class Clean extends ParserPlugin {
           for (const item of musicInfo.singer) {
             extra.push(...processText(item))
           }
+        }
+        // [vendor patch] 只有整行几乎全由歌名/歌手构成时才交给 matcher，见 isMusicInfoLine
+        if (extra.length && !isMusicInfoLine(Lyric.Parsed.getParsedLineText(line), extra)) {
+          extra = undefined
         }
       }
 

@@ -40,6 +40,7 @@
 - 酷狗音乐（`kg`）
 - 酷我音乐（`kw`）
 - JOOX（`joox`）
+- Apple Music（`am`，目录与歌词经自建后端，FairPlay 在客户端解密）
 
 > 移动端（Android）项目：<https://github.com/ikunshare/kunyin>
 

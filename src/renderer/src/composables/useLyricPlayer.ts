@@ -186,7 +186,8 @@ export function useLyricPlayer(): {
     original: string,
     translate?: string,
     roman?: string,
-    musicInfo?: { name?: string; singer?: string[] }
+    musicInfo?: { name?: string; singer?: string[] },
+    ttml?: string
   ) => boolean
   clear: () => void
   play: (ms?: number) => void
@@ -219,6 +220,11 @@ export function useLyricPlayer(): {
    * 开启 setCreditsVisible 后会作为歌词流的收尾跟着最后一行一起滚动。
    */
   credits: ShallowRef<LyricCredit[]>
+  /**
+   * 解析结果里是否带翻译。LRC 音源的翻译在 `Lyric.trans` 上（宿主自己判断），
+   * TTML 的翻译在 head 注解里、解析前看不到，宿主要靠这个开关决定是否显示翻译按钮。
+   */
+  hasTranslate: ShallowRef<boolean>
   /** 是否在歌词末尾展示制作人信息（默认关闭；桌面歌词等紧凑宿主保持关闭） */
   setCreditsVisible: (visible: boolean) => void
   /**
@@ -413,12 +419,18 @@ export function useLyricPlayer(): {
    */
   const playing = shallowRef(false)
   const credits = shallowRef<LyricCredit[]>([])
+  /**
+   * 解析结果里是否带了翻译。TTML 的翻译在 head 注解里、不在 `Lyric.trans` 上，
+   * 宿主据此决定要不要显示「翻译」开关。
+   */
+  const hasTranslate = shallowRef(false)
   /** 是否把 credits 渲染到歌词末尾（桌面歌词等紧凑宿主关掉） */
   let creditsEnabled = false
 
   function applyCredits(): void {
-    if (!creditsEnabled) return
-    renderCredits(dom.footerElement, credits.value)
+    // 无唱词时制作人信息由宿主占位区展示，引擎 footer 必须置空，避免两处同时绘制。
+    const hasLines = base.currentInfo.lines.some((line) => Lyric.Parsed.isParsedLineNormal(line))
+    renderCredits(dom.footerElement, creditsEnabled && hasLines ? credits.value : [])
     dom.refreshFooter()
   }
 
@@ -426,12 +438,7 @@ export function useLyricPlayer(): {
   function setCreditsVisible(visible: boolean): void {
     if (creditsEnabled === visible) return
     creditsEnabled = visible
-    if (visible) {
-      renderCredits(dom.footerElement, credits.value)
-    } else {
-      renderCredits(dom.footerElement, [])
-    }
-    dom.refreshFooter()
+    applyCredits()
   }
 
   const onEnginePlay = (): void => {
@@ -474,8 +481,8 @@ export function useLyricPlayer(): {
 
   function clear(): void {
     credits.value = []
-    applyCredits()
     base.updateLyric(Lyric.Parsed.makeParsedInfo())
+    applyCredits()
   }
 
   /**
@@ -492,15 +499,64 @@ export function useLyricPlayer(): {
   }
 
   /**
+   * 喂 Apple Music 的原始 TTML：kit 的 iTunes TTML 解析器自带逐字 begin/end、和声
+   * （`ttm:role="x-bg"`）、对唱（`ttm:agent`）与 head 里的翻译/音译/ruby，所以 LRC 那套
+   * 补丁（行重对齐、重建词时长、逐字音译挂接）一律不跑；agent/background 的 extract
+   * 也不跑——TTML 里是真实结构，按冒号猜对唱反而会把行切坏。
+   * @returns 解析出唱词返回 true；没有可用唱词或格式不对返回 false（由调用方回退 LRC）
+   */
+  function loadTtmlLyric(ttml: string, musicInfo?: { name?: string; singer?: string[] }): boolean {
+    try {
+      const pipeline = new ParserPipeline({
+        content: { original: ttml, translate: '', roman: '' },
+        musicInfo,
+        format: 'ttml-itunes'
+      }).parse()
+
+      pipeline.pure.clean()
+      pipeline.pure.extractCreator()
+      pipeline.background.clean()
+      pipeline.interlude.insert()
+      pipeline.space.insert()
+      pipeline.stress.mark()
+      pipeline.language.infer()
+      pipeline.language.calculatePercent()
+
+      const result = pipeline.final().result
+      credits.value = toCredits(result.meta?.credits ?? [])
+      if (!result.lines.some((line) => Lyric.Parsed.isParsedLineNormal(line))) {
+        return false
+      }
+      hasTranslate.value = result.lines.some(
+        (line) =>
+          Lyric.Parsed.isParsedLineNormal(line) && !!Lyric.Parsed.getParsedLineTranslation(line)
+      )
+
+      base.updateLyric(result)
+      applyCredits()
+      return true
+    } catch (e) {
+      console.warn('[lyric] TTML 解析失败，回退 LRC', e)
+      return false
+    }
+  }
+
+  /**
    * 喂增强 LRC（主 + 翻译 + 音译），跑完整 transform 管线后渲染。
    * @param roman 行级或逐字音译；若含时间标签会自动拆成行级 + 逐字挂接
+   * @param ttml 原始 TTML（目前只有 Apple Music 有）；非空且能解析出唱词时优先走它
    */
   function loadLyric(
     original: string,
     translate = '',
     roman = '',
-    musicInfo?: { name?: string; singer?: string[] }
+    musicInfo?: { name?: string; singer?: string[] },
+    ttml = ''
   ): boolean {
+    hasTranslate.value = false
+    if (ttml.trim() && loadTtmlLyric(ttml, musicInfo)) {
+      return true
+    }
     if (!original.trim()) {
       clear()
       return false
@@ -547,10 +603,10 @@ export function useLyricPlayer(): {
       // extractCreator 已把制作人行从 lines 移出并结构化到 meta.credits，
       // 作为歌词流的收尾渲染到引擎 footer（跟着最后一行滚动）
       credits.value = toCredits(result.meta?.credits ?? [])
-      applyCredits()
       // 只剩制作人信息、没有一句唱词（纯器乐曲常见）：引擎置空，credits 留给宿主自行展示
       if (!result.lines.some((line) => Lyric.Parsed.isParsedLineNormal(line))) {
         base.updateLyric(Lyric.Parsed.makeParsedInfo())
+        applyCredits()
         return false
       }
       // 绝对时间标签的词 end==start，补全时长供卡拉 OK / 重音；
@@ -567,6 +623,7 @@ export function useLyricPlayer(): {
       // 不要拼回主词——拼接会让和声词排进主词时间轴末尾，时序全错。
 
       base.updateLyric(result)
+      applyCredits()
       return true
     } catch (e) {
       console.error('[lyric] 解析失败', e)
@@ -595,6 +652,7 @@ export function useLyricPlayer(): {
     dom.event.remove('lineClick', onLineClick)
     lineSeekSubs.clear()
     dom.destroy()
+    base.dispose()
   })
 
   return {
@@ -612,6 +670,7 @@ export function useLyricPlayer(): {
     relayout,
     playing,
     credits,
+    hasTranslate,
     setCreditsVisible,
     onLineSeek
   }

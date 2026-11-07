@@ -4,10 +4,18 @@
 import type { MusicSource, QualityId } from './types/music'
 import type { AppSettings } from './types/settings'
 
-/** 六大在线音源顺序（云盘上游已删库，不再实现；local 为本地文件不在其列） */
-export const PLATFORMS: readonly MusicSource[] = ['wy', 'qq', 'qqc', 'kg', 'kw', 'joox'] as const
+/** 在线音源顺序（local 为本地文件不在其列） */
+export const PLATFORMS: readonly MusicSource[] = [
+  'wy',
+  'qq',
+  'qqc',
+  'kg',
+  'kw',
+  'joox',
+  'am'
+] as const
 
-/** 音源显示名（取自 Android 各 Provider.displayName） */
+/** 音源显示名 */
 export const PLATFORM_NAMES: Record<MusicSource, string> = {
   wy: '网易云音乐',
   qq: 'QQ音乐',
@@ -15,10 +23,11 @@ export const PLATFORM_NAMES: Record<MusicSource, string> = {
   kg: '酷狗音乐',
   kw: '酷我音乐',
   joox: 'JOOX',
+  am: 'Apple Music',
   local: '本地'
 }
 
-/** 音源短标签（取自 Android 各 Provider.shortTag；注意 joox 为 jx） */
+/** 音源短标签（注意 joox 为 jx） */
 export const PLATFORM_SHORT_TAGS: Record<MusicSource, string> = {
   wy: 'wy',
   qq: 'qq',
@@ -26,12 +35,12 @@ export const PLATFORM_SHORT_TAGS: Record<MusicSource, string> = {
   kg: 'kg',
   kw: 'kw',
   joox: 'jx',
+  am: 'am',
   local: 'local'
 }
 
 /**
  * 内部音源标识 → 自建后端 getUrl 的 platform 名映射。
- * 见 tool/MusicUrlHelper：qq→qq, kg→kugou, kw→kuwo, wy→wyy, joox→joox。
  * local 直接播放本地文件，不走后端。
  */
 export const BACKEND_PLATFORM: Record<MusicSource, string> = {
@@ -41,6 +50,7 @@ export const BACKEND_PLATFORM: Record<MusicSource, string> = {
   kg: 'kugou',
   kw: 'kuwo',
   joox: 'joox',
+  am: 'apple',
   local: ''
 }
 
@@ -93,7 +103,12 @@ export const QUALITY_NAMES: Record<QualityId, string> = {
 const SOURCE_QUALITY_NAMES: Partial<Record<MusicSource, Partial<Record<QualityId, string>>>> = {
   wy: { master: '超清母带', atmos: '沉浸环绕声' },
   kw: { master: '至臻母带', atmos: '至臻全景声' },
-  kg: { master: '蝰蛇超清' }
+  kg: { master: '蝰蛇超清' },
+  am: {
+    '320k': '高品音质 AAC 256K',
+    flac: '无损音质 ALAC',
+    hires: '高解析无损 ALAC'
+  }
 }
 
 /**
@@ -124,7 +139,9 @@ export type SoftDecoder = 'dolby'
  *   听感接近普通立体声。
  */
 const SOFT_DECODERS: Partial<Record<QualityId, Partial<Record<MusicSource, SoftDecoder>>>> = {
-  dolby: { wy: 'dolby', qq: 'dolby', qqc: 'dolby' }
+  flac: { am: 'dolby' },
+  hires: { am: 'dolby' },
+  dolby: { wy: 'dolby', qq: 'dolby', qqc: 'dolby', am: 'dolby' }
 }
 
 /** 这首歌的这一档要不要软解、用哪个软解器；不需要返回 undefined */

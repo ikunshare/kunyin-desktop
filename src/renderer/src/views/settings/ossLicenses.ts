@@ -113,15 +113,29 @@ export const OSS_SECTIONS: OssSection[] = [
       {
         name: 'LibreMPEG',
         license: 'GPL-3.0-or-later',
-        usage: '杜比软解：AC-3 / E-AC-3 / AC-4 解码器（编译进 wasm）',
+        usage: '音频软解：AC-3 / E-AC-3 / AC-4 / ALAC 解码器（编译进 wasm）',
         url: 'https://github.com/librempeg/librempeg',
         licenseUrl:
           'https://github.com/librempeg/librempeg/blob/9c00336e26e45ed1274c9693382b1b1441ccaf6a/COPYING.GPLv3'
       },
       {
+        name: 'Temari',
+        usage: 'Apple Music FairPlay 样本解密（编译进 wasm）',
+        url: 'https://github.com/WorldObservationLog/Temari',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/WorldObservationLog/Temari/blob/master/LICENSE'
+      },
+      {
+        name: 'FFmpeg (ffmpeg-static)',
+        url: 'https://ffmpeg.org/',
+        license: 'GPL-3.0-or-later',
+        usage: 'Apple Music 音频容器无损重封装、封面与歌词写入',
+        licenseUrl: 'https://github.com/FFmpeg/FFmpeg/blob/master/LICENSE.md'
+      },
+      {
         name: 'wasi-libc',
         license: 'Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT',
-        usage: '杜比解码 wasm 静态链接的 C 库',
+        usage: '音频解码 wasm 静态链接的 C 库',
         url: 'https://github.com/WebAssembly/wasi-libc',
         licenseUrl: 'https://github.com/WebAssembly/wasi-libc/blob/main/LICENSE'
       },
@@ -129,7 +143,7 @@ export const OSS_SECTIONS: OssSection[] = [
         name: 'Rust',
         url: 'https://www.rust-lang.org/',
         license: 'MIT OR Apache-2.0',
-        usage: 'QMC 解密 wasm 链接的 core 库',
+        usage: 'QMC 与 Temari 解密 wasm 链接的 core 库',
         licenseUrl: 'https://github.com/rust-lang/rust/blob/main/LICENSE-MIT'
       },
       {
@@ -159,11 +173,24 @@ export const OSS_SECTIONS: OssSection[] = [
         indirect: true
       },
       {
+        name: '@derhuerst/http-basic',
+        url: 'https://github.com/derhuerst/http-basic',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/derhuerst/http-basic/blob/master/LICENSE',
+        indirect: true
+      },
+      {
         name: '@tokenizer/inflate',
         url: 'https://github.com/Borewit/tokenizer-inflate',
         license: 'MIT',
         licenseUrl: 'https://github.com/Borewit/tokenizer-inflate/blob/main/LICENSE',
         indirect: true
+      },
+      {
+        name: '@types/node',
+        url: 'https://github.com/DefinitelyTyped/DefinitelyTyped',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/DefinitelyTyped/DefinitelyTyped/blob/master/LICENSE'
       },
       {
         name: '@vitejs/plugin-vue',
@@ -183,6 +210,27 @@ export const OSS_SECTIONS: OssSection[] = [
         url: 'https://github.com/WiseLibs/better-sqlite3',
         license: 'MIT',
         licenseUrl: 'https://github.com/WiseLibs/better-sqlite3/blob/master/LICENSE'
+      },
+      {
+        name: 'buffer-from',
+        url: 'https://github.com/LinusU/buffer-from',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/LinusU/buffer-from/blob/master/LICENSE',
+        indirect: true
+      },
+      {
+        name: 'caseless',
+        url: 'https://github.com/request/caseless',
+        license: 'Apache-2.0',
+        licenseUrl: 'https://github.com/request/caseless/blob/master/LICENSE',
+        indirect: true
+      },
+      {
+        name: 'concat-stream',
+        url: 'https://github.com/max-mapper/concat-stream',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/max-mapper/concat-stream/blob/master/LICENSE',
+        indirect: true
       },
       {
         name: 'content-type',
@@ -220,6 +268,19 @@ export const OSS_SECTIONS: OssSection[] = [
         packages: ['builder-util-runtime', 'electron-updater']
       },
       {
+        name: 'env-paths',
+        url: 'https://github.com/sindresorhus/env-paths',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/sindresorhus/env-paths/blob/main/license',
+        indirect: true
+      },
+      {
+        name: 'ffmpeg-static',
+        url: 'https://github.com/eugeneware/ffmpeg-static',
+        license: 'GPL-3.0-or-later',
+        licenseUrl: 'https://github.com/eugeneware/ffmpeg-static/blob/master/LICENSE'
+      },
+      {
         name: 'file-type',
         url: 'https://github.com/sindresorhus/file-type',
         license: 'MIT',
@@ -247,6 +308,13 @@ export const OSS_SECTIONS: OssSection[] = [
         indirect: true
       },
       {
+        name: 'http-response-object',
+        url: 'https://github.com/ForbesLindesay/http-response-object',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/ForbesLindesay/http-response-object/blob/master/LICENSE',
+        indirect: true
+      },
+      {
         name: 'iconv-lite',
         url: 'https://github.com/pillarjs/iconv-lite',
         license: 'MIT',
@@ -257,6 +325,13 @@ export const OSS_SECTIONS: OssSection[] = [
         url: 'https://github.com/feross/ieee754',
         license: 'BSD-3-Clause',
         licenseUrl: 'https://github.com/feross/ieee754/blob/master/LICENSE',
+        indirect: true
+      },
+      {
+        name: 'inherits',
+        url: 'https://github.com/isaacs/inherits',
+        license: 'ISC',
+        licenseUrl: 'https://github.com/isaacs/inherits/blob/main/LICENSE.md',
         indirect: true
       },
       {
@@ -320,16 +395,44 @@ export const OSS_SECTIONS: OssSection[] = [
         licenseUrl: 'https://github.com/nk2028/opencc-js/blob/main/LICENSE'
       },
       {
+        name: 'parse-cache-control',
+        url: 'https://github.com/roryf/parse-cache-control',
+        license: 'BSD',
+        licenseUrl: 'https://github.com/roryf/parse-cache-control/blob/master/LICENSE',
+        indirect: true
+      },
+      {
         name: 'pinia',
         url: 'https://github.com/vuejs/pinia',
         license: 'MIT',
         licenseUrl: 'https://github.com/vuejs/pinia/blob/v4/LICENSE'
       },
       {
+        name: 'progress',
+        url: 'https://github.com/visionmedia/node-progress',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/visionmedia/node-progress/blob/master/LICENSE',
+        indirect: true
+      },
+      {
         name: 'qrcode',
         url: 'https://github.com/soldair/node-qrcode',
         license: 'MIT',
         licenseUrl: 'https://github.com/soldair/node-qrcode/blob/master/license'
+      },
+      {
+        name: 'readable-stream',
+        url: 'https://github.com/nodejs/readable-stream',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/nodejs/readable-stream/blob/main/LICENSE',
+        indirect: true
+      },
+      {
+        name: 'safe-buffer',
+        url: 'https://github.com/feross/safe-buffer',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/feross/safe-buffer/blob/master/LICENSE',
+        indirect: true
       },
       {
         name: 'safer-buffer',
@@ -350,6 +453,13 @@ export const OSS_SECTIONS: OssSection[] = [
         url: 'https://github.com/npm/node-semver',
         license: 'ISC',
         licenseUrl: 'https://github.com/npm/node-semver/blob/main/LICENSE'
+      },
+      {
+        name: 'string_decoder',
+        url: 'https://github.com/nodejs/string_decoder',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/nodejs/string_decoder/blob/main/LICENSE',
+        indirect: true
       },
       {
         name: 'strtok3',
@@ -384,6 +494,13 @@ export const OSS_SECTIONS: OssSection[] = [
         url: 'https://github.com/RyanZim/universalify',
         license: 'MIT',
         licenseUrl: 'https://github.com/RyanZim/universalify/blob/master/LICENSE',
+        indirect: true
+      },
+      {
+        name: 'util-deprecate',
+        url: 'https://github.com/TooTallNate/util-deprecate',
+        license: 'MIT',
+        licenseUrl: 'https://github.com/TooTallNate/util-deprecate/blob/master/LICENSE',
         indirect: true
       },
       {
@@ -423,4 +540,11 @@ export const OSS_SECTIONS: OssSection[] = [
 ]
 
 /** 查不到在线许可证、因此不显示的项目 / npm 包 */
-export const OSS_EXCLUDED: string[] = ['@tokenizer/token', 'fft.js', 'lazy-val']
+export const OSS_EXCLUDED: string[] = [
+  '@tokenizer/token',
+  'agent-base',
+  'fft.js',
+  'https-proxy-agent',
+  'lazy-val',
+  'typedarray'
+]

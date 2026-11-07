@@ -465,7 +465,8 @@ export class WyProvider extends BaseProvider {
       roma: (hasYrc ? json.yromalrc?.lyric : json.romalrc?.lyric) ?? '',
       char: parsedYrc ? parsedYrc.chase : '',
       chroma: '',
-      phonetic: ''
+      phonetic: '',
+      ttml: ''
     }
   }
 

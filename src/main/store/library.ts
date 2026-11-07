@@ -6,7 +6,8 @@
  * 主动推送给渲染层：写操作后调 `notifyLibraryChanged()`（由 ipc 层注入），渲染层自行重拉。
  *
  * 收藏 = 操作 favorites 系统歌单；试听列表（trial）= 累积列表，点单曲时追加（对齐 Android
- * addToTrial，默认追加末尾不头插；atHead 由设置 trialListAddToHead 控制）。
+ * addToTrial，追加到末尾不头插）。注意「添加歌曲到列表时的位置」这个设置对试听列表不生效——
+ * 它是播放时自动累积的，顺序要按播放先后。
  */
 import type {
   LocalPlaylist,
@@ -27,6 +28,7 @@ import {
   TABLE_SONG_REDIRECTS,
   TABLE_SONGS
 } from './db'
+import { getSettings } from './settings'
 
 /** 歌单信息（对应 Android database/Playlist.kt），复用共享类型 */
 export type Playlist = LocalPlaylist
@@ -144,7 +146,8 @@ export function addToTrial(item: MusicItem, atHead: boolean): void {
   const pid = getTrialPlaylistId()
   if (pid <= 0) return
   if (atHead) addToPlaylistAtHead(pid, item)
-  else addToPlaylist(pid, item)
+  // 显式给 'bottom'：试听列表的顺序只跟播放先后有关，不跟「添加到列表的位置」设置
+  else addToPlaylist(pid, item, 'bottom')
 }
 
 export function queryTrialSongs(): MusicItem[] {
@@ -220,7 +223,24 @@ export function renamePlaylist(playlistId: number, newName: string): void {
   notifyChange()
 }
 
-export function addToPlaylist(playlistId: number, item: MusicItem): void {
+export type PlaylistInsertPosition = 'top' | 'bottom'
+
+/**
+ * 添加歌曲到歌单。position 默认取设置「添加歌曲到列表时的位置」：
+ * 顶部＝整体后移一位再插到 0，底部＝追加到末尾。
+ * 两种插法遇到「已经在这张歌单里」都不动它——挪位置是排序功能的事。
+ */
+export function addToPlaylist(
+  playlistId: number,
+  item: MusicItem,
+  position: PlaylistInsertPosition = getSettings().list.addToPlaylistPosition
+): void {
+  if (position === 'top') prependToPlaylist(playlistId, item)
+  else appendToPlaylist(playlistId, item)
+}
+
+/** 追加到尾部；已存在则忽略（INSERT OR IGNORE）。 */
+function appendToPlaylist(playlistId: number, item: MusicItem): void {
   const d = getDb()
   const source = songSource(item)
   upsertSong(item)
@@ -238,6 +258,32 @@ export function addToPlaylist(playlistId: number, item: MusicItem): void {
     if (playlistId === favoritesIdCache) favoriteKeys.add(songKey(item))
     notifyChange()
   }
+}
+
+/** 插到开头：已在列表里就直接返回，否则整体后移 1 再插到 position=0。 */
+function prependToPlaylist(playlistId: number, item: MusicItem): void {
+  const d = getDb()
+  const source = songSource(item)
+  upsertSong(item)
+  const exists = d
+    .prepare(
+      `SELECT 1 AS hit FROM ${TABLE_PLAYLIST_SONGS}
+        WHERE playlist_id = ? AND song_id = ? AND source = ?`
+    )
+    .get(playlistId, item.id, source)
+  if (exists) return
+  const tx = d.transaction(() => {
+    d.prepare(
+      `UPDATE ${TABLE_PLAYLIST_SONGS} SET position = position + 1 WHERE playlist_id = ?`
+    ).run(playlistId)
+    d.prepare(
+      `INSERT INTO ${TABLE_PLAYLIST_SONGS}
+        (playlist_id, song_id, source, added_at, position) VALUES (?, ?, ?, ?, 0)`
+    ).run(playlistId, item.id, source, Date.now())
+  })
+  tx()
+  if (playlistId === favoritesIdCache) favoriteKeys.add(songKey(item))
+  notifyChange()
 }
 
 /** 头插：已存在则先删，其余整体后移 1，再插到 position=0。 */

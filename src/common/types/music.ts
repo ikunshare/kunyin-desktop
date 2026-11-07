@@ -7,7 +7,7 @@
 
 /** 音源标识（反序列化分发用）。注意：与后端 getUrl 的 platform 名不同，映射见 crypto/请求层。
  * `local` 为本地文件（不走任何 Provider / 后端），仅出现在歌单里。 */
-export type MusicSource = 'wy' | 'qq' | 'qqc' | 'kg' | 'kw' | 'joox' | 'local'
+export type MusicSource = 'wy' | 'qq' | 'qqc' | 'kg' | 'kw' | 'joox' | 'am' | 'local'
 
 /** 跨平台统一的音质键 */
 export type QualityId =
@@ -98,6 +98,12 @@ export interface JooxMusicItem extends BaseMusicItem {
   mid?: string
 }
 
+/** Apple Music */
+export interface AppleMusicItem extends BaseMusicItem {
+  type: 'am'
+  previewUrl?: string
+}
+
 /** 本地文件（「添加本地歌曲」导入）。id 为文件路径哈希（确定性，重复导入自动去重）。 */
 export interface LocalMusicItem extends BaseMusicItem {
   type: 'local'
@@ -105,7 +111,13 @@ export interface LocalMusicItem extends BaseMusicItem {
 }
 
 export type MusicItem =
-  NeteaseMusicItem | QQMusicItem | KugouMusicItem | KuwoMusicItem | JooxMusicItem | LocalMusicItem
+  | NeteaseMusicItem
+  | QQMusicItem
+  | KugouMusicItem
+  | KuwoMusicItem
+  | JooxMusicItem
+  | AppleMusicItem
+  | LocalMusicItem
 
 /** 唯一键：一般为 `type_id`，酷狗优先 `kg_hash`。 */
 export function getMusicItemKey(item: MusicItem): string {
@@ -133,6 +145,12 @@ export interface Lyric {
   chroma: string
   /** AI 谐音 */
   phonetic: string
+  /**
+   * Apple Music 的原始 TTML（只有 am 有）。
+   * lrc/char 那几项是把 TTML 压成 LRC 的产物，会丢词的结束时间、和声（x-bg）、
+   * 对唱（ttm:agent）和 ruby；渲染层见到它就绕过 LRC 直接交给 kit 的 iTunes TTML 解析。
+   */
+  ttml: string
 }
 
 /**
@@ -157,5 +175,6 @@ export const EMPTY_LYRIC: Lyric = {
   roma: '',
   char: '',
   chroma: '',
-  phonetic: ''
+  phonetic: '',
+  ttml: ''
 }

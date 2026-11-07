@@ -152,6 +152,8 @@ export class LayoutManager {
 
     const elementCount = this.lineManager.elementSize
     if (!elementCount || !player.currentInfo.lines.length) {
+      // [vendor patch] 空歌词也要复位常驻 footer，不能保留上一首的 visible 状态。
+      component.container.hideFooter()
       return
     }
 

@@ -279,6 +279,11 @@ export interface DesktopLyricState {
   hasLyric?: boolean
   /** 主歌词（增强 LRC 或行级 LRC），歌词窗自行用 kit 解析。仅内容帧携带。 */
   lyric?: string
+  /**
+   * 原始 TTML（Apple Music）。非空时歌词窗优先用它解析——逐字结束时间、和声、
+   * 对唱与 ruby 都在里面，`lyric` 那份 LRC 是它的降级产物。仅内容帧携带。
+   */
+  ttml?: string
   /** 仅内容帧携带 */
   translate?: string
   /** 仅内容帧携带 */

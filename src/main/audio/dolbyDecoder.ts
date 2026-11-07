@@ -1,13 +1,14 @@
 /**
- * 杜比软解：AC-3 / E-AC-3 / AC-4（native/dolby-wasm：LibreMPEG 的解码器编成 wasm）。
+ * 音频软解：AC-3 / E-AC-3 / AC-4 / ALAC（native/dolby-wasm：LibreMPEG 的解码器编成 wasm）。
  *
- * Chromium 不带杜比解码器（Electron 44 实测 canPlayType 对 ac-3 / ec-3 / ac-4 均为空），
+ * Chromium 不带杜比 / ALAC 解码器（Electron 44 实测 canPlayType 对 ac-3 / ec-3 / ac-4 均为空），
  * 所以这类码流只能在主进程里自己解成 PCM 再交给 <audio>（见 dolbyStream.ts）。
  *
- * 两种喂法，按编码选（原因见 shim.c 文件头）：
+ * 按编码选喂法（原因见 shim.c 文件头）：
  * - 'ac3'（AC-3 与 E-AC-3 共用）：decode() 喂任意切分的码流字节，wasm 侧先过 ac3 parser 切出整帧；
  *   E-AC-3 的依附子流（7.1 等）也由它拼好。
  * - 'ac4'：packet() 一次喂一个完整的帧（MP4 的一个样本）。第一个 I 帧之前的帧不出声。
+ * - 'alac'：同样按完整 MP4 样本喂，打开时额外传帧长、位深、声道数与采样率。
  * 输出都是交错 float PCM。
  *
  * 跟 crypto/qmcWasm.ts 一样刻意不 import core/logger（那条链会拉进 electron），
@@ -17,10 +18,10 @@ import { randomFillSync } from 'node:crypto'
 import { DOLBY_WASM_BASE64 } from './dolbyWasmBinary'
 
 /** 'ac3' 同时覆盖 AC-3 与 E-AC-3（同一个解码器按帧头的 bsid 切换） */
-export type DolbyCodec = 'ac3' | 'ac4'
+export type DolbyCodec = 'ac3' | 'ac4' | 'alac'
 
 /** 与 shim.c 的 DEC_* 一一对应 */
-const CODEC_IDS: Record<DolbyCodec, number> = { ac3: 0, ac4: 1 }
+const CODEC_IDS: Record<DolbyCodec, number> = { ac3: 0, ac4: 1, alac: 2 }
 
 /** 一段解出的 PCM；声道数/采样率以段为单位（码流中途换节目时会变） */
 export interface PcmChunk {
@@ -38,7 +39,7 @@ export interface DolbyDecoder {
   decode(bytes: Uint8Array): PcmChunk[]
   /** 'ac4'：喂一个完整的帧，返回它解出的 PCM；没出声（I 帧之前、坏帧）返回空数组 */
   packet(frame: Uint8Array): PcmChunk[]
-  /** 码流结束：把 parser 里攒着的最后一帧也吐出来（'ac4' 无事可做） */
+  /** 码流结束：把 parser / 解码器里攒着的最后一帧也吐出来 */
   flush(): PcmChunk[]
   /** 丢掉内部状态，从新位置接着喂（seek）；'ac4' 之后要从 I 帧喂起才出声 */
   reset(): void
@@ -50,7 +51,14 @@ export interface DolbyDecoder {
 interface DolbyExports {
   memory: WebAssembly.Memory
   _initialize(): void
-  dec_open(codec: number, stereo: number): number
+  dec_open(
+    codec: number,
+    stereo: number,
+    frameLength: number,
+    bitDepth: number,
+    channels: number,
+    sampleRate: number
+  ): number
   dec_close(d: number): void
   dec_in_ptr(d: number, len: number): number
   dec_feed(d: number, len: number, flush: number): number
@@ -134,6 +142,10 @@ function wasiImports(memory: () => WebAssembly.Memory): WebAssembly.ModuleImport
 export function createDolbyDecoder(opts: {
   codec: DolbyCodec
   stereo?: boolean
+  frameLength?: number
+  bitDepth?: number
+  channels?: number
+  sampleRate?: number
 }): DolbyDecoder | null {
   const mod = getModule()
   if (!mod) return null
@@ -148,7 +160,14 @@ export function createDolbyDecoder(opts: {
     failReason = e instanceof Error ? e.message : String(e)
     return null
   }
-  const d = ex.dec_open(CODEC_IDS[opts.codec], opts.stereo ? 1 : 0)
+  const d = ex.dec_open(
+    CODEC_IDS[opts.codec],
+    opts.stereo ? 1 : 0,
+    opts.frameLength ?? 0,
+    opts.bitDepth ?? 0,
+    opts.channels ?? 0,
+    opts.sampleRate ?? 0
+  )
   if (!d) return null
   let closed = false
 
@@ -198,14 +217,14 @@ export function createDolbyDecoder(opts: {
   return {
     codec: opts.codec,
     decode: (bytes) => {
-      if (opts.codec !== 'ac3') throw new Error('AC-4 要按帧喂（packet）')
+      if (opts.codec !== 'ac3') throw new Error('AC-4 / ALAC 要按帧喂（packet）')
       return feed(bytes, false)
     },
     packet: (frame) => {
-      if (opts.codec !== 'ac4') throw new Error('AC-3 系要按字节流喂（decode）')
+      if (opts.codec === 'ac3') throw new Error('AC-3 系要按字节流喂（decode）')
       return packet(frame)
     },
-    flush: () => (opts.codec === 'ac3' ? feed(null, true) : []),
+    flush: () => (opts.codec === 'ac3' ? feed(null, true) : packet(new Uint8Array())),
     reset: () => {
       if (!ex.dec_reset(d)) throw new Error('dolby wasm 重置失败')
     },
