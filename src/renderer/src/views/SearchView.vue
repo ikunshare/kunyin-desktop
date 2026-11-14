@@ -46,7 +46,7 @@ const {
 
 const sourceTabs = PLATFORMS.map((p) => ({ id: p, label: PLATFORM_NAMES[p] }))
 
-// 搜索类型 Tab（对应 Android SearchScreen 的类型 chips；joox 只支持单曲时整排隐藏）
+// 搜索类型 Tab（对应 Android SearchScreen 的类型 chips；qqc 只支持单曲时整排隐藏）
 const typeTabs = computed(() =>
   SEARCH_TYPES.filter((t) => supportedSearchTypes(source.value).includes(t.id))
 )

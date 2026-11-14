@@ -75,7 +75,7 @@ export function decryptKuwo(data: Buffer, encoding = 'gb18030'): string {
   }
 }
 
-/** QQ / JOOX QRC 解密（hex → 改版三重 DES → inflate）→ UTF-8 文本（含 XML） */
+/** QQ QRC 解密（hex → 改版三重 DES → inflate）→ UTF-8 文本（含 XML） */
 export function decryptQrc(hex: string): string {
   if (!hex) return ''
   const data = Buffer.from(hex, 'hex')
@@ -443,7 +443,7 @@ export function parseKuwo(text: string): {
 }
 
 /**
- * QQ / JOOX QRC 文本 → { lrc(行级纯文本), char(逐字增强 LRC) }。
+ * QQ QRC 文本 → { lrc(行级纯文本), char(逐字增强 LRC) }。
  * 1:1 移植安卓 LrcParser.parseTxQrc：
  * - 逐字标签 `(off,dur)` 用 substring 按索引切词，标签之间的文本原样保留（含括号，不丢字）。
  * - 行首用 `[mm:ss.xxx]`；逐字用绝对偏移 `<mm:ss.xxx>`（formatElyricTime）；行尾补 lastEnd。

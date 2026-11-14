@@ -9,6 +9,7 @@
  * 与 `'favorites'`（我的收藏），启动 seed。
  *
  * v7（桌面端新增，Android 无对应）：playlists 加 `sort_order` 列，支持「我的列表」左栏拖拽排序。
+ * v8（桌面端新增）：清除已下线的 JOOX（`joox`）音源的存量数据——该源已整体移除，留着只会变成点不开的死歌。
  */
 import Database from 'better-sqlite3'
 import { appDataPath } from '../core/paths'
@@ -24,8 +25,8 @@ export const SYSTEM_KIND_FAVORITES = 'favorites'
 export const SYSTEM_TRIAL_NAME = '试听列表'
 export const SYSTEM_FAVORITES_NAME = '我的收藏'
 
-/** 当前 schema 版本（v6=Android 终态；v7=桌面端加 playlists.sort_order）。后续加迁移时递增。 */
-const SCHEMA_VERSION = 7
+/** 当前 schema 版本（v6=Android 终态；v7=playlists.sort_order；v8=清除 joox 存量）。后续加迁移时递增。 */
+const SCHEMA_VERSION = 8
 
 let db: Database.Database | null = null
 
@@ -104,6 +105,21 @@ function migrateV6ToV7(d: Database.Database): void {
   tx()
 }
 
+/**
+ * v7 → v8：清除 JOOX 存量数据。该音源已整体下线（无 provider、无后端 platform），
+ * 留着只会让歌单里出现点不开的死歌，所以迁移时一并删掉：
+ * playlist_songs 的关联行、songs 里的曲目本体、以及指向/来自 joox 的重定向。
+ * 幂等：表里没有 joox 行时什么都不做。
+ */
+function migrateV7ToV8(d: Database.Database): void {
+  d.prepare(`DELETE FROM ${TABLE_PLAYLIST_SONGS} WHERE lower(source) = 'joox'`).run()
+  d.prepare(
+    `DELETE FROM ${TABLE_SONG_REDIRECTS}
+     WHERE lower(source) = 'joox' OR target_song_json LIKE '%"type":"joox"%'`
+  ).run()
+  d.prepare(`DELETE FROM ${TABLE_SONGS} WHERE lower(source) = 'joox'`).run()
+}
+
 /** 打开（或复用）数据库单例。首次调用建表 + seed 系统歌单。 */
 export function getDb(): Database.Database {
   if (db) return db
@@ -126,8 +142,9 @@ export function getDb(): Database.Database {
   createSchema(d)
   const current = (d.pragma('user_version', { simple: true }) as number) ?? 0
   if (current < SCHEMA_VERSION) {
-    // 新库由 createSchema 建成终态；旧库（v6）走增量迁移。
+    // 新库由 createSchema 建成终态；旧库逐级走增量迁移。
     if (current >= 6 && current < 7) migrateV6ToV7(d)
+    if (current >= 7 && current < 8) migrateV7ToV8(d)
     d.pragma(`user_version = ${SCHEMA_VERSION}`)
   }
   seedSystemPlaylists(d)

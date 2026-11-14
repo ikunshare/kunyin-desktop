@@ -153,8 +153,38 @@ export function buildLyrics(
   downloadRlrc: boolean
 ): string {
   if (!lrcData.trans && !lrcData.roma && !lrcData.char) return lrcData.lrc
+  return attachExtended(
+    withWords ? buildEnhancedBody(lrcData) : lrcData.lrc,
+    lrcData,
+    downloadTlrc,
+    downloadRlrc
+  )
+}
 
-  let lrc = withWords ? buildEnhancedBody(lrcData) : lrcData.lrc
+/**
+ * 用外部给定的主歌词体（如 Apple Music 由 TTML 转出的 ELRC）拼装，
+ * 翻译 / 罗马音仍按该主歌词的时间点对齐追加。
+ * 主歌词体为空时返回空串，调用方自行回退。
+ */
+export function buildLyricsWithBody(
+  body: string,
+  lrcData: Lyric,
+  downloadTlrc: boolean,
+  downloadRlrc: boolean
+): string {
+  if (!body.trim()) return ''
+  return attachExtended(body, lrcData, downloadTlrc, downloadRlrc)
+}
+
+/** 把翻译 / 音译按主歌词时间轴对齐后追加（两者都没有时原样返回主歌词体） */
+function attachExtended(
+  body: string,
+  lrcData: Lyric,
+  downloadTlrc: boolean,
+  downloadRlrc: boolean
+): string {
+  if (!lrcData.trans && !lrcData.roma) return body
+  let lrc = body
   const lrcTimeLabels = parseLrcTimeLabel(lrc)
 
   if (downloadTlrc && lrcData.trans) {

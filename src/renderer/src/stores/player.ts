@@ -14,6 +14,7 @@ import type { AudioStreamResult, MusicItem, MusicSource, PlayMode, QualityId } f
 import {
   DEFAULT_SETTINGS,
   getMusicItemKey,
+  isKnownSource,
   playbackBlockedQualityIds,
   qualityFallbackOrder,
   qualityUpgradeOrder
@@ -873,6 +874,25 @@ export const usePlayerStore = defineStore('player', () => {
       saved = null
     }
     if (!saved?.item) return
+    // 已下线音源（如移除前的 joox）的存档条目一律丢弃：当前曲认不出就放弃整段恢复，
+    // 队列里的则剔除（index 按剔除后的位置对齐，认不出就直接清空队列）。
+    if (!isKnownSource(saved.item.type)) {
+      try {
+        localStorage.removeItem(SAVE_KEY)
+        localStorage.removeItem(POS_KEY)
+      } catch {
+        /* localStorage 不可用则忽略 */
+      }
+      return
+    }
+    if (Array.isArray(saved.queue)) {
+      const kept = saved.queue.filter((it) => isKnownSource(it?.type))
+      if (kept.length !== saved.queue.length) {
+        saved.queue = kept
+        if (typeof saved.index === 'number' && (saved.index < 0 || saved.index >= kept.length))
+          saved.index = kept.length > 0 ? 0 : -1
+      }
+    }
     // 实时进度小存档比完整存档新（完整存档 5s 一写），身份匹配当前曲时优先采用
     let positionMs = Math.max(0, saved.positionMs ?? 0)
     try {

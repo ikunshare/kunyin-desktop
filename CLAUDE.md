@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-坤音（KunYin）桌面端：Electron + Vue 3 + TypeScript 的多音源聚合音乐播放器，是 Android 版坤音（Kotlin/Compose，`com.ikunshare.sound`）的桌面重写。聚合七大在线音源（`wy` 网易云 / `qq` / `qqc` / `kg` 酷狗 / `kw` 酷我 / `joox` / `am` Apple Music），提供统一搜索、播放、歌单、下载、歌词、平台登录、LX 同步体验。代码纯 AI 生成。
+坤音（KunYin）桌面端：Electron + Vue 3 + TypeScript 的多音源聚合音乐播放器，是 Android 版坤音（Kotlin/Compose，`com.ikunshare.sound`）的桌面重写。聚合六大在线音源（`wy` 网易云 / `qq` / `qqc` / `kg` 酷狗 / `kw` 酷我 / `am` Apple Music），提供统一搜索、播放、歌单、下载、歌词、平台登录、LX 同步体验。代码纯 AI 生成。
 
 构建链：electron-vite（开发/构建）+ electron-builder（打包），包管理器 npm。
 
@@ -64,7 +64,7 @@ Electron 三进程，源码分三棵 + 一个共享层：
 `src/main/providers/` 是音源抽象层：
 
 - `base.ts` 的 `BaseProvider` 抽象类定义全接口（search / 专辑歌手 / 歌单 / MV / getLyric / resolveMediaInfo / 评论等），各源在 `providers/<source>/` 实现，默认方法返回空结果。
-- `index.ts` 的 `registry` 注册七大源，`getProvider(source)` 按源取实例；登录态由 `src/main/auth/credentials.ts` 启动时读 cookie 注入 `provider.credentials`。Apple Music 不需要用户登录，账号能力由服务端 wrapper-lite 提供。
+- `index.ts` 的 `registry` 注册六大源，`getProvider(source)` 按源取实例；登录态由 `src/main/auth/credentials.ts` 启动时读 cookie 注入 `provider.credentials`。Apple Music 不需要用户登录，账号能力由服务端 wrapper-lite 提供。
 
 **移植铁律**：音源实现是 Android Kotlin/C++ 的**逐字移植**，禁止凭记忆或网络试错（签名/加密/设备指纹风控极敏感）。改某源前先读 Android 版坤音（<https://github.com/ikunshare/kunyin>）对应 Kotlin 源。非显然坑已散落在 `src/main/providers/` 与 `src/main/crypto/` 的注释里，例如：QQ 搜索必须走签名 `musics.fcg`（不是 `musicu.fcg`）；QRC 是改版 DES（`crypto/qqDes.ts`）；移植 C 位运算加密务必逐处 `>>>0` 保证 uint32 回绕（否则 mflac 解密输出=输入）。
 
@@ -150,7 +150,9 @@ WAV 的字节与时间是线性的，seek 就是普通的 Range（Electron 44 �
 - `providers/am` 调自建后端 `/music/search|info|album|artist|lyric`，支持单曲/专辑/歌手搜索与详情；歌单暂未接入。`BACKEND_PLATFORM.am = apple`，播放统一走 `/app/getUrl`，卡密只从 `currentAuthst()` 注入，不能写进日志。
 - 播放返回 `kind=apple-hls`、`adamId`、`keyEndpoint`、codec/采样率/位深，不是普通直链。`PLAYER_STREAM` 对 `am` 先查 `cache/appleCache`；未命中时 `audio/appleMusic.ts` 拉取 Media Playlist 和完整分片文件，`audio/fairplayMp4.ts` 解析 `cbcs`、按 `EXT-X-KEY` 获取 Temari 模板、解密样本、移除加密盒并修正 `trun`，再用 FFmpeg 无损重封装成普通 `.m4a`。**首次播放需要完整下载并处理该曲，命中处理后缓存才不碰后端。**
 - Temari 来自 `WorldObservationLog/Temari`，`npm run build:temari-wasm` 把指定提交编为 WASM 并内联 `audio/temariWasmBinary.ts`（提交进仓库，正常构建无需 Rust）。`audio/temari.ts` 每个密钥模板一个实例，临时内存在样本间复用；`TEMARI_WASM_PATH` 可复用现成产物，避开工具链下载。
-- FFmpeg 只做容器重封装与标签/封面/歌词写入，**下载时不重编码**：AAC/ALAC 都是 `.m4a`，杜比 `.mp4`。依赖 `ffmpeg-static`，打包经 `asarUnpack` 释放，`audio/ffmpeg.ts` 在 packaged 下把 `app.asar` 路径替成 `app.asar.unpacked`。ALAC 播放不经过 FFmpeg，而是走 `serveDolby` 的本地 MP4 → float WAV 软解，支持 Range seek、音效与频谱；AAC 直接播重封装后的文件。
+- FFmpeg 只做容器重封装与标签/封面/歌词写入，**播放链路不重编码**：AAC/ALAC 都是 `.m4a`，杜比 `.mp4`。依赖 `ffmpeg-static`，打包经 `asarUnpack` 释放，`audio/ffmpeg.ts` 在 packaged 下把 `app.asar` 路径替成 `app.asar.unpacked`。ALAC 播放不经过 FFmpeg，而是走 `serveDolby` 的本地 MP4 → float WAV 软解，支持 Range seek、音效与频谱；AAC 直接播重封装后的文件。
+- **下载侧的单向例外：Apple Music 无损（`codec=alac`）下载完自动无损转封成 FLAC**（`audio/ffmpeg.ts` 的 `convertAppleToFlac`）。输出扩展名由 `extFor(qualityId, source, codec)` 决定，`appleFlac` 直接看它算出来的 `.flac`；后端没回 codec 时按档位兜底（`flac` / `hires` 必是 ALAC）。`-sample_fmt` 只在位深明确 ≤16 时用 `s16`，位深未知按 `s32`——s16 编 24bit 源是真丢精度。转出的 FLAC 顶替临时文件走正常落盘，标签/封面/歌词由 `fillAudioTags` 的 FLAC 分支写（所以 `embedAppleMetadata`（只出 MP4）在 `appleFlac` 时必须跳过）。有损 AAC（320k）不转：AAC→FLAC 只是把有损音频包进无损容器，体积翻几倍、音质不涨。
+- **Apple Music 内嵌标签里的歌词固定是 ELRC**：逐字时间只在原始 TTML 里可靠存在，`modules/download/ttmlElrc.ts` 直接解 `<p begin/end>` + `<span begin/end>` 生成 `[mm:ss.xxx]<mm:ss.xxx>词…`，忽略 x-bg / x-translation / x-roman 注释轨（含嵌套）。翻译/音译仍按设置经 `buildLyricsWithBody` 对齐追加。主进程不用渲染层的 kit 解析器（DOM 取向，跑不了）。
 - `cache/appleCache.ts` 按 `am_id_quality` 存处理后的音频，与 `player.audioCacheBytes` 共用上限；用量统计、清理和播放失败失效都要同时覆盖它与原分块缓存。
 
 ## 音效（EQ / 混响 / 3D 环绕 / 升降调 / 最大声道输出）

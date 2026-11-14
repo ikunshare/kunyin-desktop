@@ -1,7 +1,7 @@
 import { createLogger } from '../core/logger'
 const log = createLogger('getUrl')
 /**
- * 统一播放地址解析：六大平台共用自建后端（对应 Android tool/MusicUrlHelper.kt）。
+ * 统一播放地址解析：各平台共用自建后端（对应 Android tool/MusicUrlHelper.kt）。
  * POST GET_URL_ENDPOINT { platform, musicId, quality, authst } → { url, ekey?, _cacheTTL? }
  * 返回 ekey 时为加密流，由本地音频代理边下边解密。
  */
@@ -17,8 +17,6 @@ function extractMusicId(item: MusicItem): string {
   switch (item.type) {
     case 'qq':
       return item.mid
-    case 'joox':
-      return item.mid ?? String(item.id)
     case 'kg':
       return item.hash.toLowerCase()
     default:

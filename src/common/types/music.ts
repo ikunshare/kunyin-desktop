@@ -7,7 +7,7 @@
 
 /** 音源标识（反序列化分发用）。注意：与后端 getUrl 的 platform 名不同，映射见 crypto/请求层。
  * `local` 为本地文件（不走任何 Provider / 后端），仅出现在歌单里。 */
-export type MusicSource = 'wy' | 'qq' | 'qqc' | 'kg' | 'kw' | 'joox' | 'am' | 'local'
+export type MusicSource = 'wy' | 'qq' | 'qqc' | 'kg' | 'kw' | 'am' | 'local'
 
 /** 跨平台统一的音质键 */
 export type QualityId =
@@ -92,12 +92,6 @@ export interface KuwoMusicItem extends BaseMusicItem {
   type: 'kw'
 }
 
-/** JOOX */
-export interface JooxMusicItem extends BaseMusicItem {
-  type: 'joox'
-  mid?: string
-}
-
 /** Apple Music */
 export interface AppleMusicItem extends BaseMusicItem {
   type: 'am'
@@ -111,13 +105,26 @@ export interface LocalMusicItem extends BaseMusicItem {
 }
 
 export type MusicItem =
-  | NeteaseMusicItem
-  | QQMusicItem
-  | KugouMusicItem
-  | KuwoMusicItem
-  | JooxMusicItem
-  | AppleMusicItem
-  | LocalMusicItem
+  NeteaseMusicItem | QQMusicItem | KugouMusicItem | KuwoMusicItem | AppleMusicItem | LocalMusicItem
+
+/**
+ * 该 `type` 是否是当前版本认识的音源。
+ * 存量数据（歌单、下载任务、播放存档）里可能留着已下线音源（如移除前的 `joox`）的条目，
+ * 反序列化时一律先过这里，认不出的直接丢弃——否则会变成点不开、放不响的死歌。
+ */
+const KNOWN_SOURCES: ReadonlySet<string> = new Set<MusicSource>([
+  'wy',
+  'qq',
+  'qqc',
+  'kg',
+  'kw',
+  'am',
+  'local'
+])
+
+export function isKnownSource(type: unknown): type is MusicSource {
+  return typeof type === 'string' && KNOWN_SOURCES.has(type)
+}
 
 /** 唯一键：一般为 `type_id`，酷狗优先 `kg_hash`。 */
 export function getMusicItemKey(item: MusicItem): string {

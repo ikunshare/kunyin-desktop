@@ -8,7 +8,6 @@ import { KwProvider } from './kw'
 import { KgProvider } from './kg'
 import { QqProvider } from './qq'
 import { QqcProvider } from './qqc'
-import { JooxProvider } from './joox'
 import { AmProvider } from './am'
 
 const registry: Partial<Record<MusicSource, BaseProvider>> = {
@@ -17,7 +16,6 @@ const registry: Partial<Record<MusicSource, BaseProvider>> = {
   kg: new KgProvider(),
   qq: new QqProvider(),
   qqc: new QqcProvider(),
-  joox: new JooxProvider(),
   am: new AmProvider()
 }
 

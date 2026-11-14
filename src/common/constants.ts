@@ -5,15 +5,7 @@ import type { MusicSource, QualityId } from './types/music'
 import type { AppSettings } from './types/settings'
 
 /** 在线音源顺序（local 为本地文件不在其列） */
-export const PLATFORMS: readonly MusicSource[] = [
-  'wy',
-  'qq',
-  'qqc',
-  'kg',
-  'kw',
-  'joox',
-  'am'
-] as const
+export const PLATFORMS: readonly MusicSource[] = ['wy', 'qq', 'qqc', 'kg', 'kw', 'am'] as const
 
 /** 音源显示名 */
 export const PLATFORM_NAMES: Record<MusicSource, string> = {
@@ -22,19 +14,17 @@ export const PLATFORM_NAMES: Record<MusicSource, string> = {
   qqc: 'QQ音乐云',
   kg: '酷狗音乐',
   kw: '酷我音乐',
-  joox: 'JOOX',
   am: 'Apple Music',
   local: '本地'
 }
 
-/** 音源短标签（注意 joox 为 jx） */
+/** 音源短标签 */
 export const PLATFORM_SHORT_TAGS: Record<MusicSource, string> = {
   wy: 'wy',
   qq: 'qq',
   qqc: 'qqc',
   kg: 'kg',
   kw: 'kw',
-  joox: 'jx',
   am: 'am',
   local: 'local'
 }
@@ -49,7 +39,6 @@ export const BACKEND_PLATFORM: Record<MusicSource, string> = {
   qqc: 'qq',
   kg: 'kugou',
   kw: 'kuwo',
-  joox: 'joox',
   am: 'apple',
   local: ''
 }
@@ -95,7 +84,7 @@ export const QUALITY_NAMES: Record<QualityId, string> = {
 
 /**
  * 各平台对特殊档位的叫法（取自 Android 版各源的 Quality 名），没列出的沿用 QUALITY_NAMES
- * （QQ / JOOX 的叫法就是通用名）。网易母带 Android 写的是旧名「鲸云母带」，现在叫超清母带。
+ * （QQ 的叫法就是通用名）。网易母带 Android 写的是旧名「鲸云母带」，现在叫超清母带。
  *
  * 网易这两档跟 Android 是反的：Android 把 sk 标成高清臻音、je 标成沉浸环绕声，
  * 后端实测 sk（level=sky，5.1 声道 FLAC）才是沉浸环绕声，je（jyeffect）是高清臻音。

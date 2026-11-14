@@ -9,13 +9,14 @@
  * addToTrial，追加到末尾不头插）。注意「添加歌曲到列表时的位置」这个设置对试听列表不生效——
  * 它是播放时自动累积的，顺序要按播放先后。
  */
-import type {
-  LocalPlaylist,
-  MusicItem,
-  MusicSource,
-  PlaylistSortField,
-  PlaylistSortOrder,
-  SystemKind
+import {
+  isKnownSource,
+  type LocalPlaylist,
+  type MusicItem,
+  type MusicSource,
+  type PlaylistSortField,
+  type PlaylistSortOrder,
+  type SystemKind
 } from '@common'
 import {
   getDb,
@@ -406,8 +407,10 @@ export function replacePlaylistSongs(playlistId: number, items: MusicItem[]): vo
 // ===== 查询 =====
 
 /** 解析歌曲 JSON，若有重定向则替换封面为目标歌曲封面（对齐 Android parseSongWithRedirect）。 */
-function parseSongWithRedirect(songJson: string): MusicItem {
+function parseSongWithRedirect(songJson: string): MusicItem | null {
   const item = JSON.parse(songJson) as MusicItem
+  // 已下线音源的存量行：正常由 v8 迁移清掉，这里兜住迁移之后才出现的脏数据
+  if (!isKnownSource(item.type)) return null
   if (redirectCache.size === 0) return item
   const target = redirectCache.get(`${item.id}_${item.type}`)
   if (target && target.cover) item.cover = target.cover
@@ -430,7 +433,8 @@ export function queryPlaylistSongs(playlistId: number, limit?: number, offset = 
   const items: MusicItem[] = []
   for (const r of rows) {
     try {
-      items.push(parseSongWithRedirect(r.j))
+      const item = parseSongWithRedirect(r.j)
+      if (item) items.push(item)
     } catch {
       /* skip corrupt rows */
     }
@@ -694,7 +698,9 @@ function refreshRedirectCache(): void {
     .all() as { song_id: number; source: string; target_song_json: string }[]
   for (const r of rows) {
     try {
-      redirectCache.set(`${r.song_id}_${r.source}`, JSON.parse(r.target_song_json) as MusicItem)
+      const target = JSON.parse(r.target_song_json) as MusicItem
+      if (!isKnownSource(r.source) || !isKnownSource(target.type)) continue
+      redirectCache.set(`${r.song_id}_${r.source}`, target)
     } catch {
       /* skip */
     }

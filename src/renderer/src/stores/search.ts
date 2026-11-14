@@ -8,7 +8,7 @@ import type {
   PlayListInfoResult
 } from '@common'
 
-/** 搜索类型（对应 Android SearchType；joox 等只支持单曲，UI 按平台隐藏其余 Tab） */
+/** 搜索类型（对应 Android SearchType；qqc 只支持单曲，UI 按平台隐藏其余 Tab） */
 export type SearchType = 'song' | 'album' | 'artist' | 'playlist'
 
 export const SEARCH_TYPES: readonly { id: SearchType; label: string }[] = [
@@ -18,9 +18,9 @@ export const SEARCH_TYPES: readonly { id: SearchType; label: string }[] = [
   { id: 'artist', label: '歌手' }
 ] as const
 
-/** 各平台支持的搜索类型（joox/qqc 只有单曲，与 Android supportedSearchTypes 一致） */
+/** 各平台支持的搜索类型（qqc 只有单曲，与 Android supportedSearchTypes 一致） */
 export function supportedSearchTypes(source: MusicSource): SearchType[] {
-  return source === 'joox' || source === 'qqc'
+  return source === 'qqc'
     ? ['song']
     : source === 'wy' || source === 'qq'
       ? ['song', 'playlist', 'album', 'artist']
@@ -150,7 +150,7 @@ export const useSearchStore = defineStore('search', () => {
     if (keyword.value.trim()) await search()
   }
 
-  /** 切平台时回退到该平台支持的类型（joox 只有单曲） */
+  /** 切平台时回退到该平台支持的类型（qqc 只有单曲） */
   function ensureTypeSupported(): void {
     if (!supportedSearchTypes(source.value).includes(searchType.value)) {
       searchType.value = 'song'

@@ -57,7 +57,7 @@ test('各平台叫法：网易沉浸环绕声是 atmos（sk/sky），不是 Andr
   assert.equal(qualityName('atmos', 'kw'), '至臻全景声')
   assert.equal(qualityName('master', 'kw'), '至臻母带')
   assert.equal(qualityName('master', 'kg'), '蝰蛇超清')
-  // QQ / JOOX 与跨平台场合用通用名；未知键原样返回
+  // QQ 与跨平台场合用通用名；未知键原样返回
   assert.equal(qualityName('atmos', 'qq'), '臻品全景声')
   assert.equal(qualityName('master'), '臻品母带')
   assert.equal(qualityName('flac', 'wy'), '无损音质 FLAC')
@@ -68,7 +68,7 @@ test('atmos_plus 只认网易：存量 QQ / 酷我歌上的旧「全景声 2.0�
   const off = settings(false)
   const stale = { atmos_plus: {}, flac: {} }
   assert.ok(!blockedQualityIds(off, 'wy').includes('atmos_plus'))
-  for (const source of ['qq', 'qqc', 'kw', 'kg', 'joox']) {
+  for (const source of ['qq', 'qqc', 'kw', 'kg']) {
     const blocked = playbackBlockedQualityIds(off, source)
     assert.deepEqual(qualityFallbackOrder('atmos', stale, blocked), ['flac'], source)
     assert.equal(qualityBadge(stale, blocked)?.label, 'SQ', source)
@@ -97,7 +97,7 @@ test('杜比能软解：网易 / QQ 播放侧放开，其余平台与跨平台�
     // Audio Vivid 还没有解码器
     assert.ok(blocked.includes('vivid'), source)
   }
-  for (const source of ['kg', 'kw', 'joox', undefined]) {
+  for (const source of ['kg', 'kw', undefined]) {
     assert.equal(softDecoder('dolby', source), undefined, String(source))
     assert.ok(playbackBlockedQualityIds(off, source).includes('dolby'), String(source))
   }

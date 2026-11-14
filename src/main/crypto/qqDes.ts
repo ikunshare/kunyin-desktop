@@ -1,5 +1,5 @@
 /**
- * QQ / JOOX QRC 专用三重 DES（1:1 移植自 app/src/main/cpp/Lrc/Lrc.cpp）。
+ * QQ QRC 专用三重 DES（1:1 移植自 app/src/main/cpp/Lrc/Lrc.cpp）。
  *
  * 注意：这是**改版 DES**（S-box、置换表均为自定义，标准 OpenSSL des-ede3 无法匹配，
  * 实测解出的字节不是合法 zlib）。故必须逐位复刻 C++ 实现。

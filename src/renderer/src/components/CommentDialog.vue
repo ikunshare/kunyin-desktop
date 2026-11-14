@@ -35,7 +35,7 @@ const hot = ref<TabState>(emptyState())
 const latest = ref<TabState>(emptyState())
 const active = computed(() => (tab.value === 'hot' ? hot.value : latest.value))
 
-/** 音源是否支持评论；本地文件与未接入的音源（qqc/joox）显示占位 */
+/** 音源是否支持评论；本地文件与未接入的音源（qqc）显示占位 */
 const supported = ref(true)
 const scroller = ref<HTMLElement | null>(null)
 

@@ -39,6 +39,7 @@ import type {
   MusicSource
 } from '@common'
 import {
+  isKnownSource,
   QUALITY_IDS,
   blockedQualityIds,
   qualityName,
@@ -50,10 +51,12 @@ import { resolveMediaInfo } from '../../providers/getUrl'
 import { getProvider } from '../../providers'
 import { decryptAudioFile } from '../../crypto/decryptor'
 import { downloadAppleAudio, embedAppleMetadata } from '../../audio/appleMusic'
+import { convertAppleToFlac } from '../../audio/ffmpeg'
 import { fillAudioTags, sniffImageMime } from '../../tag'
 import { drainResponse, requestBuffer, requestRaw } from '../../net/request'
 import { appDataPath } from '../../core/paths'
-import { buildLyrics, encodeLyric } from './lyric'
+import { buildLyrics, buildLyricsWithBody, encodeLyric } from './lyric'
+import { ttmlToElrc } from './ttmlElrc'
 
 const MP3_QUALITY_IDS = new Set(['128', '320', '128k', '320k', 'mp3'])
 /** 杜比全景声（网易 AC-4 / QQ AC-3 系，QQ 加密版解密后同为 mp4）与 Audio Vivid 都是 MP4 封装；标签写入按扩展名跳过它们 */
@@ -89,8 +92,17 @@ function defaultDownloadDir(): string {
   return join(app.getPath('music'), 'KUNYIN')
 }
 
-function extFor(qualityId: string, source: MusicSource): string {
-  if (source === 'am') return qualityId === 'dolby' || qualityId === 'atmos' ? '.mp4' : '.m4a'
+/**
+ * 输出扩展名。Apple Music 无损（codec=alac）落 FLAC：下载后自动无损转码（见下方 appleFlac），
+ * 有损 AAC（320k）保持 .m4a，杜比仍是 .mp4。
+ * 后端万一没回 codec，就按档位兜底：FLAC / HiRes 这两档在 Apple 侧必然是 ALAC。
+ */
+function extFor(qualityId: string, source: MusicSource, codec?: string): string {
+  if (source === 'am') {
+    if (qualityId === 'dolby' || qualityId === 'atmos') return '.mp4'
+    const alac = codec ? codec === 'alac' : qualityId === 'flac' || qualityId === 'hires'
+    return alac ? '.flac' : '.m4a'
+  }
   if (MP3_QUALITY_IDS.has(qualityId)) return '.mp3'
   return MP4_QUALITY_IDS.has(qualityId) ? '.mp4' : '.flac'
 }
@@ -266,7 +278,7 @@ async function resolveWithFallback(
 }
 
 /** 跨源换源的尝试顺序（排除原源）。 */
-const ALT_SOURCES: MusicSource[] = ['wy', 'kg', 'kw', 'qq', 'qqc', 'joox']
+const ALT_SOURCES: MusicSource[] = ['wy', 'kg', 'kw', 'qq', 'qqc']
 
 /** 归一化标题用于同名匹配（忽略大小写、空白与常见标点）。 */
 function normalizeTitle(s: string): string {
@@ -480,7 +492,9 @@ async function executeDownload(taskKey: string): Promise<void> {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
     let baseName = buildFileName(task)
-    const ext = extFor(actualQuality, song.type)
+    const ext = extFor(actualQuality, song.type, info.codec)
+    /** Apple Music 无损（ALAC 源）→ 下载后无损转封成 FLAC。判定与 extFor 保持一致。 */
+    const appleFlac = info.kind === 'apple-hls' && ext === '.flac'
     let fileName = `${baseName}${ext}`
     let finalPath = join(dir, fileName)
 
@@ -503,7 +517,7 @@ async function executeDownload(taskKey: string): Promise<void> {
       }
     }
 
-    const tmpPath = `${finalPath}.tmp`
+    let tmpPath = `${finalPath}.tmp`
 
     // 同名处理：非覆盖则追加序号
     if (!s.overwriteExisting) {
@@ -550,6 +564,26 @@ async function executeDownload(taskKey: string): Promise<void> {
         }
       )
       patchTask(taskKey, { progress: 1, downloadedBytes: downloaded, speedBytesPerSec: 0 })
+      // 无损 ALAC → FLAC（无损转码）。转出的 FLAC 顶替临时文件，后面照常改名落盘；
+      // 失败必须让整条任务失败，不能把 .m4a 内容当 .flac 交付。
+      if (appleFlac) {
+        const flacTmpPath = `${tmpPath}.flac`
+        try {
+          await convertAppleToFlac(tmpPath, flacTmpPath, controller.signal, {
+            bitDepth: info.bitDepth
+          })
+          unlinkSync(tmpPath)
+          tmpPath = flacTmpPath
+        } catch (e) {
+          try {
+            if (existsSync(flacTmpPath)) unlinkSync(flacTmpPath)
+          } catch {
+            /* ignore */
+          }
+          throw e
+        }
+        log.info('Apple Music 无损转 FLAC 完成', { taskKey, bitDepth: info.bitDepth })
+      }
     } else {
       // 流式下载到 .tmp（支持刷新一次播放链接重试）
       await downloadToFile(taskKey, info.playUrl, tmpPath, totalBytes, controller.signal, () =>
@@ -615,11 +649,16 @@ async function executeDownload(taskKey: string): Promise<void> {
     }
 
     // 内嵌歌词文本（主歌词 + 可选翻译/罗马音/逐字；空时回退主歌词/逐字）
+    // Apple Music：逐字时间只在原始 TTML 里可靠存在，标签内歌词一律由 TTML 生成 ELRC
+    // （后端压平的 char 未必带词级停顿），翻译/音译仍按设置追加。
+    const appleElrc = song.type === 'am' && lyric?.ttml ? ttmlToElrc(lyric.ttml) : ''
     const embedLyricText =
       needLyricMeta && lyric
-        ? buildLyrics(lyric, s.embedLyricLx, s.embedLyricT, s.embedLyricR).trim() ||
-          lyric.lrc ||
-          lyric.char
+        ? appleElrc
+          ? buildLyricsWithBody(appleElrc, lyric, s.embedLyricT, s.embedLyricR).trim() || appleElrc
+          : buildLyrics(lyric, s.embedLyricLx, s.embedLyricT, s.embedLyricR).trim() ||
+            lyric.lrc ||
+            lyric.char
         : ''
 
     // 内嵌标签写入：文件自带标签优先（QQ 解密文件的原容器标签更准），仅补齐缺失字段
@@ -647,7 +686,7 @@ async function executeDownload(taskKey: string): Promise<void> {
     } catch (e) {
       log.warn('标签写入失败（非致命）', e)
     }
-    if (song.type === 'am' && (s.embedCover || embedLyricText)) {
+    if (song.type === 'am' && !appleFlac && (s.embedCover || embedLyricText)) {
       try {
         await embedAppleMetadata(finalPath, {
           metadata: appleMetadata(task),
@@ -921,6 +960,8 @@ export function loadTasks(): void {
     const persisted = JSON.parse(raw) as PersistedTask[]
     for (const p of persisted) {
       const t = p.task
+      // 已下线音源（如移除前的 joox）的任务直接丢弃，不再展示也无法下载
+      if (!isKnownSource(t.source)) continue
       // 中断的下载重启后重新开始
       if (t.status === 'downloading') {
         t.status = 'waiting'
