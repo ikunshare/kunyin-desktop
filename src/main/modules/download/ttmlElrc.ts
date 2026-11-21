@@ -86,6 +86,17 @@ interface Frame {
   text: string
 }
 
+/** 汉字 / 假名 / 中日文标点：这些文字本来就不用空格分词 */
+const NO_SPACE_SCRIPT = /[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/
+
+/**
+ * 两个相邻的词之间要不要落空格。源里有空白才会问到这里；中日文两侧都是不分词的文字时不加
+ * （有的 TTML 是排过版的，span 之间全是换行缩进，照搬就成了「你 好」）。
+ */
+function needsSpace(before: string, after: string): boolean {
+  return !(NO_SPACE_SCRIPT.test(before.slice(-1)) && NO_SPACE_SCRIPT.test(after.slice(0, 1)))
+}
+
 /** 解析单个 `<p>` 片段（block 从 `<p` 开始、到 `</p>` 结束） */
 function parseLine(block: string): Line | null {
   const openEnd = block.indexOf('>')
@@ -105,6 +116,12 @@ function parseLine(block: string): Line | null {
   const words: Word[] = []
   const stack: Frame[] = []
   let plain = ''
+  /**
+   * 上一个词之后出现过空白。Apple 的 TTML 用 span **之间**的空白表示词间空格
+   * （`<span>Hello</span> <span>world</span>`），同一个词拆成的音节之间则没有
+   * （`<span>beau</span><span>ti</span><span>ful</span>`）——所以空格不能无脑加，也不能全丢。
+   */
+  let gap = false
   /** > 0 表示当前文本位于注释轨（x-bg 等）内部，整段丢弃 */
   let annotationDepth = 0
 
@@ -112,7 +129,10 @@ function parseLine(block: string): Line | null {
     if (annotationDepth > 0) return
     const top = stack[stack.length - 1]
     if (top) top.text += text
-    else plain += text
+    else {
+      plain += text
+      if (/\s/.test(text)) gap = true
+    }
   }
   /** 帧弹出后把非唱词文本还给父级，避免把注释轨的内容漏进 plain */
   const forwardText = (frame: Frame): void => {
@@ -139,7 +159,16 @@ function parseLine(block: string): Line | null {
         // 注释轨里嵌套的带时间 span 不是唱词（和声/翻译），直接丢弃
         if (annotationDepth > 0) continue
         const text = frame.text.trim()
-        if (text) words.push({ text, start: frame.start, end: frame.end })
+        if (!text) {
+          // 只有空白的带时间 span：本身不是词，但同样是词间空格
+          if (frame.text) gap = true
+          continue
+        }
+        // 空白也可能写在 span 里面（`<span>Hello </span>`），与写在外面等价
+        const prev = words[words.length - 1]
+        if (prev && (gap || /^\s/.test(frame.text)) && needsSpace(prev.text, text)) prev.text += ' '
+        words.push({ text, start: frame.start, end: frame.end })
+        gap = /\s$/.test(frame.text)
       } else if (frame.kind === 'other' && annotationDepth === 0) {
         forwardText(frame)
       }

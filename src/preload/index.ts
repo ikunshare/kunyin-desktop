@@ -93,7 +93,21 @@ const api: WindowApi = {
   auth: {
     get: () => ipcRenderer.invoke(IpcChannels.AUTH_GET),
     validate: (authst) => ipcRenderer.invoke(IpcChannels.AUTH_VALIDATE, authst),
-    clear: () => ipcRenderer.invoke(IpcChannels.AUTH_CLEAR)
+    clear: () => ipcRenderer.invoke(IpcChannels.AUTH_CLEAR),
+    query: () => ipcRenderer.invoke(IpcChannels.AUTH_QUERY)
+  },
+  kunyin: {
+    account: () => ipcRenderer.invoke(IpcChannels.KUNYIN_ACCOUNT_GET),
+    refresh: () => ipcRenderer.invoke(IpcChannels.KUNYIN_ACCOUNT_REFRESH),
+    logout: () => ipcRenderer.invoke(IpcChannels.KUNYIN_ACCOUNT_LOGOUT),
+    localAccounts: () => ipcRenderer.invoke(IpcChannels.KUNYIN_LOGIN_LOCAL_ACCOUNTS),
+    quickLogin: (uin) => ipcRenderer.invoke(IpcChannels.KUNYIN_LOGIN_QUICK, uin),
+    qrNew: () => ipcRenderer.invoke(IpcChannels.KUNYIN_LOGIN_QR_NEW),
+    qrPoll: (qrsig) => ipcRenderer.invoke(IpcChannels.KUNYIN_LOGIN_QR_POLL, qrsig),
+    useKey: (key) => ipcRenderer.invoke(IpcChannels.KUNYIN_KEY_USE, key),
+    bindKey: (key) => ipcRenderer.invoke(IpcChannels.KUNYIN_KEY_BIND, key),
+    migrateKey: (oldKey) => ipcRenderer.invoke(IpcChannels.KUNYIN_KEY_MIGRATE, oldKey),
+    groupCode: (key) => ipcRenderer.invoke(IpcChannels.KUNYIN_KEY_GROUP_CODE, key)
   },
   library: {
     refreshRemote: (id) => ipcRenderer.invoke(IpcChannels.LIBRARY_REFRESH_REMOTE, id),

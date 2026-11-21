@@ -6,6 +6,7 @@ const log = createLogger('download')
  *
  * - taskKey = `source_id_qualityId`；状态机 waiting/downloading/paused/completed/failed。
  * - 并发上限用信号量（settings.download.maxConcurrent）；进度节流 500ms。
+ * - 单个文件多连接分段下载（net/segmented，Range 并发），服务端不认 Range 时退回单连接。
  * - 加密流（QQ ekey）：先下原始密文到 .tmp，完成后用 crypto/mflac 原地解密，再嗅探真实容器修正扩展名。
  * - 命名规则、采样率标记、整专封面 first-write-wins 对齐 Android。
  * - 完成后用 tag/（自 Android utils/tag 移植）内嵌写 title/artist/album/cover/lyric 标签，
@@ -20,15 +21,13 @@ import {
   readFileSync,
   renameSync,
   writeFileSync,
-  createWriteStream,
   unlinkSync,
   openSync,
   readSync,
   closeSync,
   statSync
 } from 'node:fs'
-import { pipeline } from 'node:stream/promises'
-import { Readable } from 'node:stream'
+import { open as openFile } from 'node:fs/promises'
 import type {
   AddDownloadInput,
   DownloadDisc,
@@ -53,7 +52,8 @@ import { decryptAudioFile } from '../../crypto/decryptor'
 import { downloadAppleAudio, embedAppleMetadata } from '../../audio/appleMusic'
 import { convertAppleToFlac } from '../../audio/ffmpeg'
 import { fillAudioTags, sniffImageMime } from '../../tag'
-import { drainResponse, requestBuffer, requestRaw } from '../../net/request'
+import { drainResponse, requestBuffer, requestRaw, runBulk } from '../../net/request'
+import { downloadSegmented } from '../../net/segmented'
 import { appDataPath } from '../../core/paths'
 import { buildLyrics, buildLyricsWithBody, encodeLyric } from './lyric'
 import { ttmlToElrc } from './ttmlElrc'
@@ -96,12 +96,13 @@ function defaultDownloadDir(): string {
  * 输出扩展名。Apple Music 无损（codec=alac）落 FLAC：下载后自动无损转码（见下方 appleFlac），
  * 有损 AAC（320k）保持 .m4a，杜比仍是 .mp4。
  * 后端万一没回 codec，就按档位兜底：FLAC / HiRes 这两档在 Apple 侧必然是 ALAC。
+ * 用户关掉了「转为 FLAC」（download.appleAlacToFlac）时，ALAC 原样留在 .m4a 里。
  */
 function extFor(qualityId: string, source: MusicSource, codec?: string): string {
   if (source === 'am') {
     if (qualityId === 'dolby' || qualityId === 'atmos') return '.mp4'
     const alac = codec ? codec === 'alac' : qualityId === 'flac' || qualityId === 'hires'
-    return alac ? '.flac' : '.m4a'
+    return alac && getSettings().download.appleAlacToFlac ? '.flac' : '.m4a'
   }
   if (MP3_QUALITY_IDS.has(qualityId)) return '.mp3'
   return MP4_QUALITY_IDS.has(qualityId) ? '.mp4' : '.flac'
@@ -804,7 +805,23 @@ async function executeVideoDownload(
   notify()
 }
 
-/** 流式下载到 path，HTTP 失败时刷新一次链接重试。进度节流写入。 */
+function logTransfer(
+  message: string,
+  taskKey: string,
+  bytes: number,
+  segmented: boolean,
+  startedAt: number
+): void {
+  const ms = Math.max(1, Date.now() - startedAt)
+  log.info(message, { taskKey, bytes, segmented, ms, kbps: Math.round(bytes / 1024 / (ms / 1000)) })
+}
+
+/**
+ * 多连接分段下载到 path（net/segmented）；服务端不认 Range 时自动退回单连接顺序下载。
+ * HTTP 失败时刷新一次链接重试。进度节流写入。
+ *
+ * 各分段按绝对偏移并发写同一个文件句柄，所以这里不能再用顺序的 WriteStream。
+ */
 async function downloadToFile(
   taskKey: string,
   url: string,
@@ -813,45 +830,86 @@ async function downloadToFile(
   signal: AbortSignal,
   refresh: () => Promise<{ playUrl: string; isSuccess: boolean }>
 ): Promise<void> {
+  let current = url
+  /** 整个任务只刷新一次链接：所有分段共用这一个 Promise，直链过期时不会各刷各的 */
+  let refreshing: Promise<void> | null = null
+
   // signal 透传到 net 层：暂停/取消时连「等响应头」这一段也立刻断掉，
   // 否则主进程侧连接会继续拉完整个文件，孤儿连接攒满 per-host 额度后新任务发不出去。
-  let resp = await requestRaw(url, { timeout: 60000, signal })
-  if (!resp.ok) {
+  const request = (target: string, range: string | null, sig: AbortSignal): Promise<Response> =>
+    requestRaw(target, {
+      headers: range ? { Range: range } : undefined,
+      timeout: 60000,
+      signal: sig
+    })
+
+  const open = async (range: string | null, sig: AbortSignal): Promise<Response> => {
+    const used = current
+    const resp = await request(used, range, sig)
+    if (resp.ok) return resp
     // 换链接前先把这条失败响应收掉：丢着不读等于漏一条连接，直链过期在下载里是常态
     drainResponse(resp)
-    const refreshed = await refresh()
-    if (refreshed.isSuccess && refreshed.playUrl)
-      resp = await requestRaw(refreshed.playUrl, { timeout: 60000, signal })
-  }
-  if (!resp.ok || !resp.body) {
-    drainResponse(resp)
-    throw new Error(`HTTP ${resp.status}`)
+    refreshing ??= refresh()
+      .then((r) => {
+        if (r.isSuccess && r.playUrl) current = r.playUrl
+      })
+      .catch(() => {})
+    await refreshing
+    // 链接没换成（刷新失败，或这次用的已经是刷新后的）：把失败响应交回去，由下载器按状态码报错
+    return current === used ? resp : await request(current, range, sig)
   }
 
-  const cl = Number(resp.headers.get('content-length')) || fallbackTotal
-  if (cl > 0) patchTask(taskKey, { totalBytes: cl })
-
+  let total = fallbackTotal
   let downloaded = 0
   let lastTick = Date.now()
   let lastBytes = 0
-  const ws = createWriteStream(path)
-  const nodeStream = Readable.fromWeb(resp.body as Parameters<typeof Readable.fromWeb>[0])
-  nodeStream.on('data', (chunk: Buffer) => {
-    downloaded += chunk.length
-    const now = Date.now()
-    if (now - lastTick >= PROGRESS_INTERVAL_MS) {
-      const speed = Math.round(((downloaded - lastBytes) * 1000) / (now - lastTick))
-      patchTask(taskKey, {
-        progress: cl > 0 ? Math.min(1, downloaded / cl) : 0,
-        speedBytesPerSec: speed,
-        downloadedBytes: downloaded
-      })
-      notify()
-      lastTick = now
-      lastBytes = downloaded
-    }
-  })
-  await pipeline(nodeStream, ws, { signal })
+  const startedAt = Date.now()
+  const handle = await openFile(path, 'w')
+  try {
+    const result = await downloadSegmented({
+      open,
+      write: async (data, position) => {
+        // FileHandle.write 可能只写下一部分，写满为止
+        let done = 0
+        while (done < data.byteLength) {
+          const { bytesWritten } = await handle.write(
+            data,
+            done,
+            data.byteLength - done,
+            position + done
+          )
+          done += bytesWritten
+        }
+      },
+      // 与播放预取共用大流量闸：每主机最多 4 条，给正在播的歌留出连接额度
+      gate: (task) => runBulk(current, task),
+      release: drainResponse,
+      signal,
+      onSize: (size) => {
+        total = size
+        patchTask(taskKey, { totalBytes: size })
+      },
+      onProgress: (bytes) => {
+        downloaded += bytes
+        const now = Date.now()
+        if (now - lastTick < PROGRESS_INTERVAL_MS) return
+        patchTask(taskKey, {
+          progress: total > 0 ? Math.min(1, downloaded / total) : 0,
+          speedBytesPerSec: Math.round(((downloaded - lastBytes) * 1000) / (now - lastTick)),
+          downloadedBytes: downloaded
+        })
+        notify()
+        lastTick = now
+        lastBytes = downloaded
+      }
+    })
+    downloaded = result.size
+    // 排查「下载慢」先看这条：segmented=false 是服务端不认 Range 退回了单连接；
+    // 是 true 而速度仍然低，慢的就是线路 / CDN 本身
+    logTransfer('下载完成', taskKey, result.size, result.segmented, startedAt)
+  } finally {
+    await handle.close().catch(() => {})
+  }
   patchTask(taskKey, { progress: 1, downloadedBytes: downloaded, speedBytesPerSec: 0 })
 }
 

@@ -1,0 +1,60 @@
+MOLAN-AV3A
+Copyright 2026 MOLAN-AV3A contributors
+
+This repository packages the AVS3-P3 (Audio Vivid) reference decoder.
+
+===========================================================================
+Upstream code (src/, excluding src/api/)
+===========================================================================
+
+AVS3-P3 reference software, version AVS3A_RMv3.3.1
+("信息技术 智能媒体编码 第3部分：沉浸式音频 第一阶段（广电/流媒体Profile）参考编解码器")
+
+  Copyright 2023 HUAWEI TECHNOLOGIES CO., LTD.
+  Licensed under the Code Sharing Policy of the UHD World Association (UWA)
+  http://www.theuwa.com/UWA_Code_Sharing_Policy.pdf
+
+  you may not use this file except in compliance with the Policy.
+  Unless agreed to in writing, software distributed under the Policy is
+  distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, either
+  express or implied. See the Policy for the specific language governing
+  permissions and limitations under the Policy.
+
+  The upstream copyright/license header block is retained at the top of
+  every upstream file. The upstream ReadMe (AVS3A_RMv3.3.1) notes that the
+  version is intended for end-to-end integration and testing of the
+  "百城千屏" (City-Screen) initiative; a newer version may be published by
+  UWA later.
+
+  Provenance: the upstream sources were obtained from a public mirror of
+  the reference decoder (github.com/zlxyc/Sourcecodeforplayer, commit
+  e7d244d29454eb04c968cd98a30587303a9c15f8), after the original
+  distribution location became unavailable. Files under the upstream
+  `avs3Encoder/` tree and IDE/build artifacts are not included.
+
+===========================================================================
+Modifications introduced by this repository (marked in-context where
+practical):
+===========================================================================
+
+  src/avs3Decoder/src/decoder.c
+    - the upstream CLI main() is compiled out unless AVS3_NO_MAIN is
+      undefined (the library target defines AVS3_NO_MAIN=1);
+    - one stray debug printf() next to an commented-out ASLOG call is
+      inert in library builds (printf is redirected at compile time).
+
+  src/avs3Decoder/include/Version.h
+    - the per-OS version-info function block duplicated for two platforms
+      collided on non-Windows targets and has been reduced to no-ops.
+
+  All other upstream files are unmodified.
+
+===========================================================================
+This repository's own code
+===========================================================================
+
+  include/molan_av3a.h, src/api/molan_av3a.c, cli/, CMakeLists.txt,
+  .github/workflows/
+    - public API wrapper, MP4/M4A demuxer, WAV writer, CLI, build system;
+      provided under the same UWA Code Sharing Policy terms as the
+      upstream code for interoperability.

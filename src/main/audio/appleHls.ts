@@ -350,7 +350,7 @@ function createTrack(init: TrackInit): AppleHlsTrack & { warm: () => Promise<unk
     const info = parseAppleFragment(data, moof, trex, ivSize, slot.remoteStart)
     const template = templates.get(segments[index].keyUri)
     if (!template) throw new Error('缺少 Temari 密钥模板')
-    const plain = decryptAppleSamples(data, info, template)
+    const plain = await decryptAppleSamples(data, info, template, abort.signal)
     if (plain.length !== slot.bytes) throw new Error('Apple Music 分片解密后长度不符')
     poolPut(`${id}:${index}`, plain)
     await recordFragment(index, plain)

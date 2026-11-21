@@ -962,7 +962,7 @@ export const usePlayerStore = defineStore('player', () => {
     }
     schedulePersist()
     if (opts?.trackTrial) {
-      // 追加到试听列表末尾（atHead=false，去重）—— 累积不覆盖、不打乱既有顺序
+      // 加入试听列表（atHead=false：按「添加歌曲到列表时的位置」插顶部或末尾，去重）
       const plain = JSON.parse(JSON.stringify(item)) as MusicItem
       void window.api.library.addToTrial(plain, false).catch(() => {})
     }
@@ -985,7 +985,7 @@ export const usePlayerStore = defineStore('player', () => {
     // 过 IPC 需普通对象（Pinia 响应式 Proxy 无法被 structuredClone）
     const plain = JSON.parse(JSON.stringify(item)) as MusicItem
     // 先累积再拉列表：await 串行保证队列里一定包含本曲。
-    // 主进程 INSERT OR IGNORE 去重——已存在的歌保持原位，不会被挪到末尾。
+    // 主进程去重——已存在的歌保持原位，不会被挪到顶部 / 末尾。
     await window.api.library.addToTrial(plain, false).catch(() => {})
     const list = await window.api.library.trialSongs().catch(() => [] as MusicItem[])
     if (request !== loadToken) return

@@ -1,6 +1,8 @@
 import { net } from 'electron'
 import { createLogger } from '../core/logger'
+import { withDeferredCancel } from './fetchBody'
 import {
+  BULK_HOST_CONCURRENCY,
   DEFAULT_RETRY,
   HostGate,
   InflightMap,
@@ -65,6 +67,24 @@ const inflight = new InflightMap()
 /** 诊断用：各 host 的在飞/排队数（排查「请求变慢」先看这里有没有堆积） */
 export function netStats(): { host: string; active: number; queued: number }[] {
   return gate.stats()
+}
+
+/**
+ * 大流量连接（下载分段、播放预取）的 per-host 闸，全进程共用一个。
+ *
+ * 与上面的接口闸不同，许可要由调用方**握到 body 读完**（task 里把这一段读完再返回）——
+ * requestRaw 的闸只管到响应头，流式消费者在读 body 期间是不占许可的，多连接下载照那样用
+ * 就没有任何东西限制真正在飞的连接数了。
+ */
+const bulkGate = new HostGate(BULK_HOST_CONCURRENCY)
+
+export function runBulk<T>(url: string, task: () => Promise<T>): Promise<T> {
+  return bulkGate.run(url, task)
+}
+
+/** 诊断用：大流量闸各 host 的在飞/排队数 */
+export function bulkStats(): { host: string; active: number; queued: number }[] {
+  return bulkGate.stats()
 }
 
 function buildUrl(url: string, query?: RequestOptions['query']): string {
@@ -147,7 +167,10 @@ async function attemptFetch(
   }
 
   try {
-    const resp = await net.fetch(url, { ...init, signal: controller.signal })
+    const raw = await net.fetch(url, { ...init, signal: controller.signal })
+    // 响应体套 deferCancel（见 net/fetchBody）：调用方 cancel 它时先 abort 这次 fetch，
+    // 落到 Readable.toWeb 适配器上的那一下推迟到下一个宏任务，否则会撞上它的未捕获异常
+    const resp = withDeferredCancel(raw, () => controller.abort())
     // 控制器必须活过「等响应头」这一段，理由见 drainResponse：Electron 里只有 abort
     // 它才会真正拆掉 URLLoader、归还 socket。调用方的 signal 也继续挂着，这样流式
     // 消费者（下载暂停、切歌）取消时，连接同样收得回来。

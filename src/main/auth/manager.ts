@@ -2,14 +2,17 @@
  * 卡密激活管理（对应 Android manager/AuthManager.kt）。
  * 卡密即 authst，经 c.wwwweb.top/app/checkAuth 校验；本地用 safeStorage 加密持久化到 auth.bin。
  * currentAuthst 直接注入自建后端 getUrl（解锁 kg/qq 及加密音质）。
+ * 设置页「卡密管理」另经 /cdk/query 只读查询类型、有效期与额度（不计使用次数）。
  */
 import { safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import type { AuthState } from '@common'
+import type { AuthState, CdkQueryResult } from '@common'
 import { requestJson } from '../net/request'
 import { appDataPath } from '../core/paths'
+import { parseCdkQuery } from './cdkQuery'
 
 const CHECK_AUTH_URL = 'https://c.wwwweb.top/app/checkAuth'
+const CDK_QUERY_URL = 'https://c.wwwweb.top/cdk/query'
 
 const state: AuthState = { authst: '', isValid: false, message: '' }
 let loaded = false
@@ -93,6 +96,24 @@ export async function checkOnStartup(): Promise<void> {
   const { valid, message } = await callCheckAuth(state.authst)
   state.isValid = valid
   state.message = valid ? '' : message
+}
+
+/**
+ * 查询当前卡密的类型、状态、有效期与额度（POST /cdk/query）。只读：不计使用次数、不消耗额度。
+ * 卡密放 body 不放 URL：后端请求日志与 CDN 日志会记完整 query。没有卡密时不发请求。
+ */
+export async function queryCdkInfo(): Promise<CdkQueryResult> {
+  ensureLoaded()
+  const key = state.authst
+  if (!key) return { ok: false, message: '尚未填写卡密' }
+  try {
+    const body = await requestJson<unknown>(CDK_QUERY_URL, { method: 'POST', body: { key } })
+    return parseCdkQuery(body)
+  } catch (e) {
+    // 不是 JSON 多半是网关错误页（或后端还没部署这个接口），与断网分开提示
+    if (e instanceof SyntaxError) return { ok: false, message: '服务器返回异常，请稍后重试' }
+    return { ok: false, message: '网络错误，请稍后重试' }
+  }
 }
 
 export function clearAuth(): void {

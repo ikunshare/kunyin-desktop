@@ -43,7 +43,18 @@ const sortDisabled = computed(
 // ============ 分类 ============
 const categories = ref<PlaylistCategory[]>([])
 const categoryError = ref('')
-const groups = computed(() => [...new Set(categories.value.map((item) => item.group))])
+/** 下拉选项：「默认」在最前，其余按分组归拢（组的先后照接口返回的顺序） */
+const categoryOptions = computed(() => {
+  const groups = [...new Set(categories.value.map((item) => item.group))]
+  return [
+    { id: '', label: '默认' },
+    ...groups.flatMap((group) =>
+      categories.value
+        .filter((c) => c.group === group)
+        .map((c) => ({ id: c.id, label: c.name, group }))
+    )
+  ]
+})
 const categoryName = computed(
   () => categories.value.find((c) => c.id === category.value)?.name ?? ''
 )
@@ -199,19 +210,9 @@ watch(
           class="cat-select"
           :model-value="category"
           :title="categoryName ? `分类：${categoryName}` : '选择歌单分类'"
+          :list="categoryOptions"
           @update:model-value="switchCategory"
-        >
-          <option value="">默认</option>
-          <optgroup v-for="group in groups" :key="group" :label="group">
-            <option
-              v-for="item in categories.filter((c) => c.group === group)"
-              :key="item.id"
-              :value="item.id"
-            >
-              {{ item.name }}
-            </option>
-          </optgroup>
-        </BaseSelect>
+        />
         <AppTabs
           v-if="sortTabs.length > 1"
           class="sort-tabs"

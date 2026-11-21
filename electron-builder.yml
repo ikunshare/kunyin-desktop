@@ -60,10 +60,16 @@ asarUnpack:
   - resources/**
   - node_modules/ffmpeg-static/**
 # 杜比软解链接了 LibreMPEG 的 AC-3 / E-AC-3 / AC-4 解码器（native/dolby-wasm，GPL-3.0+）：许可证全文随包分发，
-# 「关于」页有署名与源码地址（见 native/dolby-wasm/README.md）。extraResources 不受上面 files 排除规则影响。
+# 「关于」页有署名与源码地址（见 native/dolby-wasm/README.md）。Audio Vivid 软解编进了 AVS3-P3 参考解码器
+# （native/av3a-wasm，UWA Code Sharing Policy），同样附上上游的 LICENSE 与 NOTICE。
+# extraResources 不受上面 files 排除规则影响。
 extraResources:
   - from: native/dolby-wasm/COPYING.GPLv3
     to: licenses/LibreMPEG-GPL-3.0.txt
+  - from: native/av3a-wasm/LICENSE
+    to: licenses/MOLAN-AV3A-LICENSE.txt
+  - from: native/av3a-wasm/NOTICE
+    to: licenses/MOLAN-AV3A-NOTICE.txt
   - from: native/temari-wasm/LICENSE
     to: licenses/Temari-MIT.txt
   - from: native/ffmpeg/LICENSE

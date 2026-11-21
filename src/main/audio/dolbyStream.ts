@@ -1,6 +1,6 @@
 /**
  * 音频软解流：MP4 封装的 AC-3 / E-AC-3（QQ 杜比全景声）、AC-4（网易杜比全景声）、
- * ALAC（Apple Music 无损）→ 立体声 float32 WAV 字节流。
+ * ALAC（Apple Music 无损）、AV3A（网易臻音全景声 / Audio Vivid）→ 立体声 float32 WAV 字节流。
  *
  * Chromium 解不了杜比，而播放链路的一切（音效图、频谱、媒体会话、倍速、seek）都挂在 <audio> 上，
  * 所以不另起一套播放器，而是在 kunyin:// 里把它变成 <audio> 认得的格式：WAV 的「字节 ↔ 时间」
@@ -8,7 +8,8 @@
  * （Electron 44 实测：float32 WAV 流式播放、Range seek 都正常，且 Chromium 不会去探文件尾。）
  *
  * - 只出立体声。AC-3 系的下混交给解码器按码流自带的系数做（dolbyDecoder 的 `stereo`），比拿到 5.1
- *   再通用下混准；网易的 AC-4 是 IMS，本来就是 Dolby 在编码端做好的两声道耳机渲染。
+ *   再通用下混准；网易的 AC-4 是 IMS，本来就是 Dolby 在编码端做好的两声道耳机渲染；
+ *   AV3A 的声床由 av3aDecoder 按帧头的声道配置下混（解码器输出顺序与 FFmpeg 的不同，不能走 toStereo）。
  *   音效图里的压缩器 / 声像节点本来就把声道数夹到 2，多声道原样送出去也到不了扬声器。
  * - 存 float32 而不是 16 位：下混后的峰值可能略过 1，截在容器里就是削波，留给 <audio> 的音量去处理。
  * - 数据长度按 MP4 样本表算死，响应头里的 Content-Length 必须兑现：解码器少吐的（坏帧、码流提前结束）
@@ -16,7 +17,14 @@
  *
  * 不 import electron：取字节的方式由调用方注入（OpenBytes），tools/dolbyStream.test.mjs 用文件模拟。
  */
-import { createDolbyDecoder, type DolbyDecoder, type PcmChunk } from './dolbyDecoder'
+import { createAv3aDecoder } from './av3aDecoder'
+import {
+  createDolbyDecoder,
+  type DolbyCodec,
+  type DolbyDecoder,
+  type PcmChunk,
+  type SoftCodec
+} from './dolbyDecoder'
 import { Mp4Error, parseMoov, sampleAtFrame, syncAtOrBefore, type Mp4AudioTrack } from './mp4'
 
 /** 已解密原文件从 start 起到文件尾的字节流，及文件总长 */
@@ -262,6 +270,10 @@ function toStereo(chunk: PcmChunk): Float32Array {
  *   变换重叠和 QMF 滤波器还要靠前面的帧——从 I 帧起解，第 1 帧误差 0.3、第 2 帧 5e-2、第 3 帧起
  *   逐样本一致（网易实测）。所以退到目标之前至少 2 帧处最近的那个 I 帧。
  * - ALAC：样本可独立解码，不需要预热。
+ * - AV3A：同样是 MDCT 重叠，退 1 帧即可；不退的话第一帧几乎全错（网易实测 SNR 1～4dB，正弦夹具 2dB）。
+ *   预热后在网易文件上与从头播放仍差 31～41dB，多退几帧也不变：参考解码器的噪声填充与带宽扩展调的是
+ *   libc 的 rand()（实例级全局状态、从不播种），seek 新开的解码器从头取随机数，跟连续播放到这里的序列
+ *   对不上。差的只是那层噪声（几乎不触发噪声填充的正弦夹具 seek 后 89dB），跟 AC-3 的抖动是一回事。
  */
 function warmupStart(track: Mp4AudioTrack, target: number): number {
   if (track.codec === 'alac') return target
@@ -271,7 +283,8 @@ function warmupStart(track: Mp4AudioTrack, target: number): number {
 
 /**
  * 每次最多从原文件读这么多字节去解：限住单次 pull 占用主进程的时间。
- * AC-4 最重（约 56× 实时），16KB 在 256kbps 下约 0.5s 音频、9ms；E-AC-3 快一个数量级。
+ * AC-4 约 56× 实时，16KB 在 256kbps 下约 0.5s 音频、9ms；E-AC-3 快一个数量级；
+ * AV3A（7.1.4、832kbps）约 28× 实时，16KB 约 0.16s 音频、6ms。
  */
 const FEED_CHUNK = 16 * 1024
 const SILENCE_CHUNK = 64 * 1024
@@ -287,7 +300,38 @@ export interface WavStreamOptions {
   /** 流终结时恰好调用一次（读完 / 出错 / 被取消） */
   onClose?: () => void
   /** 便于测试注入的解码器工厂（默认 wasm 解码器）；AC-4 没有开源编码器，做不出真夹具 */
-  createDecoder?: typeof createDolbyDecoder
+  createDecoder?: DecoderFactory
+}
+
+export interface DecoderOptions {
+  codec: SoftCodec
+  stereo?: boolean
+  frameLength?: number
+  bitDepth?: number
+  channels?: number
+  sampleRate?: number
+}
+
+export type DecoderFactory = (opts: DecoderOptions) => DolbyDecoder | null
+
+/** 按编码挑 wasm：AV3A 是单独的一个模块（MOLAN-AV3A），其余都在 LibreMPEG 那个里 */
+const defaultDecoder: DecoderFactory = (opts) =>
+  opts.codec === 'av3a'
+    ? createAv3aDecoder()
+    : createDolbyDecoder({ ...opts, codec: opts.codec as DolbyCodec })
+
+/** MP4 样本描述 → 解码器编码 */
+function decoderCodec(entry: Mp4AudioTrack['codec']): SoftCodec {
+  switch (entry) {
+    case 'ac-4':
+      return 'ac4'
+    case 'alac':
+      return 'alac'
+    case 'av3a':
+      return 'av3a'
+    default:
+      return 'ac3'
+  }
 }
 
 /**
@@ -296,10 +340,11 @@ export interface WavStreamOptions {
  */
 export function decodeToWav(opts: WavStreamOptions): ReadableStream<Uint8Array> {
   const { track, layout, cursor } = opts
-  const ac4 = track.codec === 'ac-4'
-  const packetMode = ac4 || track.codec === 'alac'
-  const decoder: DolbyDecoder | null = (opts.createDecoder ?? createDolbyDecoder)({
-    codec: ac4 ? 'ac4' : track.codec === 'alac' ? 'alac' : 'ac3',
+  const codec = decoderCodec(track.codec)
+  // AC-3 系喂任意切分的字节流（过 parser），其余都是一个 MP4 样本一包
+  const packetMode = codec !== 'ac3'
+  const decoder: DolbyDecoder | null = (opts.createDecoder ?? defaultDecoder)({
+    codec,
     stereo: true,
     frameLength: track.alac?.frameLength,
     bitDepth: track.alac?.bitDepth,
@@ -324,7 +369,7 @@ export function decodeToWav(opts: WavStreamOptions): ReadableStream<Uint8Array> 
   let flushed = false
   let closed = false
   const queue: Uint8Array[] = []
-  /** AC-4：跨块的样本先攒在这里，齐了再整包送 */
+  /** 按包模式：跨块的样本先攒在这里，齐了再整包送 */
   let partial: Uint8Array | null = null
 
   const finish = (): void => {
@@ -354,7 +399,7 @@ export function decodeToWav(opts: WavStreamOptions): ReadableStream<Uint8Array> 
   }
 
   /**
-   * AC-4 一包一帧，按样本严格对齐时间轴：解码器少吐（坏帧；I 帧之前的帧）补静音、多吐截掉，
+   * 按包模式一包一帧，按样本严格对齐时间轴：解码器少吐（坏帧；AC-4 I 帧之前的帧）补静音、多吐截掉，
    * 否则一次解坏就会让之后的声音整体错位，与 <audio> 按字节换算出的时间对不上。
    */
   const decodePacket = (i: number, frame: Uint8Array): void => {

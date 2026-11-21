@@ -112,8 +112,8 @@ export function qualityName(id: string, source?: MusicSource): string {
 /**
  * 只能下载、Chromium 解不了的档位：杜比全景声（网易是 AC-4，QQ 是 E-AC-3）、Audio Vivid（AV3A），
  * Electron 44 实测 canPlayType 均为空。播放取流、播放页音质菜单、首选播放音质都跳过它们，
- * 下载照常可选（存 .mp4）。例外是主进程能软解的平台，见 SOFT_DECODERS——目前杜比两家都能播，
- * Audio Vivid 还没有解码器。
+ * 下载照常可选（存 .mp4）。例外是主进程能软解的平台，见 SOFT_DECODERS——目前杜比两家与网易的
+ * Audio Vivid（臻音全景声）都能播。
  */
 export const DOWNLOAD_ONLY_QUALITY_IDS: readonly QualityId[] = ['dolby', 'vivid'] as const
 
@@ -121,16 +121,18 @@ export const DOWNLOAD_ONLY_QUALITY_IDS: readonly QualityId[] = ['dolby', 'vivid'
 export type SoftDecoder = 'dolby'
 
 /**
- * 只能下载的档位里，能在主进程软解后播放的平台（src/main/audio/dolbyStream.ts，
- * LibreMPEG 的解码器编成 wasm）。两家的杜比全景声都是 MP4 封装，但编码不同：
+ * 只能下载的档位里，能在主进程软解后播放的平台（src/main/audio/dolbyStream.ts，解码器都编成 wasm）。
+ * 'dolby' 是「主进程软解成 WAV」这条路的统称，不只管杜比。两家的杜比全景声都是 MP4 封装，但编码不同：
  * - 网易：AC-4 IMS（immersive stereo），Dolby 在编码端做好的两声道耳机渲染，解出来就是空间效果；
  * - QQ（QQ 音乐云取的是同一份文件）：E-AC-3 JOC，开源解码器都不解 JOC，只能解出 5.1 床声道再下混，
  *   听感接近普通立体声。
+ * 网易臻音全景声（vivid）是 AV3A 7.1.4 声床（MOLAN-AV3A，即 AVS3-P3 参考解码器），同样下混成立体声。
  */
 const SOFT_DECODERS: Partial<Record<QualityId, Partial<Record<MusicSource, SoftDecoder>>>> = {
   flac: { am: 'dolby' },
   hires: { am: 'dolby' },
-  dolby: { wy: 'dolby', qq: 'dolby', qqc: 'dolby', am: 'dolby' }
+  dolby: { wy: 'dolby', qq: 'dolby', qqc: 'dolby', am: 'dolby' },
+  vivid: { wy: 'dolby' }
 }
 
 /** 这首歌的这一档要不要软解、用哪个软解器；不需要返回 undefined */

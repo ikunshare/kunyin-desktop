@@ -1,20 +1,21 @@
 /**
- * MP4（ISO BMFF）里杜比 / ALAC 音轨（AC-3 / E-AC-3 / AC-4 / ALAC）的样本表——只为音频软解
+ * MP4（ISO BMFF）里需要软解的音轨（AC-3 / E-AC-3 / AC-4 / ALAC / AV3A）的样本表——只为音频软解
  * （audio/dolbyStream.ts）服务，够用即止。
  *
  * 常规杜比文件是 faststart 布局（ftyp → moov → mdat）、单条音轨：
  * - QQ（D001*.mp4 / 加密版 D0M1*.mmp4）：ec-3，每样本 1536 帧，定长 1792 字节（448kbps），没有 stss；
  * - 网易：ac-4（IMS），每样本 2048 帧、不定长（256kbps），stss 标出每 24 帧一个 I 帧；
- * - Apple Music：ALAC，样本描述里的 alac atom 提供解码初始化参数。
+ * - Apple Music：ALAC，样本描述里的 alac atom 提供解码初始化参数；
+ * - 网易臻音全景声：av3a（Audio Vivid），每样本 1024 帧、不定长，没有 stss（实测 44.1kHz 7.1.4）。
  * 这里仍按规范完整展开 stsz / stsc / stco(co64) / stts / stss，不依赖「定长、连续」这些巧合；
  * 只有分片 MP4（moof）不支持。
  *
  * 纯函数、不 import electron，tools/dolbyStream.test.mjs 直接跑。
  */
 
-export type DolbySampleEntry = 'ac-3' | 'ec-3' | 'ac-4' | 'alac'
+export type DolbySampleEntry = 'ac-3' | 'ec-3' | 'ac-4' | 'alac' | 'av3a'
 
-const DOLBY_ENTRIES: readonly string[] = ['ac-3', 'ec-3', 'ac-4', 'alac']
+const DOLBY_ENTRIES: readonly string[] = ['ac-3', 'ec-3', 'ac-4', 'alac', 'av3a']
 
 export interface Mp4AudioTrack {
   codec: DolbySampleEntry
@@ -82,6 +83,9 @@ function need(buf: Uint8Array, parent: Box, type: string): Box {
   return b
 }
 
+/** 低于它的采样率不可能是真的音频（最低的常见值是 8000），只可能是字段溢出 */
+const MIN_PLAUSIBLE_SAMPLE_RATE = 4000
+
 /** 音轨的编码与采样率：stsd 第一个样本描述（AudioSampleEntry） */
 function sampleEntry(
   buf: Uint8Array,
@@ -94,7 +98,11 @@ function sampleEntry(
   const entry = first.value
   // SampleEntry 6 保留 + 2 data_ref_index，AudioSampleEntry 8 保留 + 声道 2 + 位深 2 + 4 + 采样率 16.16
   if (entry.end - entry.start < 28) return null
-  const sampleRate = dv.getUint32(entry.start + 24) >>> 16
+  // 这个字段是 16.16 定点，整数部分只有 16 位：88.2k 及以上的 hires 根本装不下，写进来的是
+  // 截断后的垃圾（Apple Music 176.4kHz 实测读出来是 1）。低得不像话的一律当没给，
+  // 由调用方退回 mdhd 的 timescale；ALAC 另有 cookie 里的 32 位真值，见下。
+  let sampleRate = dv.getUint32(entry.start + 24) >>> 16
+  if (sampleRate < MIN_PLAUSIBLE_SAMPLE_RATE) sampleRate = 0
   let alac: Mp4AudioTrack['alac'] | undefined
   if (entry.type === 'alac') {
     for (const cookie of boxes(buf, entry.start + 28, entry.end)) {
@@ -104,6 +112,11 @@ function sampleEntry(
         bitDepth: buf[cookie.start + 9],
         channels: buf[cookie.start + 13]
       }
+      // ALACSpecificConfig 末尾的 sampleRate（32 位）才是真值，解码器初始化也要用它
+      if (cookie.end - cookie.start >= 28) {
+        const rate = dv.getUint32(cookie.start + 24)
+        if (rate >= MIN_PLAUSIBLE_SAMPLE_RATE) sampleRate = rate
+      }
       break
     }
   }
@@ -111,7 +124,7 @@ function sampleEntry(
 }
 
 /**
- * 从完整的 moov 盒（含盒头）里取出第一条杜比音轨的样本表。
+ * 从完整的 moov 盒（含盒头）里取出第一条需要软解的音轨的样本表。
  * @throws Mp4Error 没有这类音轨、或样本表残缺
  */
 export function parseMoov(moov: Uint8Array): Mp4AudioTrack {
@@ -214,7 +227,7 @@ export function parseMoov(moov: Uint8Array): Mp4AudioTrack {
       sync
     }
   }
-  throw new Mp4Error('没有杜比音轨')
+  throw new Mp4Error('没有可软解的音轨')
 }
 
 /** 不晚于 sample 的最近一个同步样本；没有 stss 时就是它自己 */

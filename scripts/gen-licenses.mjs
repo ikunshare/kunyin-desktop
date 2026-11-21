@@ -49,6 +49,11 @@ const LIBREMPEG_COMMIT = /^LIBREMPEG_COMMIT=(\w+)/m.exec(
   readFileSync(join(root, 'native', 'dolby-wasm', 'build.sh'), 'utf8')
 )[1]
 
+/** Audio Vivid 软解编进 wasm 的 MOLAN-AV3A 提交，同上 */
+const MOLAN_COMMIT = /^MOLAN_COMMIT=(\w+)/m.exec(
+  readFileSync(join(root, 'native', 'av3a-wasm', 'build.sh'), 'utf8')
+)[1]
+
 /**
  * 手工登记的项目。
  * - repo：GitHub 仓库，许可证经 API 查（licensePath 给了就查那个文件，ref 钉版本）；
@@ -136,6 +141,15 @@ const EMBEDDED = [
     ref: LIBREMPEG_COMMIT,
     license: 'GPL-3.0-or-later',
     usage: '音频软解：AC-3 / E-AC-3 / AC-4 / ALAC 解码器（编译进 wasm）'
+  },
+  {
+    name: 'MOLAN-AV3A',
+    repo: 'baiji6/MOLAN-AV3A',
+    licensePath: 'LICENSE',
+    ref: MOLAN_COMMIT,
+    // AVS3-P3 参考软件（华为）按 UWA Code Sharing Policy 授权，SPDX 里没有，GitHub 认成 NOASSERTION
+    license: 'LicenseRef-UWA-Code-Sharing-Policy',
+    usage: '音频软解：Audio Vivid（AVS3-P3 参考解码器，编译进 wasm）'
   },
   {
     name: 'Temari',

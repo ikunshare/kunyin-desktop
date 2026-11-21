@@ -5,9 +5,8 @@
  * Android 的响应式 StateFlow（playlistsFlow/favoritesFlow/revision）改为通过 IPC
  * 主动推送给渲染层：写操作后调 `notifyLibraryChanged()`（由 ipc 层注入），渲染层自行重拉。
  *
- * 收藏 = 操作 favorites 系统歌单；试听列表（trial）= 累积列表，点单曲时追加（对齐 Android
- * addToTrial，追加到末尾不头插）。注意「添加歌曲到列表时的位置」这个设置对试听列表不生效——
- * 它是播放时自动累积的，顺序要按播放先后。
+ * 收藏 = 操作 favorites 系统歌单；试听列表（trial）= 累积列表，点单曲时加入（对齐 Android
+ * addToTrial）。插在开头还是末尾与其它列表一样跟设置「添加歌曲到列表时的位置」走。
  */
 import {
   isKnownSource,
@@ -140,15 +139,14 @@ export function toggleFavorite(item: MusicItem): boolean {
 
 /**
  * 将歌曲加入试听列表（对齐 Android LocalMusicStore.addToTrial）。
- * atHead=true 头插，否则追加到末尾（默认，不打乱既有顺序）。
- * 已存在的同一首会先去重（addToPlaylist* 内部处理）。
+ * atHead=true 强制头插（已在列表里的会被挪到最前）；否则按设置「添加歌曲到列表时的位置」
+ * 插到顶部或末尾，已在列表里的保持原位（与往歌单 / 收藏里添加一致）。
  */
 export function addToTrial(item: MusicItem, atHead: boolean): void {
   const pid = getTrialPlaylistId()
   if (pid <= 0) return
   if (atHead) addToPlaylistAtHead(pid, item)
-  // 显式给 'bottom'：试听列表的顺序只跟播放先后有关，不跟「添加到列表的位置」设置
-  else addToPlaylist(pid, item, 'bottom')
+  else addToPlaylist(pid, item)
 }
 
 export function queryTrialSongs(): MusicItem[] {
@@ -611,6 +609,43 @@ export function moveSongInPlaylistDirect(
   )
   const tx = d.transaction(() => {
     entries.forEach((e, i) => upd.run(i, playlistId, e.song_id, e.source))
+  })
+  tx()
+}
+
+/**
+ * 按 ordered（songId, source）重写整个歌单的 position：列出的条目依次排在最前，
+ * 未列出的保持原有相对顺序排在后面。顺序与 position 都已对齐时不写库。
+ */
+export function reorderPlaylistDirect(
+  playlistId: number,
+  ordered: { id: number; source: string }[]
+): void {
+  const d = getDb()
+  const entries = d
+    .prepare(
+      `SELECT song_id, source, position FROM ${TABLE_PLAYLIST_SONGS} WHERE playlist_id = ? ORDER BY position ASC`
+    )
+    .all(playlistId) as { song_id: number; source: string; position: number }[]
+  const keyOf = (id: number, source: string): string => `${id}_${source}`
+  const byKey = new Map(entries.map((e) => [keyOf(e.song_id, e.source), e]))
+  const target = new Map<string, { song_id: number; source: string }>()
+  for (const o of ordered) {
+    const k = keyOf(o.id, o.source)
+    const e = byKey.get(k)
+    if (e && !target.has(k)) target.set(k, e)
+  }
+  for (const e of entries) {
+    const k = keyOf(e.song_id, e.source)
+    if (!target.has(k)) target.set(k, e)
+  }
+  const targetList = [...target.values()]
+  if (targetList.every((e, i) => e === entries[i] && entries[i].position === i)) return
+  const upd = d.prepare(
+    `UPDATE ${TABLE_PLAYLIST_SONGS} SET position = ? WHERE playlist_id = ? AND song_id = ? AND source = ?`
+  )
+  const tx = d.transaction(() => {
+    targetList.forEach((e, i) => upd.run(i, playlistId, e.song_id, e.source))
   })
   tx()
 }

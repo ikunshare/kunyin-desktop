@@ -18,6 +18,13 @@ export const CHROMIUM_PER_HOST_SOCKETS = 6
 /** 接口类请求的 per-host 并发上限（留 2 个额度给取流/封面图片直连）。 */
 export const DEFAULT_HOST_CONCURRENCY = 4
 
+/**
+ * 「大流量」连接（下载分段 + 播放预取）的 per-host 并发上限，两者共用一个闸。
+ * 留 2 个额度给播放那条读者连接（<audio> 首帧常同时开两路）：大流量把 6 个 socket 全占了的话，
+ * 播放的请求只能在连接池里排队，而它的「等响应头」计时照走——会被误判成上游超时。
+ */
+export const BULK_HOST_CONCURRENCY = 4
+
 /** 从 URL 取并发闸的键。解析不了就退化成整条 URL（宁可各自排队，也不要全挤成一个键）。 */
 export function hostKeyOf(url: string): string {
   try {

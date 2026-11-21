@@ -18,8 +18,10 @@ import { Readable } from 'node:stream'
 import type { SoftDecoder } from '@common'
 import { createAudioDecryptor, type AudioDecryptor } from '../crypto/decryptor'
 import {
+  blockCount,
   blockPath,
   blockRange,
+  commitAudioBlock,
   ensureAudioCacheRecord,
   getAudioCacheRecord,
   openBlockWriter,
@@ -28,8 +30,11 @@ import {
   type CacheRecord
 } from '../cache/audioCache'
 import { createLogger } from '../core/logger'
-import { netStats } from '../net/request'
+import { deferCancel, withDeferredCancel } from '../net/fetchBody'
+import { bulkStats, netStats, runBulk } from '../net/request'
+import { parseContentRange } from '../net/segmented'
 import { guardStream } from './streamGuard'
+import { PrefetchFatalError, PrefetchSession } from './prefetch'
 import { createByteCursor, decodeToWav, loadTrack, wavLayout, type OpenBytes } from './dolbyStream'
 import { Mp4Error, type Mp4AudioTrack } from './mp4'
 
@@ -122,9 +127,10 @@ function serveLocalFile(filePath: string, range: string | null, contentType?: st
     headers.set('Content-Range', `bytes ${start}-${end}/${size}`)
   }
   headers.set('Content-Length', String(end - start + 1))
-  const body = Readable.toWeb(
-    createReadStream(filePath, { start, end })
-  ) as ReadableStream<Uint8Array>
+  // 同 net.fetch 的响应体：<audio> seek / 切歌时 cancel 它，直接落到 toWeb 适配器上会撞竞态
+  const body = deferCancel(
+    Readable.toWeb(createReadStream(filePath, { start, end })) as ReadableStream<Uint8Array>
+  )
   return new Response(body as BodyInit, { status, headers })
 }
 
@@ -163,6 +169,24 @@ const DNS_RESET_COOLDOWN = 10_000
 
 /** 回收整条连接池的最小间隔（ms） */
 const POOL_RESET_COOLDOWN = 60_000
+
+/** 一首歌的预取开几条连接。与下载分段共用大流量闸（net/request 的 runBulk，每主机 4 条） */
+const PREFETCH_CONNECTIONS = 3
+
+/**
+ * 预取在首个请求之后等多久才开工（ms）。两个用意：连点下一首时被跳过的歌不白开连接；
+ * 开播头几百毫秒把带宽全留给读者那条连接，首帧不被预取抢。
+ */
+const PREFETCH_START_DELAY = 800
+
+/** 同时预取几首：正在播的 + 渲染层预加载的下一首（stores/player 的 warmAudio） */
+const MAX_PREFETCH_SESSIONS = 2
+
+/**
+ * 读者撞上「预取正在下的那一块」时最多等它多久（ms）。等是为了不重复下同一块；
+ * 封顶是为了预取那条连接停摆时（最坏要等 20s 看门狗）播放不跟着一起卡——超时就自己回源。
+ */
+const READER_WAIT_MS = 8_000
 
 /**
  * 上游请求 UA：对齐真实浏览器。部分 CDN/WAF 会把裸 `Mozilla/5.0` 当机器人，
@@ -312,11 +336,17 @@ const upstreams = new Set<UpstreamTrack>()
 /** 诊断用：当前在飞的上游取流快照（导出日志时会记一条，见 ipc/handlers/log.ts） */
 export function audioNetStats(): {
   inFlight: number
+  /** 正在预取的歌曲数 */
+  prefetching: number
+  /** 大流量闸（预取 + 下载分段）各 host 的在飞/排队数 */
+  bulk: { host: string; active: number; queued: number }[]
   streams: { host: string; phase: string; ageMs: number; bytes: number; idleMs: number }[]
 } {
   const now = Date.now()
   return {
     inFlight: upstreams.size,
+    prefetching: prefetches.size,
+    bulk: bulkStats(),
     streams: [...upstreams].map((u) => ({
       host: u.host,
       phase: u.phase,
@@ -417,8 +447,11 @@ async function fetchUpstreamOnce(
     release('等响应头超时')
   }, UPSTREAM_HEADER_TIMEOUT)
   try {
-    // net.fetch 走 Electron 网络栈（遵循代理/证书设置），比全局 fetch 更合适
-    const response = await net.fetch(url, { headers, signal: abort.signal })
+    // net.fetch 走 Electron 网络栈（遵循代理/证书设置），比全局 fetch 更合适。
+    // 响应体套 deferCancel：Node 的 Readable.toWeb 在「cancel 时还压着数据」会抛未捕获异常（见 net/fetchBody）；
+    // body 被 cancel 就是这条连接用完了，顺手 release（幂等，各处收口照旧）
+    const raw = await net.fetch(url, { headers, signal: abort.signal })
+    const response = withDeferredCancel(raw, () => release('响应体取消'))
     track.phase = 'body'
     consecutiveHeaderTimeouts = 0
     return { response, track, release }
@@ -739,12 +772,229 @@ async function* readLocalBlocks(
   }
 }
 
+// ============ 多连接预取 ============
+
+interface PrefetchEntry {
+  session: PrefetchSession
+  record: CacheRecord
+  url: string
+}
+
+/** 缓存键 → 正在预取的那一路。Map 迭代序即 LRU 序（ensurePrefetch 命中时提到末尾）。 */
+const prefetches = new Map<string, PrefetchEntry>()
+
+/** 这一路已确认预取不了（上游不认 Range、直链过期、连续失败）：别每来一个 Range 请求就重试一轮 */
+const prefetchGaveUp = new WeakSet<AudioStreamSpec>()
+
+function hintPrefetch(key: string, block: number): void {
+  prefetches.get(key)?.session.hint(block)
+}
+
 /**
- * 回源 [fetchStart, fetchEnd]（按块边界对齐，方便整块落盘），
- * 但只把 [emitStart, emitEnd] 这一段吐给 <audio>。
+ * 预取一块：Range 回源 → 解密 → 整块落盘。许可握到这一块读完（runBulk）。
+ *
+ * 走的是和读者同一套 fetchUpstream（换路、等响应头超时、租约），所以连接的回收路径也是同一条：
+ * 读完 / 出错 / 停摆 / 会话被停，finally 里的 release 都会 abort 那次 fetch。
+ */
+async function prefetchBlock(
+  spec: AudioStreamSpec,
+  key: string,
+  record: CacheRecord,
+  index: number,
+  signal: AbortSignal
+): Promise<boolean> {
+  const url = spec.url
+  if (!url) throw new PrefetchFatalError('没有直链')
+  return await runBulk(url, async () => {
+    // 排队等许可的这段时间里，读者可能已经把这一块下完了
+    if (signal.aborted || record.blocks.has(index)) return record.blocks.has(index)
+    const { start, end } = blockRange(record, index)
+    const result = await fetchUpstream(url, upstreamHeaders(spec, `bytes=${start}-${end}`), {
+      token: `prefetch:${key}`,
+      signal
+    })
+    if (!result.ok) {
+      const status = result.error.status
+      // 4xx 是上游的明确答复（直链过期、鉴权不通），这一路再试也是同样结果；
+      // 读者那边会把 403 报给渲染层，重新解析后是一路新的 spec，预取随之重开
+      if (status >= 400 && status < 500 && status !== 408 && status !== 429 && status !== 499) {
+        throw new PrefetchFatalError(`上游 ${status}`)
+      }
+      return false
+    }
+    const lease = result.lease
+    try {
+      const upstream = lease.response
+      const cr = parseContentRange(upstream.headers.get('content-range'))
+      // 不认 Range 的上游会回 200 + 整文件：每块都这么来一遍等于把整首歌下 N 遍
+      if (upstream.status !== 206 || !cr || cr.start !== start) {
+        throw new PrefetchFatalError('上游不支持分段')
+      }
+      const want = end - start + 1
+      const reader = decryptedBody(spec, leaseBody(lease), start).getReader()
+      const parts: Uint8Array[] = []
+      let got = 0
+      try {
+        while (got < want) {
+          const { done, value } = await reader.read()
+          if (done || !value) break
+          parts.push(value)
+          got += value.byteLength
+        }
+      } finally {
+        void reader.cancel().catch(() => {})
+      }
+      if (got < want) return false
+      return await commitAudioBlock(key, record, index, Buffer.concat(parts, got).subarray(0, want))
+    } finally {
+      lease.release('预取块结束')
+    }
+  })
+}
+
+/**
+ * 确保这首歌有一路预取在跑（已有就只刷新 LRU 位置）。每次 `<audio>` 的请求落到带缓存条目的
+ * 路径上都会调它，所以必须幂等且便宜。
+ */
+function ensurePrefetch(spec: AudioStreamSpec, key: string, record: CacheRecord): void {
+  const url = spec.url
+  if (!url || prefetchGaveUp.has(spec)) return
+  if (record.blocks.size >= blockCount(record)) return
+  const exist = prefetches.get(key)
+  if (exist) {
+    if (exist.record === record && exist.url === url && !exist.session.settled) {
+      prefetches.delete(key)
+      prefetches.set(key, exist)
+      return
+    }
+    // 条目被重建（失效后重下）或直链换了：旧的那一路写不进新条目，换掉
+    prefetches.delete(key)
+    exist.session.stop()
+  }
+  while (prefetches.size >= MAX_PREFETCH_SESSIONS) {
+    const oldest = prefetches.keys().next().value
+    if (oldest === undefined) break
+    const entry = prefetches.get(oldest)
+    prefetches.delete(oldest)
+    entry?.session.stop()
+  }
+  const startedAt = Date.now()
+  const missing = blockCount(record) - record.blocks.size
+  const entry: PrefetchEntry = {
+    record,
+    url,
+    session: new PrefetchSession({
+      blockCount: blockCount(record),
+      has: (i) => record.blocks.has(i),
+      fetchBlock: (i, signal) => prefetchBlock(spec, key, record, i, signal),
+      connections: PREFETCH_CONNECTIONS,
+      startDelayMs: PREFETCH_START_DELAY,
+      onSettle: (reason, error) => {
+        if (prefetches.get(key) === entry) prefetches.delete(key)
+        if (reason === 'complete') {
+          log.info('预取完成', { host: hostOf(url), blocks: missing, ms: Date.now() - startedAt })
+        } else if (reason === 'failed') {
+          prefetchGaveUp.add(spec)
+          log.warn('预取放弃，回到单连接取流', {
+            host: hostOf(url),
+            reason: error instanceof Error ? error.message : '连续失败'
+          })
+        }
+      }
+    })
+  }
+  prefetches.set(key, entry)
+}
+
+/** 等 pending 落地，至多 ms；signal 落下立刻返回。永不 reject。 */
+function settleWithin(pending: Promise<void>, ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    const timer = setTimeout(done, ms)
+    signal.addEventListener('abort', done, { once: true })
+    void pending.then(done, done)
+  })
+}
+
+/**
+ * 把一条已经打开的上游流（首字节在文件偏移 bodyStart）按块落盘，同时把 [emitStart, emitEnd]
+ * 这一段吐给调用方。读到 fetchEnd、流结束、或**撞上一块别人已经有了的**为止。
+ *
+ * 最后那条是和预取配合的关键：读者这条连接只负责「预取还没够到的地方」。走到某个块边界时，
+ * 如果下一块已经在缓存里（或预取正在下），就在边界上收手、把连接还掉——后面的由调用方
+ * （assembleRange）改读本地块。不这么做的话，预取把整首拉完了，读者还在用那条被背压拖着的
+ * 慢连接重复下同样的字节。
  *
  * 断流/切歌时 finally 里 writer.finish() 只保留已下满的块——分块缓存的意义就在这里：
  * 听了一半的歌下次能接着补，而不是从头再来。
+ *
+ * @returns 下一个还没处理的文件偏移。调用方据此接着拼；它一定 > max(bodyStart, emitStart)，
+ *   除非上游一个字节都没给。
+ */
+async function* pumpUpstream(
+  spec: AudioStreamSpec,
+  key: string,
+  record: CacheRecord,
+  lease: UpstreamLease,
+  bodyStart: number,
+  fetchEnd: number,
+  emitStart: number,
+  emitEnd: number
+): AsyncGenerator<Uint8Array, number> {
+  // leaseBody 必须在 try 之前拿到 reader：openBlockWriter 万一抛了，也得有人把这条上游还掉
+  const reader = decryptedBody(spec, leaseBody(lease), bodyStart).getReader()
+  const bs = record.blockSize
+  // 只在这之后的块边界上收手：之前的要么是对齐多下的零头，要么还没轮到要吐的数据，
+  // 在那儿停下等于一个字节都没推进
+  const floor = Math.max(bodyStart, emitStart)
+  let writer: ReturnType<typeof openBlockWriter> | null = null
+  let pos = bodyStart
+  try {
+    writer = openBlockWriter(key, record, bodyStart)
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done || !value) break
+      // 每块现取：预取那一路是首个请求之后才建的，也可能中途被换掉
+      const session = prefetches.get(key)?.session
+      const chunkStart = pos
+      let take = value.byteLength
+      let cut = false
+      for (let b = Math.ceil(chunkStart / bs) * bs; b < chunkStart + take; b += bs) {
+        if (b <= floor) continue
+        const block = b / bs
+        if (record.blocks.has(block) || session?.pending(block)) {
+          take = b - chunkStart
+          cut = true
+          break
+        }
+      }
+      if (take > 0) {
+        const chunk = take < value.byteLength ? value.subarray(0, take) : value
+        writer.write(chunk)
+        pos = chunkStart + take
+        session?.hint(Math.floor(pos / bs))
+        const s = Math.max(chunkStart, emitStart)
+        const e = Math.min(pos - 1, emitEnd)
+        if (s <= e) yield chunk.subarray(s - chunkStart, e - chunkStart + 1)
+      }
+      // 读满整个回源区间就停（emitEnd 之后那点是为凑整块多下的，仍要喂给 writer）
+      if (cut || pos > fetchEnd) break
+    }
+  } finally {
+    writer?.finish()
+    void reader.cancel().catch(() => {})
+    lease.release('分段结束')
+  }
+  return pos
+}
+
+/**
+ * 回源 [fetchStart, fetchEnd]（按块边界对齐，方便整块落盘），
+ * 但只把 [emitStart, emitEnd] 这一段吐给 <audio>。返回值同 pumpUpstream。
  */
 async function* fetchAndStore(
   spec: AudioStreamSpec,
@@ -755,7 +1005,7 @@ async function* fetchAndStore(
   emitStart: number,
   emitEnd: number,
   ctx: StreamContext
-): AsyncGenerator<Uint8Array> {
+): AsyncGenerator<Uint8Array, number> {
   if (!spec.url) throw new Error('缺块需要回源，但这一路没有直链')
   const result = await fetchUpstream(
     spec.url,
@@ -763,36 +1013,26 @@ async function* fetchAndStore(
     ctx
   )
   if (!result.ok) throw new Error(`上游取流失败 ${result.error.status}`)
-  const lease = result.lease
-  // leaseBody 必须在 try 之前拿到 reader：openBlockWriter 万一抛了，也得有人把这条上游还掉
-  const reader = decryptedBody(spec, leaseBody(lease), fetchStart).getReader()
-  let writer: ReturnType<typeof openBlockWriter> | null = null
-  let pos = fetchStart
-  try {
-    writer = openBlockWriter(key, record, fetchStart)
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done || !value) break
-      writer.write(value)
-      const chunkStart = pos
-      const chunkEnd = pos + value.byteLength - 1
-      pos = chunkEnd + 1
-      const s = Math.max(chunkStart, emitStart)
-      const e = Math.min(chunkEnd, emitEnd)
-      if (s <= e) yield value.subarray(s - chunkStart, e - chunkStart + 1)
-      // 读满整个回源区间就停（emitEnd 之后那点是为凑整块多下的，仍要喂给 writer）
-      if (pos > fetchEnd) break
-    }
-  } finally {
-    writer?.finish()
-    void reader.cancel().catch(() => {})
-    lease.release('分段结束')
-  }
+  // 上游无视 Range 回了整文件（200）时，body 是从 0 开始的：按 0 对齐，前缀由 pump 跳过
+  const bodyStart = result.lease.response.status === 206 ? fetchStart : 0
+  return yield* pumpUpstream(
+    spec,
+    key,
+    record,
+    result.lease,
+    bodyStart,
+    fetchEnd,
+    emitStart,
+    emitEnd
+  )
 }
 
 /**
  * 按块拼出 [start, end]：本地有的块直接读文件，缺的块按块边界对齐回源并顺手补齐。
- * 分段计划由 planRange 算（纯函数，保证各段 emit 区间恰好覆盖 [start, end]）。
+ *
+ * **边走边重新规划**，而不是开头算一次：预取在后台不断落新块，读者每走完一段都重新看一眼
+ * 「接下来这块现在有没有」。分段计划仍由 planRange 算（纯函数），每轮只取它的第一段，
+ * 所以各段 emit 区间首尾相接、恰好覆盖 [start, end] 这条不变式照旧成立——Content-Length 靠它。
  */
 async function* assembleRange(
   spec: AudioStreamSpec,
@@ -802,29 +1042,69 @@ async function* assembleRange(
   end: number,
   ctx: StreamContext
 ): AsyncGenerator<Uint8Array> {
-  // 先把涉及的块逐个验一遍（大小对不上的会被剔出索引，当作缺块回源补齐）
-  const available = new Set<number>()
-  const first = Math.floor(start / record.blockSize)
-  const last = Math.floor(end / record.blockSize)
-  for (let i = first; i <= last; i++) {
-    if (await verifyBlock(key, record, i)) available.add(i)
-  }
-  for (const seg of planRange(record, (i) => available.has(i), start, end)) {
+  const bs = record.blockSize
+  let pos = start
+  while (pos <= end) {
+    // 下游已经放弃：别再开新的回源。卡在下面那些 await 里时也是靠这道闸解开的
+    if (ctx.signal.aborted) return
+    const idx = Math.floor(pos / bs)
+    hintPrefetch(key, idx)
+    const seg = planRange(record, (i) => record.blocks.has(i), pos, end)[0]
     if (seg.local) {
+      // 读之前逐块验一遍（大小对不上的会被剔出索引）；有坏块就重新规划，把它当缺块回源
+      let intact = true
+      for (let i = idx; i <= Math.floor(seg.emitEnd / bs); i++) {
+        if (!(await verifyBlock(key, record, i))) {
+          intact = false
+          break
+        }
+      }
+      if (!intact) continue
       yield* readLocalBlocks(key, record, seg.emitStart, seg.emitEnd)
-    } else {
-      yield* fetchAndStore(
-        spec,
-        key,
-        record,
-        seg.fetchStart,
-        seg.fetchEnd,
-        seg.emitStart,
-        seg.emitEnd,
-        ctx
-      )
+      pos = seg.emitEnd + 1
+      continue
     }
+    // 这一块预取正在下：等它比自己再开一条连接重复下要快，也不多占额度
+    const pending = prefetches.get(key)?.session.wait(idx)
+    if (pending) {
+      await settleWithin(pending, READER_WAIT_MS, ctx.signal)
+      if (ctx.signal.aborted) return
+      if (record.blocks.has(idx)) continue
+    }
+    const reached = yield* fetchAndStore(
+      spec,
+      key,
+      record,
+      seg.fetchStart,
+      seg.fetchEnd,
+      seg.emitStart,
+      seg.emitEnd,
+      ctx
+    )
+    // 上游一个字节都没推进：再转下去只会原地打转
+    if (reached <= pos) throw new Error('上游提前结束')
+    pos = Math.min(reached, seg.emitEnd + 1)
   }
+}
+
+/**
+ * 首播（刚按响应头建好条目）：先把手里这条已经打开的上游流用起来，
+ * 它在某个块边界被预取追上后，剩下的交给 assembleRange 读本地块。
+ */
+async function* leadIn(
+  spec: AudioStreamSpec,
+  key: string,
+  record: CacheRecord,
+  lease: UpstreamLease,
+  bodyStart: number,
+  start: number,
+  end: number,
+  ctx: StreamContext
+): AsyncGenerator<Uint8Array> {
+  const fetchEnd = blockRange(record, Math.floor(end / record.blockSize)).end
+  const reached = yield* pumpUpstream(spec, key, record, lease, bodyStart, fetchEnd, start, end)
+  const next = Math.max(reached, start)
+  if (next <= end) yield* assembleRange(spec, key, record, next, end, ctx)
 }
 
 /** 解析 Range 头到闭区间；越界返回 null（调用方回 416） */
@@ -895,6 +1175,7 @@ export function installAudioProtocol(): void {
           'Content-Length': String(end - start + 1)
         })
         if (partial) out.set('Content-Range', `bytes ${start}-${end}/${record.size}`)
+        ensurePrefetch(spec, key, record)
         const body = streamFrom(assembleRange(spec, key, record, start, end, ctx), () =>
           slot.abort.abort()
         )
@@ -926,69 +1207,51 @@ export function installAudioProtocol(): void {
       }
 
       const contentType = spec.contentType ?? upstream.headers.get('content-type') ?? 'audio/mpeg'
+      const cl = upstream.headers.get('content-length')
+      const cr = upstream.headers.get('content-range')
+      const status = upstream.status
+
+      // 总长度从响应头得出，拿不到就不缓存（宁可不存，也不写出长度存疑的块）。
+      // 建了条目就改由我们自己按 [start, end] 供流：开头用手里这条连接，预取追上后切到本地块。
+      if (key) {
+        const total = parseTotalSize(status, cl, cr)
+        const fresh = total > 0 ? ensureAudioCacheRecord(key, total, contentType) : null
+        const resolved = fresh ? resolveRange(range, total) : null
+        // body 的首字节在文件里的位置：206 以上游报的为准（后缀 Range 时我们算不出来），200 是整文件
+        const bodyStart = status === 206 ? (parseContentRange(cr)?.start ?? -1) : 0
+        if (fresh && resolved && bodyStart >= 0 && bodyStart <= resolved.start) {
+          const { start, end, partial } = resolved
+          const headers = new Headers({
+            'Access-Control-Allow-Origin': '*',
+            'Accept-Ranges': 'bytes',
+            'Content-Type': contentType,
+            'Content-Length': String(end - start + 1)
+          })
+          if (partial) headers.set('Content-Range', `bytes ${start}-${end}/${total}`)
+          ensurePrefetch(spec, key, fresh)
+          const body = streamFrom(leadIn(spec, key, fresh, lease, bodyStart, start, end, ctx), () =>
+            slot.abort.abort()
+          )
+          return new Response(bindToRequest(body, slot) as BodyInit, {
+            status: partial ? 206 : 200,
+            headers
+          })
+        }
+      }
+
+      // 不缓存（没给 cacheKey / 缓存关闭 / 拿不准总长）：原样透传上游
       const out = new Headers()
       out.set('Access-Control-Allow-Origin', '*')
       out.set('Accept-Ranges', 'bytes')
       out.set('Content-Type', contentType)
-      const cl = upstream.headers.get('content-length')
-      const cr = upstream.headers.get('content-range')
-      const status = upstream.status
       if (cl) out.set('Content-Length', cl)
       if (cr) out.set('Content-Range', cr)
-
-      let body = decryptedBody(spec, leaseBody(lease), upstreamStart)
-
-      // 挂在解密之后：缓存里存的是可直接播的明文。总长度从响应头得出，
-      // 拿不到就不缓存（宁可不存，也不写出长度存疑的块）。
-      if (key) {
-        const total = parseTotalSize(status, cl, cr)
-        const fresh = total > 0 ? ensureAudioCacheRecord(key, total, contentType) : null
-        if (fresh) body = tapToBlocks(body, key, fresh, upstreamStart)
-      }
-
+      const body = decryptedBody(spec, leaseBody(lease), upstreamStart)
       return new Response(bindToRequest(body, slot) as BodyInit, { status, headers: out })
     } catch (e) {
       // 建流途中抛错（落盘目录不可写等）：slot 一旦不 abort，刚拿到的上游租约就没人还
       log.error('音频流响应失败', e)
       return fail(500)
-    }
-  })
-}
-
-/**
- * 把流原样透传给 <audio>，同时按块落盘。
- *
- * 用 pull 驱动的包装而不是 tee()：tee 的两路共享背压，慢的一路会让内部缓冲无限膨胀。
- * 这里读一块、写一块、发一块，背压天然跟着 <audio> 的消费速度；cancel（切歌）时
- * writer.finish() 保留已下满的块，正在攒的那块丢掉。
- */
-function tapToBlocks(
-  src: ReadableStream<Uint8Array>,
-  key: string,
-  record: CacheRecord,
-  startOffset: number
-): ReadableStream<Uint8Array> {
-  const reader = src.getReader()
-  const writer = openBlockWriter(key, record, startOffset)
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const { done, value } = await reader.read()
-        if (done || !value) {
-          writer.finish()
-          controller.close()
-          return
-        }
-        writer.write(value)
-        controller.enqueue(value)
-      } catch (e) {
-        writer.finish()
-        controller.error(e)
-      }
-    },
-    cancel(reason) {
-      writer.finish()
-      return reader.cancel(reason)
     }
   })
 }
@@ -1040,9 +1303,9 @@ function plainBytesOpener(spec: AudioStreamSpec, ctx: StreamContext): OpenBytes 
 
     if (spec.filePath) {
       const size = statSync(spec.filePath).size
-      const body = Readable.toWeb(
-        createReadStream(spec.filePath, { start })
-      ) as ReadableStream<Uint8Array>
+      const body = deferCancel(
+        Readable.toWeb(createReadStream(spec.filePath, { start })) as ReadableStream<Uint8Array>
+      )
       return { body, size }
     }
 
@@ -1053,6 +1316,7 @@ function plainBytesOpener(spec: AudioStreamSpec, ctx: StreamContext): OpenBytes 
         sub.abort()
         return { body: new ReadableStream({ start: (c) => c.close() }), size: record.size }
       }
+      ensurePrefetch(spec, key, record)
       const gen = assembleRange(spec, key, record, start, record.size - 1, subCtx)
       return { body: streamFrom(gen, () => sub.abort()), size: record.size }
     }
@@ -1075,12 +1339,17 @@ function plainBytesOpener(spec: AudioStreamSpec, ctx: StreamContext): OpenBytes 
       throw new SourceStatusError(size ? 499 : 502)
     }
     const bodyStart = status === 206 ? start : 0
-    let body = decryptedBody(spec, leaseBody(lease), bodyStart)
     if (key) {
       const type = upstream.headers.get('content-type') ?? 'application/octet-stream'
       const fresh = ensureAudioCacheRecord(key, size, type)
-      if (fresh) body = tapToBlocks(body, key, fresh, bodyStart)
+      if (fresh) {
+        // 同直通路径：先用这条连接，预取追上后切本地块（前缀由 pump 按 emitStart 跳过）
+        ensurePrefetch(spec, key, fresh)
+        const gen = leadIn(spec, key, fresh, lease, bodyStart, start, size - 1, subCtx)
+        return { body: streamFrom(gen, () => sub.abort()), size }
+      }
     }
+    const body = decryptedBody(spec, leaseBody(lease), bodyStart)
     return { body: bodyStart < start ? skipBytes(body, start - bodyStart) : body, size }
   }
 }

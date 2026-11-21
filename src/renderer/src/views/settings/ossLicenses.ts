@@ -119,6 +119,14 @@ export const OSS_SECTIONS: OssSection[] = [
           'https://github.com/librempeg/librempeg/blob/9c00336e26e45ed1274c9693382b1b1441ccaf6a/COPYING.GPLv3'
       },
       {
+        name: 'MOLAN-AV3A',
+        license: 'LicenseRef-UWA-Code-Sharing-Policy',
+        usage: '音频软解：Audio Vivid（AVS3-P3 参考解码器，编译进 wasm）',
+        url: 'https://github.com/baiji6/MOLAN-AV3A',
+        licenseUrl:
+          'https://github.com/baiji6/MOLAN-AV3A/blob/1564bd332205bb46afee8c643776f833020b94b6/LICENSE'
+      },
+      {
         name: 'Temari',
         usage: 'Apple Music FairPlay 样本解密（编译进 wasm）',
         url: 'https://github.com/WorldObservationLog/Temari',

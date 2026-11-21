@@ -285,6 +285,10 @@ export class SyncListBridge {
     return this.resolveMode() === 'overwrite_remote_local'
   }
 
+  /**
+   * 补齐远端有而本地没有的歌，removeMissing 时删掉本地多出的，最后按远端顺序重排
+   * （对端排序 / 拖动只会以整份 list_data_overwrite 的形式过来）。本地独有且保留的歌排在末尾。
+   */
   private replacePlaylist(pid: number, lxSongs: Json[], removeMissing: boolean): void {
     const existing = new Map<string, { id: number; source: string }>()
     for (const { songJson } of store.queryPlaylistSongsRaw(pid)) {
@@ -296,6 +300,7 @@ export class SyncListBridge {
     const now = Date.now()
     let pos = 0
     const seen = new Set<string>()
+    const order: { id: number; source: string }[] = []
     for (const el of lxSongs) {
       if (!el || typeof el !== 'object') continue
       const item = songFromJson(el)
@@ -303,11 +308,10 @@ export class SyncListBridge {
       const key = getMusicItemKey(item)
       if (seen.has(key)) continue
       seen.add(key)
-      if (existing.delete(key)) {
-        // 已存在，不调整顺序
-      } else {
+      if (!existing.delete(key)) {
         store.addToPlaylistDirect(pid, JSON.stringify(item), now + pos, pos)
       }
+      order.push({ id: item.id, source: item.type })
       pos++
     }
 
@@ -316,6 +320,7 @@ export class SyncListBridge {
         store.removeFromPlaylistDirect(pid, song.id, song.source)
       }
     }
+    store.reorderPlaylistDirect(pid, order)
   }
 
   // ─── Action 处理 ───

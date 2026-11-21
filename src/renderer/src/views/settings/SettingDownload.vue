@@ -262,6 +262,7 @@ function openDir(): void {
         v-for="item in lrcFormatList"
         :id="`setting_dl_lrc_format_${item.id}`"
         :key="item.id"
+        class="gap-left"
         name="setting_download_lrc_format"
         need
         :value="item.id"
@@ -281,6 +282,14 @@ function openDir(): void {
         label="无损文件名附加音质标记"
         @update:model-value="store.update({ download: { appendQualityTag: $event as boolean } })"
       />
+      <div class="gap-top">
+        <BaseCheckbox
+          id="setting_dl_apple_flac"
+          :model-value="settings.download.appleAlacToFlac"
+          label="Apple Music 无损下载后转为 FLAC（关闭则保留 ALAC .m4a）"
+          @update:model-value="store.update({ download: { appleAlacToFlac: $event as boolean } })"
+        />
+      </div>
       <div class="gap-top">
         <BaseCheckbox
           id="setting_dl_album_cover"

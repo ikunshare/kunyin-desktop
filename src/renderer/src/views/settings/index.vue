@@ -11,6 +11,7 @@ import SettingShortcuts from './SettingShortcuts.vue'
 import SettingSync from './SettingSync.vue'
 import SettingNetwork from './SettingNetwork.vue'
 import SettingBackup from './SettingBackup.vue'
+import SettingCdk from './SettingCdk.vue'
 import SettingOther from './SettingOther.vue'
 import SettingDeveloper from './SettingDeveloper.vue'
 import SettingUpdate from './SettingUpdate.vue'
@@ -22,7 +23,7 @@ defineOptions({ name: 'SettingsView' })
 
 // 分类与顺序对齐 lx-music-desktop 的设置页（基本 → 播放 → 播放详情页 → 桌面歌词 →
 // 列表 → 下载 → 快捷键 → 同步 → 网络 → 备份 → 其他 → 更新 → 关于）。
-// 只有「开发者」是坤音自己加的。音效（均衡器/混响/环绕/升降调）与播放速度跟 LX 一样
+// 只有「卡密管理」与「开发者」是坤音自己加的。音效（均衡器/混响/环绕/升降调）与播放速度跟 LX 一样
 // 挂在播放页的弹层里，不做设置页分类——那些项都是边听边调的。
 // LX 有而坤音没有对应设置项的（搜索设置、开放 API、强迫症设置）不建空页。
 const tocList = [
@@ -36,6 +37,7 @@ const tocList = [
   { id: 'SettingSync', title: '数据同步', icon: 'repeat' },
   { id: 'SettingNetwork', title: '网络设置', icon: 'shuffle' },
   { id: 'SettingBackup', title: '备份与恢复', icon: 'upload' },
+  { id: 'SettingCdk', title: '卡密管理', icon: 'key' },
   { id: 'SettingOther', title: '其他', icon: 'more' },
   { id: 'SettingDeveloper', title: '开发者', icon: 'edit' },
   { id: 'SettingUpdate', title: '软件更新', icon: 'refresh' },
@@ -55,6 +57,7 @@ const components: Record<TocId, unknown> = {
   SettingSync,
   SettingNetwork,
   SettingBackup,
+  SettingCdk,
   SettingOther,
   SettingDeveloper,
   SettingUpdate,
@@ -234,6 +237,10 @@ function toggleTab(id: TocId): void {
 }
 .setting :deep(dd + dd h3) {
   margin-top: 0;
+}
+/* 同一张卡片里的后续小标题：与上一组内容拉开，否则会贴在上一组的按钮底下 */
+.setting :deep(dd > div + h3) {
+  margin-top: 22px;
 }
 .setting :deep(.p) {
   padding: 3px 0;

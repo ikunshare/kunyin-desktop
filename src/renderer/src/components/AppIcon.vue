@@ -127,7 +127,10 @@ const ICONS: Record<string, IconDef> = {
   refresh: {
     inner: '<path d="M20 5v5h-5"/><path d="M19.4 13.5A7.5 7.5 0 1 1 18 7.2l2 2.8"/>'
   },
-  info: { inner: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7h.01"/>' }
+  info: { inner: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 7h.01"/>' },
+  key: {
+    inner: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 20 3M16.5 6.5l3 3M14 9l2 2"/>'
+  }
 }
 
 const props = withDefaults(defineProps<{ name: string; size?: number }>(), { size: 20 })

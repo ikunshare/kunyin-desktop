@@ -82,7 +82,7 @@ const ossTotal = OSS_SECTIONS.reduce((n, s) => n + s.items.length, 0)
         </li>
       </ul>
     </section>
-    <!-- 署名：用了什么、许可证是什么、源码在哪（见 native/dolby-wasm/README.md） -->
+    <!-- 署名：用了什么、许可证是什么、源码在哪（见 native/dolby-wasm、native/av3a-wasm 的 README） -->
     <p class="p desc gap-top">
       杜比全景声的播放使用了
       <a href="https://github.com/librempeg/librempeg" target="_blank">LibreMPEG</a>
@@ -96,6 +96,23 @@ const ossTotal = OSS_SECTIONS.reduce((n, s) => n + s.items.length, 0)
         LibreMPEG 9c00336e26
       </a>
       ，构建脚本见本项目仓库的 native/dolby-wasm。
+    </p>
+    <p class="p desc">
+      臻音全景声（Audio Vivid）的播放使用了
+      <a href="https://github.com/baiji6/MOLAN-AV3A" target="_blank">MOLAN-AV3A</a>
+      封装的 AVS3-P3 参考解码器（华为），按
+      <a href="http://www.theuwa.com/UWA_Code_Sharing_Policy.pdf" target="_blank"
+        >UWA 代码共享政策</a
+      >
+      授权，上游的 LICENSE 与 NOTICE 随安装包附带（licenses/MOLAN-AV3A-LICENSE.txt、
+      licenses/MOLAN-AV3A-NOTICE.txt）。所用源码为
+      <a
+        href="https://github.com/baiji6/MOLAN-AV3A/tree/1564bd332205bb46afee8c643776f833020b94b6"
+        target="_blank"
+      >
+        MOLAN-AV3A 1564bd3322
+      </a>
+      ，构建脚本见本项目仓库的 native/av3a-wasm。
     </p>
   </dd>
 </template>

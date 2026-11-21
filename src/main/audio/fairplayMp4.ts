@@ -384,14 +384,38 @@ function parseTraf(data: Uint8Array, traf: Box, trex: TrexTable, ivSize: number)
   }
 }
 
-function decryptFragment(
+/**
+ * 解密的时间片（ms）。Temari 是跑在**主进程主线程**上的同步 wasm，一首歌几十到几百 MB，
+ * 一口气解完要 1～5 秒——这段时间主进程什么都干不了：窗口拖不动、IPC 不回、`kunyin://`
+ * 不供流（正在播的歌断音）、别的下载任务的进度也停住，观感就是「卡一下」。
+ * 所以每解满一个时间片就把事件循环让出去一轮。
+ */
+const DECRYPT_SLICE_MS = 12
+
+/** 返回一个「该让就让」的检查点：没到时间片返回 undefined（不产生微任务），到了才给 Promise */
+export function createYielder(signal?: AbortSignal): () => Promise<void> | undefined {
+  let sliceStart = performance.now()
+  return () => {
+    if (performance.now() - sliceStart < DECRYPT_SLICE_MS) return undefined
+    return new Promise<void>((resolve, reject) => {
+      setImmediate(() => {
+        sliceStart = performance.now()
+        if (signal?.aborted) reject(signal.reason ?? new Error('已取消'))
+        else resolve()
+      })
+    })
+  }
+}
+
+async function decryptFragment(
   data: Uint8Array,
   moof: Box,
   mdat: Box,
   template: TemariTemplate,
   trex: TrexTable,
-  ivSize: number
-): Uint8Array[] {
+  ivSize: number,
+  pause: () => Promise<void> | undefined
+): Promise<Uint8Array[]> {
   const mdatData = new Uint8Array(raw(data, mdat.body, mdat.end))
   const trafs = [...children(data, moof)].filter((child) => child.type === 'traf')
   for (const traf of trafs) {
@@ -427,6 +451,8 @@ function decryptFragment(
         }
         offset += sample.size
         sampleIndex++
+        const yielding = pause()
+        if (yielding) await yielding
       }
     }
   }
@@ -472,11 +498,18 @@ function decryptFragment(
   return [newMoof, makeBox('mdat', mdatData)]
 }
 
-export function decryptAppleMp4(
+/**
+ * 整首解密。返回的是**按顺序首尾相接的分块**而不是拼好的一整块：调用方直接顺序写盘，
+ * 省掉一次与整首等大的分配与拷贝（hires 一首 200MB+）。
+ * 分时让出事件循环（见 DECRYPT_SLICE_MS）；signal 落下时在下一个时间片边界抛出。
+ */
+export async function decryptAppleMp4(
   encrypted: Uint8Array,
   segments: AppleSegment[],
-  templateFor: (keyUri: string) => TemariTemplate
-): Uint8Array {
+  templateFor: (keyUri: string) => TemariTemplate,
+  signal?: AbortSignal
+): Promise<Uint8Array[]> {
+  const pause = createYielder(signal)
   const outputs: Uint8Array[] = []
   let pos = 0
   let fragment = 0
@@ -511,13 +544,14 @@ export function decryptAppleMp4(
           ivSize = encrypted[tenc.body + 7]
         }
       }
-      const decrypted = decryptFragment(
+      const decrypted = await decryptFragment(
         encrypted,
         current,
         next,
         templateFor(segment.keyUri),
         trex,
-        ivSize
+        ivSize,
+        pause
       )
       outputs.push(decrypted[0], ...extras, decrypted[1])
       fragment++
@@ -529,14 +563,7 @@ export function decryptAppleMp4(
     pos = current.end
   }
   if (fragment !== segments.length) throw new Error('HLS 与 MP4 的分片数量不一致')
-  const length = outputs.reduce((sum, part) => sum + part.length, 0)
-  const output = new Uint8Array(length)
-  let offset = 0
-  for (const part of outputs) {
-    output.set(part, offset)
-    offset += part.length
-  }
-  return output
+  return outputs
 }
 
 // ============ 流式播放：单个分片的索引与解密 ============
@@ -641,11 +668,14 @@ export function parseAppleFragment(
  * 与上面的 decryptFragment 分工不同：那条路要重建 moof（整首重封装用），这里只要样本
  * 字节，样本表由流式播放自己合成，所以不改写任何盒、也不复制 moof。
  */
-export function decryptAppleSamples(
+export async function decryptAppleSamples(
   data: Uint8Array,
   info: AppleFragmentInfo,
-  template: TemariTemplate
-): Uint8Array {
+  template: TemariTemplate,
+  signal?: AbortSignal
+): Promise<Uint8Array> {
+  // 同样分时：hires 一个 15s 分片 11MB 上下，一口气解会让正在出声的那一路顿一下
+  const pause = createYielder(signal)
   let total = 0
   for (const sample of info.samples) total += sample.size
   const output = new Uint8Array(total)
@@ -671,6 +701,8 @@ export function decryptAppleSamples(
       if (cursor < cipher.length) output.set(cipher.subarray(cursor), at + cursor)
     }
     at += sample.size
+    const yielding = pause()
+    if (yielding) await yielding
   }
   return output
 }

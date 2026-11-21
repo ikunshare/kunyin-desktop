@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, open as openFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { DATA_CACHE_SUBDIR, appDataPath } from '../core/paths'
 import { createLogger } from '../core/logger'
@@ -7,7 +7,8 @@ import { createLogger } from '../core/logger'
 const log = createLogger('appleMusic')
 import { getAppleAudio, storeAppleAudio } from '../cache/appleCache'
 import { amPost } from '../providers/am/api'
-import { drainResponse, requestRaw, requestText } from '../net/request'
+import { drainResponse, requestRaw, requestText, runBulk } from '../net/request'
+import { HttpStatusError, downloadSegmented } from '../net/segmented'
 import { decryptAppleMp4, parseApplePlaylist } from './fairplayMp4'
 import type { AppleSegment } from './fairplayMp4'
 import { remuxAppleMp4 } from './ffmpeg'
@@ -25,28 +26,48 @@ export interface AppleDownloadOptions {
   metadata?: Record<string, string>
 }
 
+/**
+ * 整份加密 fMP4 拉进内存。走多连接分段（net/segmented）：无损一首 40MB 上下，单连接要等很久，
+ * 而这条路是「先整首下完才能解密重封装」，下载多快首播就多快。
+ */
 async function downloadEncrypted(url: string, options: AppleDownloadOptions): Promise<Buffer> {
-  const response = await requestRaw(url, { timeout: 120000, signal: options.signal })
-  if (!response.ok || !response.body) {
-    drainResponse(response)
-    throw new Error(`Apple Music 音频下载失败 (${response.status})`)
-  }
-  const total = Number(response.headers.get('content-length')) || 0
-  const chunks: Buffer[] = []
+  let total = 0
   let downloaded = 0
-  const reader = response.body.getReader()
+  /** 知道总长时一次分配好，各分段按偏移直接拷进去 */
+  let whole: Buffer | null = null
+  /** 服务端不认 Range 又没给长度时的兜底：单连接顺序到达，按序攒 */
+  const chunks: Buffer[] = []
   try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done || !value) break
-      const chunk = Buffer.from(value)
-      chunks.push(chunk)
-      downloaded += chunk.length
-      options.onProgress?.(downloaded, total)
+    const result = await downloadSegmented({
+      open: (range, signal) =>
+        requestRaw(url, {
+          headers: range ? { Range: range } : undefined,
+          timeout: 120000,
+          signal
+        }),
+      write: async (data, position) => {
+        if (whole) whole.set(data, position)
+        else chunks.push(Buffer.from(data))
+      },
+      gate: (task) => runBulk(url, task),
+      release: drainResponse,
+      signal: options.signal,
+      onSize: (size) => {
+        total = size
+        whole = Buffer.allocUnsafe(size)
+      },
+      onProgress: (bytes) => {
+        downloaded += bytes
+        options.onProgress?.(downloaded, total)
+      }
+    })
+    const buffer = whole as Buffer | null
+    return buffer ? buffer.subarray(0, result.size) : Buffer.concat(chunks)
+  } catch (error) {
+    if (error instanceof HttpStatusError) {
+      throw new Error(`Apple Music 音频下载失败 (${error.status})`)
     }
-    return Buffer.concat(chunks, downloaded)
-  } finally {
-    void reader.cancel().catch(() => {})
+    throw error
   }
 }
 
@@ -93,8 +114,15 @@ export async function downloadAppleAudio(
   const text = await requestText(spec.url, { timeout: 30000, signal: options.signal })
   const playlist = parseApplePlaylist(spec.url, text)
   log.info('HLS 清单解析完成', { adamId: spec.adamId, segments: playlist.segments.length })
+  const startedAt = Date.now()
   const encrypted = await downloadEncrypted(playlist.fileUrl, options)
-  log.info('加密分片下载完成', { adamId: spec.adamId, bytes: encrypted.length })
+  const ms = Math.max(1, Date.now() - startedAt)
+  log.info('加密分片下载完成', {
+    adamId: spec.adamId,
+    bytes: encrypted.length,
+    ms,
+    kbps: Math.round(encrypted.length / 1024 / (ms / 1000))
+  })
   const templates = await createAppleTemplates(spec, playlist.segments, options.signal)
   const tempDir = appDataPath(DATA_CACHE_SUBDIR, 'apple-tmp')
   await mkdir(tempDir, { recursive: true })
@@ -102,12 +130,25 @@ export async function downloadAppleAudio(
   const fragmentPath = join(tempDir, `${id}.fmp4`)
   try {
     log.info('Temari 模板准备完成', { adamId: spec.adamId, count: templates.size })
-    const decrypted = decryptAppleMp4(encrypted, playlist.segments, (keyUri) => {
-      const template = templates.get(keyUri)
-      if (!template) throw new Error('缺少 Temari 密钥模板')
-      return template
-    })
-    await writeFile(fragmentPath, decrypted)
+    const decryptStart = Date.now()
+    const parts = await decryptAppleMp4(
+      encrypted,
+      playlist.segments,
+      (keyUri) => {
+        const template = templates.get(keyUri)
+        if (!template) throw new Error('缺少 Temari 密钥模板')
+        return template
+      },
+      options.signal
+    )
+    // 分块顺序写盘，不再拼成一整块（省一次整首大小的分配）
+    const handle = await openFile(fragmentPath, 'w')
+    try {
+      for (const part of parts) await handle.writeFile(part)
+    } finally {
+      await handle.close()
+    }
+    log.info('解密完成', { adamId: spec.adamId, ms: Date.now() - decryptStart })
     await mkdir(dirname(outputPath), { recursive: true })
     await remuxAppleMp4(fragmentPath, outputPath, options.signal, { metadata: options.metadata })
     log.info('音频重封装完成', { adamId: spec.adamId })

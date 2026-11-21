@@ -22,6 +22,7 @@ npm run format       # prettier --write .
 npm test             # node --test tools/*.test.mjs（带 ts-resolve 钩子，可直接 import 仓库 .ts）
 npm run build:wasm   # 重编 native/qmc-wasm 并回写 src/main/crypto/qmcWasmBinary.ts（需 Rust）
 npm run build:dolby-wasm # 重编 AC-3 / E-AC-3 / AC-4 / ALAC 音频解码 WASM
+npm run build:av3a-wasm # 重编 Audio Vivid（AV3A）解码 WASM（MOLAN-AV3A）
 npm run build:temari-wasm # 重编 Temari FairPlay 解密 WASM 并回写 src/main/audio/temariWasmBinary.ts
 npm run gen:licenses # 重新生成「关于」页的开源许可列表（要联网，gh 已登录或设 GITHUB_TOKEN）
 
@@ -56,7 +57,7 @@ Electron 三进程，源码分三棵 + 一个共享层：
 - 音质 `QualityId`（`128k|320k|flac|hires|atmos_plus|atmos|master|dolby|vivid`）：**唯一排序真源是 `QUALITY_IDS`**（低→高，`src/common/constants.ts`），徽标/降级/取流/下载顺序全从它派生。AI 音质的屏蔽与降级见 `blockedQualityIds` / `qualityFallbackOrder` / `qualityUpgradeOrder`。
   - **显示名按平台走 `qualityName(id, source)`**，别读 `Quality.name`（存量歌单里是改名前的叫法）。各平台叫法在 `SOURCE_QUALITY_NAMES`，取自 Android 版，但网易的沉浸环绕声（`sk`/sky）与高清臻音（`je`/jyeffect）Android 标反了、母带用的是旧名「鲸云母带」（现为超清母带），以后端实测为准。
   - `atmos_plus` = 网易高清臻音，**只认网易**（`SOURCE_ONLY_QUALITIES`）：它以前还装过已下线的 QQ「臻品全景声 2.0」/ 酷我 20501，存量歌单里还有。所以 `blockedQualityIds` / `playbackBlockedQualityIds` 落到具体歌上时**要传 `item.type`**。
-  - `dolby` / `vivid`（AV3A）**只能下载**：Chromium 解不了，播放侧用 `playbackBlockedQualityIds` 跳过。例外是 `softDecoder(id, source)` 登记的平台：网易（AC-4）与 QQ / QQ音乐云（E-AC-3）的杜比都由主进程软解后能播（见「杜比软解」）；Audio Vivid 还没有解码器。它们排在母带之上只是为了降级时掉不进去，所以列表徽标一律不显示它们（否则会盖掉母带 / HiRes）。
+  - `dolby` / `vivid`（AV3A）**只能下载**：Chromium 解不了，播放侧用 `playbackBlockedQualityIds` 跳过。例外是 `softDecoder(id, source)` 登记的平台：网易（AC-4）与 QQ / QQ音乐云（E-AC-3）的杜比、网易的 Audio Vivid（臻音全景声）都由主进程软解后能播（见「音频软解」）。它们排在母带之上只是为了降级时掉不进去，所以列表徽标一律不显示它们（否则会盖掉母带 / HiRes）。
 - `Lyric`：主进程产出的原始歌词容器（`lrc/trans/roma/char/chroma/phonetic`），渲染层再交给 vendored 歌词引擎解析。
 
 ## Provider 架构（音源）
@@ -84,7 +85,18 @@ Electron 三进程，源码分三棵 + 一个共享层：
 3. Provider 自定义 `resolveMediaInfo` 优先，否则回退自建后端 `POST https://c.wwwweb.top/app/getUrl`（body `{platform, musicId, quality, authst}`；`platform` 用 `BACKEND_PLATFORM` 映射，`musicId` 按源取 mid/hash/id，`authst` 来自卡密）；
 4. 结果按直链时效缓存（切回听过的歌不重复请求）。
 
-返回 `{url, ekey}`：**无 ekey = 明文直链**，渲染层 `<audio>` 直连（CSP `media-src` 放行 http/https）；**有 ekey = 加密流**（QQ mflac 等），走自定义协议 `kunyin://`（`src/main/audio/protocol.ts`，`protocol.handle` 边下边解密、透传 Range、支持 seek）。卡密校验在 `src/main/auth/manager.ts`（`POST /app/checkAuth`，校验通过即把卡密当 `authst` 用）。
+返回 `{url, ekey}`：**无 ekey = 明文直链**，渲染层 `<audio>` 直连（CSP `media-src` 放行 http/https）；**有 ekey = 加密流**（QQ mflac 等），走自定义协议 `kunyin://`（`src/main/audio/protocol.ts`，`protocol.handle` 边下边解密、透传 Range、支持 seek）。卡密校验在 `src/main/auth/manager.ts`（`POST /app/checkAuth`，校验通过即把卡密当 `authst` 用）。设置页「卡密管理」（`views/settings/SettingCdk.vue`）另经 `POST /cdk/query` 只读自查类型 / 状态 / 有效期 / 额度（不计使用次数，响应解析在 `auth/cdkQuery.ts`，回归 `tools/cdkQuery.test.mjs`）；卡密只放 body，别放 URL（后端请求日志记完整 query）。
+
+### 网页版账号（QQ 登录 / 名下卡密）
+
+设置页「卡密管理」上半部分是网页版坤音账号（`src/main/auth/kunyin/`，IPC 域 `kunyin:*`）：登录后经 `/user/me` 拉名下卡密，可选用（复用 `auth/manager.ts` 的 `/app/checkAuth` 校验后写 authst）、绑定、换卡、生成进群验证码。会话是后端下发的 `qq_auth` cookie，主进程用 `requestRawWithHeaders`（能读 `set-cookie`）收发，并 safeStorage 落盘到 `data/kunyin.bin`。
+
+登录有两条路：
+
+- **QQ 快捷登录**：新版面板的账号与 `client_key` 只由本机 QQ 客户端（`localhost.ptlogin2.qq.com:4301/4303/4305/4307/4309`）提供，本地服务**只认 `Origin: https://graph.qq.com` 且返回 JSON**，浏览器读不到（所以网页端只能扫码）。主进程用 `auth/kunyin/http.ts` 的 Node https 自己带这个头、自签证书仅此一路关校验，走完 `quick_login/accounts → quick_login/key → graph.qq.com/connect/api/v1/{qrcode/create, quick/login, app/scope, app/authorize}` 拿到一次性 OAuth code，再 `POST /user/quick/login` 由服务端换 musickey。`__context__` 要按「响应 → 下一次请求体」串起来，缺一步就过不去。
+- **扫码登录**：后端代理 `/user/qr/new` + `/user/qr/poll`，二维码图片由后端生成，done 时从 `Set-Cookie` 取会话。
+
+纯解析（`/user/me` 信封、set-cookie、redirectUri 里的 code、授权组挑选）在 `auth/kunyin/parse.ts`，回归 `tools/kunyinAccount.test.mjs`。
 
 ### 取流连接的生命周期（socket 泄漏 =「放久了每首歌都超时」）
 
@@ -93,8 +105,20 @@ Electron 三进程，源码分三棵 + 一个共享层：
 - **`protocol.handle` 的 `request.signal` 从不触发**（Electron 44 实测：换 `<audio>.src`、seek、渲染层 `AbortController` 全试过，一次都不 abort）。能观测到下游放弃的唯一信号是「我们返回的 `Response.body` 被 cancel」——即便 handler 是事后才返回的，Electron 也会补这一刀。所以取消靠 `bindToRequest` 里 pipeTo 落地反推；等响应头那段还没有 body 可 cancel，由 `openSlot` 的「同 token、且一个字节都没吐过的旧请求直接顶替」兜住。
 - **`resp.body.cancel()` 不归还 socket**，只有 abort 那次 fetch 的 `AbortController` 才会（三种收尾方式对照实测：什么都不做 / body.cancel / abort，只有最后一种让活连接归零）。所以上游连接按**租约**管理（`UpstreamLease`，控制器**活过响应头阶段**），`net/request.ts` 的 `drainResponse` 同样是先 abort 再 cancel。
 - **异步生成器取消不掉卡在 `await` 里的自己**：`AsyncGenerator.return()` 排在未决的 `next()` 之后，`fetchAndStore` 卡在 `await reader.read()`（上游半开）时 `finally` 永远跑不到，那条连接就永久泄漏。所以 `streamFrom` 的 cancel 必须**先 abort 再** `return()`，且所有上游流都要穿过 `audio/streamGuard.ts` 的空闲看门狗（`UPSTREAM_IDLE_TIMEOUT`，20s 一个字节都没有就掐断）。看门狗用 `highWaterMark: 0` 是**语义不是调优**：HWM=1 会让流自己预读一块，于是暂停播放时也始终挂着一次 pull，健康连接会被误判成停摆。
+- **`Readable.toWeb` 转出来的流不能直接 cancel**：net.fetch 的响应体就是 Node 用它把 IncomingMessage 转成的。cancel 那一刻 Node 流里压着数据、且刚读完一块（resume 排在 nextTick），适配器就会往已关闭的 controller 里 enqueue，抛 `Controller is already closed` 的**主进程未捕获异常**；同一轮里先 abort 再 cancel 一样会撞（Electron 44 实测 10/10）。预取追上读者、读者在块边界交还连接时就是这个时机。所以两处 net.fetch（`fetchUpstreamOnce`、`attemptFetch`）和本地文件的 `Readable.toWeb` 都套了 `net/fetchBody.ts` 的 `deferCancel` / `withDeferredCancel`：cancel 时同步 abort，落到适配器上的 cancel 推到下一个宏任务。**新增 net.fetch 调用或 `Readable.toWeb` 照做**，回归在 `tools/fetchBody.test.mjs`。
 
 连续 3 次「等响应头超时」且此刻没有任何一路在正常供流时，`afterHeaderTimeout` 会清 DNS 并 `closeAllConnections()`（60s 冷却）——把用户原本只能靠「重启应用」解决的那件事自动化；判据已经保证没有可打断的播放。诊断入口 `audioNetStats()`（导出日志时自动记一条）：堆着一批 `bytes: 0` 的条目就是在漏连接。回归用例在 `tools/audioStream.test.mjs`。
+
+### 多连接：播放预取与分段下载
+
+音源 CDN 大多**按连接限速**，而播放那条连接又是被 `<audio>` 的背压牵着走的（Chromium 缓冲够了就不读），一首歌的下载被拉长到和播放一样久，这期间上游任何一次抖动都直接变成卡顿，seek 到没放过的位置每次都要现开连接。所以大流量一律多连接，两处共用一套约束：
+
+- **播放预取**（`audio/prefetch.ts` 调度 + `audio/protocol.ts` 的 `prefetchBlock`）：首个请求 800ms 后，3 条连接按块（1MiB，一块一个 Range 请求）把缺的缓存块拉完，此后的播放与 seek 全是本地读。挑块顺序跟着读者走（`hint`）：先读者后面的、再绕回前面的、读者正在读的那块最后。**读者那条连接照旧存在**（首帧不等预取），但它走到块边界发现下一块已有 / 预取正在下就收手还连接（`pumpUpstream` 的 cut），所以 `assembleRange` 是**边走边重新规划**的，不再开头算一次。读者撞上预取正在下的块时等它（`READER_WAIT_MS` 封顶 8s，超时自己回源）。
+- 同时最多预取 2 首（正在播的 + `warmAudio` 预加载的下一首），第三首进来就停掉最久没被请求的那一路。没有缓存条目（缓存关闭 / 单曲超过上限 / 拿不到总长）就没有预取，退回原来的单连接透传。Apple Music 的 `openBytes` 流不参与。
+- 预取会自己收手并记进 `prefetchGaveUp`：上游不认 Range（回 200，否则每块都把整首下一遍）、4xx（直链过期，读者那边会触发重新解析，新 spec 重新预取）、连续 3 次失败。
+- **分段下载**（`net/segmented.ts`，下载管理器的音频 / MV 与 Apple Music 整首下载都走它）：第一条请求就带 `Range: bytes=0-<一段>`，206 + 总长才分段，200 就把这条响应当整文件顺序读完（不多打探测请求）。每段**核对 Content-Range 起点**（对不上照写就是写坏文件）、断流从段内断点续、HTTP 拒绝不重试。落点按绝对偏移并发写，所以下载不能再用顺序的 WriteStream。暂停后恢复仍是从头下（没做跨进程断点续传）。
+- **大流量闸 `runBulk`**（`net/request.ts`，每主机 4 条，预取与下载共用）：许可要**握到 body 读完**——`requestRaw` 自己的闸只管到响应头，流式消费者读 body 期间不占许可。4 + 读者 1～2 条 = Chromium 的每主机 6 条；再多的话播放的请求在连接池里排队，而它的「等响应头」计时照走，会被误判成上游超时进而触发清池。**新增任何多连接取流都必须过这道闸。**
+- `prefetch.ts` / `segmented.ts` 与 `streamGuard.ts` 一样不 import electron，回归在 `tools/prefetch.test.mjs`、`tools/segmented.test.mjs`（后者起本地 HTTP 服务器真跑 Range）。`protocol.ts` 里的接线进不了 `node --test`：改它之后要在真实 Electron 里对着一个按连接限速的本地 Range 服务器跑一遍 `kunyin://`（首播 / seek / 连点切歌 / 上游不认 Range），核对字节一致与 `audioNetStats()` 归零。诊断同样看 `audioNetStats()`，多了 `prefetching` 与 `bulk` 两项。
 
 ### QMC 解密的 wasm 后端
 
@@ -105,10 +129,11 @@ QMC2（mflac/mgg）的两条**逐字节热循环**在 Rust 里：`native/qmc-was
 - 移植坑（`lib.rs` 注释里有对应说明）：`rc4_segment_key` 是**浮点**除法，换整数除法结果就变了；它的结果在 JS 侧分别经历 `% n` 与 `& 0x1ff`（ToInt32 截断），Rust 侧要按同样顺序复现；`rc4_hash` 是 uint32 乘法回绕（`wrapping_mul`）。
 - 解密器状态是 wasm 的模块级 static，所以**每个解密器一个 `WebAssembly.Instance`**（单实例线性内存 192KB，实例化约 30µs），并发的播放流与下载任务不会互相踩。
 
-### 音频软解（AC-3 / E-AC-3 / AC-4 / ALAC → WAV）
+### 音频软解（AC-3 / E-AC-3 / AC-4 / ALAC / AV3A → WAV）
 
-Chromium 不带杜比 / ALAC 解码器，`native/dolby-wasm` 把 **LibreMPEG**（FFmpeg 的分支，只有它有 AC-4 解码器）的
-ac3/eac3/ac4/alac 解码器 + `shim.c` 编成 wasm，JS 封装是 `src/main/audio/dolbyDecoder.ts`。两家的杜比是两种东西：
+Chromium 不带杜比 / ALAC / Audio Vivid 解码器，`native/dolby-wasm` 把 **LibreMPEG**（FFmpeg 的分支，只有它有 AC-4 解码器）的
+ac3/eac3/ac4/alac 解码器 + `shim.c` 编成 wasm，JS 封装是 `src/main/audio/dolbyDecoder.ts`；Audio Vivid 另编一个
+wasm（见下）。两家的杜比是两种东西：
 
 - **网易：AC-4 IMS**（immersive stereo，256kbps）。Dolby 在编码端就做好了两声道的耳机双耳渲染，
   解出来就是空间效果——用户 A/B 过，要的就是这个。按包喂（一个 MP4 样本 = 一帧），**第一个 I 帧之前不出声**。
@@ -117,10 +142,16 @@ ac3/eac3/ac4/alac 解码器 + `shim.c` 编成 wasm，JS 封装是 `src/main/audi
   ~-25 LUFS，比普通 FLAC 低 15dB 左右。按字节流喂，过 ac3 parser。
 - **Apple Music：ALAC**。按 MP4 样本整包喂；`audio/mp4.ts` 从 `alac` atom 读帧长、位深、声道数和采样率，
   `shim.c` 据此构造解码器初始化数据，16/24bit 整型 PCM 统一转 float。ALAC 每帧可独立起解，seek 不需要预热。
+- **网易臻音全景声：AV3A（Audio Vivid）7.1.4 声床**（44.1kHz、832kbps，每样本 1024 帧）。`native/av3a-wasm`
+  把 **MOLAN-AV3A**（AVS3-P3 参考解码器的库化封装，神经网络模型已内嵌）编成单独的 wasm，JS 封装是
+  `audio/av3aDecoder.ts`，接口与 `DolbyDecoder` 相同，按包喂。参考解码器只吐声床各声道，**下混在 JS 侧**按帧头的
+  声道配置做（主声道直送、中置与环绕 / 天空 −3dB、LFE 不进、按功率归一，7.1.4 是 −5.4dB）；声道次序是 AVS3 的
+  （7.1.4：L R C LFE Lss Rss Lrs Rrs Ltf Rtf Ltr Rtr），不能走 `toStereo` 的 FFmpeg 次序。对象 / HOA 没有真实
+  样本，抛 `Av3aUnsupportedError` 不瞎混。
 
 播放链路：`PLAYER_STREAM` 按 `softDecoder()` 给流打上 `decode: 'dolby'`，`kunyin://` 转去 `serveDolby`
 （`audio/protocol.ts`）。实测都是 faststart 的 MP4。`audio/mp4.ts` 从 moov 解出样本表（含 `stss`
-I 帧表，按样本描述分辨 ac-3/ec-3/ac-4/alac），`audio/dolbyStream.ts` 把 `<audio>` 的 Range 换算成
+I 帧表，按样本描述分辨 ac-3/ec-3/ac-4/alac/av3a），`audio/dolbyStream.ts` 把 `<audio>` 的 Range 换算成
 PCM 帧 → MP4 样本 → 原文件偏移，只回源那一段，解成**立体声 float32 WAV** 吐出去——
 WAV 的字节与时间是线性的，seek 就是普通的 Range（Electron 44 实测正常，且不会去探文件尾）。
 音效图、频谱、倍速、媒体会话全都照常挂在 `<audio>` 上，不另起播放器。
@@ -130,7 +161,9 @@ WAV 的字节与时间是线性的，seek 就是普通的 Range（Electron 44 �
   不能拿静音顶替。
 - **seek 要往前多解几帧再扔掉**（`warmupStart`）：AC-3 系退 1 帧（MDCT 重叠，冷启动那帧误差 ~0.1；预热后
   仍有 ~1e-3 差异，是解码器给零尾数加的随机抖动，多预热也不收敛，**别当 bug 追**）。AC-4 退到目标之前
-  **至少 2 帧**处最近的 I 帧：从 I 帧起解第 1 帧误差 0.3、第 2 帧 5e-2，第 3 帧起逐样本一致。
+  **至少 2 帧**处最近的 I 帧：从 I 帧起解第 1 帧误差 0.3、第 2 帧 5e-2，第 3 帧起逐样本一致。AV3A 退 1 帧
+  （不退第一帧 SNR 只有 1～4dB）；预热后在网易文件上仍差 31～41dB，因为参考解码器的噪声填充 / 带宽扩展调的是
+  libc 的 `rand()`（实例级、从不播种），seek 新开的解码器随机序列对不上，同样**别当 bug 追**。
 - **取字节只走 `plainBytesOpener`**：它和直通路径一样缓存感知（缓存里存的是解密后的原 MP4，不是 WAV），
   且每次打开挂一个**子闸**——游标跳读时 cancel 旧流只能掐这一段，掐整路的 slot 会把后面的回源一起杀掉。
   faststart 首播时读 moov 和读音频是同一条连接，别在中间重开。
@@ -144,6 +177,11 @@ WAV 的字节与时间是线性的，seek 就是普通的 Range（Electron 44 �
   回归在 `tools/dolbyDecoder.test.mjs`（AC-3 系解码器）与 `tools/dolbyStream.test.mjs`（MP4 → WAV、Range、
   取消，以及 AC-4 的 I 帧 / 预热 / 坏帧对齐）。**AC-4 没有开源编码器、做不出夹具**，测试里现场拼 MP4 +
   假解码器；升级 LibreMPEG 后要拿真实网易文件对照一次原生 ffmpeg 的输出。
+- AV3A 的 wasm：`npm run build:av3a-wasm`（同样 Windows 走 WSL、复用 dolby-wasm 缓存的 wasi-sdk），产物
+  `av3aWasmBinary.ts`（~310KB，提交进仓库）。**栈要开到 8MB**（参考解码器把整帧多声道数组放在栈上）。
+  授权是 UWA Code Sharing Policy，上游 LICENSE / NOTICE 经 `extraResources` 随包分发。回归在
+  `tools/av3aDecoder.test.mjs`，夹具是参考编码器编的 7.1.4 正弦（`tools/fixtures/README.md` 有生成方法；
+  编码器的码率**只能取码率表里的值**，否则帧头对不上、解出来除第一个声道外全乱）。细节见 `native/av3a-wasm/README.md`。
 
 ## Apple Music / FairPlay
 
@@ -151,8 +189,8 @@ WAV 的字节与时间是线性的，seek 就是普通的 Range（Electron 44 �
 - 播放返回 `kind=apple-hls`、`adamId`、`keyEndpoint`、codec/采样率/位深，不是普通直链。`PLAYER_STREAM` 对 `am` 先查 `cache/appleCache`；未命中时 `audio/appleMusic.ts` 拉取 Media Playlist 和完整分片文件，`audio/fairplayMp4.ts` 解析 `cbcs`、按 `EXT-X-KEY` 获取 Temari 模板、解密样本、移除加密盒并修正 `trun`，再用 FFmpeg 无损重封装成普通 `.m4a`。**首次播放需要完整下载并处理该曲，命中处理后缓存才不碰后端。**
 - Temari 来自 `WorldObservationLog/Temari`，`npm run build:temari-wasm` 把指定提交编为 WASM 并内联 `audio/temariWasmBinary.ts`（提交进仓库，正常构建无需 Rust）。`audio/temari.ts` 每个密钥模板一个实例，临时内存在样本间复用；`TEMARI_WASM_PATH` 可复用现成产物，避开工具链下载。
 - FFmpeg 只做容器重封装与标签/封面/歌词写入，**播放链路不重编码**：AAC/ALAC 都是 `.m4a`，杜比 `.mp4`。依赖 `ffmpeg-static`，打包经 `asarUnpack` 释放，`audio/ffmpeg.ts` 在 packaged 下把 `app.asar` 路径替成 `app.asar.unpacked`。ALAC 播放不经过 FFmpeg，而是走 `serveDolby` 的本地 MP4 → float WAV 软解，支持 Range seek、音效与频谱；AAC 直接播重封装后的文件。
-- **下载侧的单向例外：Apple Music 无损（`codec=alac`）下载完自动无损转封成 FLAC**（`audio/ffmpeg.ts` 的 `convertAppleToFlac`）。输出扩展名由 `extFor(qualityId, source, codec)` 决定，`appleFlac` 直接看它算出来的 `.flac`；后端没回 codec 时按档位兜底（`flac` / `hires` 必是 ALAC）。`-sample_fmt` 只在位深明确 ≤16 时用 `s16`，位深未知按 `s32`——s16 编 24bit 源是真丢精度。转出的 FLAC 顶替临时文件走正常落盘，标签/封面/歌词由 `fillAudioTags` 的 FLAC 分支写（所以 `embedAppleMetadata`（只出 MP4）在 `appleFlac` 时必须跳过）。有损 AAC（320k）不转：AAC→FLAC 只是把有损音频包进无损容器，体积翻几倍、音质不涨。
-- **Apple Music 内嵌标签里的歌词固定是 ELRC**：逐字时间只在原始 TTML 里可靠存在，`modules/download/ttmlElrc.ts` 直接解 `<p begin/end>` + `<span begin/end>` 生成 `[mm:ss.xxx]<mm:ss.xxx>词…`，忽略 x-bg / x-translation / x-roman 注释轨（含嵌套）。翻译/音译仍按设置经 `buildLyricsWithBody` 对齐追加。主进程不用渲染层的 kit 解析器（DOM 取向，跑不了）。
+- **下载侧的单向例外：Apple Music 无损（`codec=alac`）下载完自动无损转封成 FLAC**（`audio/ffmpeg.ts` 的 `convertAppleToFlac`）。输出扩展名由 `extFor(qualityId, source, codec)` 决定，`appleFlac` 直接看它算出来的 `.flac`；后端没回 codec 时按档位兜底（`flac` / `hires` 必是 ALAC）。`-sample_fmt` 只在位深明确 ≤16 时用 `s16`，位深未知按 `s32`——s16 编 24bit 源是真丢精度。转出的 FLAC 顶替临时文件走正常落盘，标签/封面/歌词由 `fillAudioTags` 的 FLAC 分支写（所以 `embedAppleMetadata`（只出 MP4）在 `appleFlac` 时必须跳过）。有损 AAC（320k）不转：AAC→FLAC 只是把有损音频包进无损容器，体积翻几倍、音质不涨。用户可在下载设置的「附加」里关掉转码（`download.appleAlacToFlac`，默认开）：关掉后 `extFor` 给出 `.m4a`，`appleFlac` 随之为假，ALAC 原样保留，标签改走 `embedAppleMetadata`——开关只收口在 `extFor` 一处，别在别处另判。
+- **Apple Music 内嵌标签里的歌词固定是 ELRC**：逐字时间只在原始 TTML 里可靠存在，`modules/download/ttmlElrc.ts` 直接解 `<p begin/end>` + `<span begin/end>` 生成 `[mm:ss.xxx]<mm:ss.xxx>词…`，忽略 x-bg / x-translation / x-roman 注释轨（含嵌套）。词间空格看 **span 之间的空白**（`<span>Hello</span> <span>world</span>` 有、同词音节之间没有），落在前一个词的末尾；两侧都是汉字 / 假名时不加（排过版的 TTML span 之间全是换行缩进）。翻译/音译仍按设置经 `buildLyricsWithBody` 对齐追加。主进程不用渲染层的 kit 解析器（DOM 取向，跑不了）。
 - `cache/appleCache.ts` 按 `am_id_quality` 存处理后的音频，与 `player.audioCacheBytes` 共用上限；用量统计、清理和播放失败失效都要同时覆盖它与原分块缓存。
 
 ## 音效（EQ / 混响 / 3D 环绕 / 升降调 / 最大声道输出）
@@ -243,10 +281,11 @@ lx-music-desktop：`<audio> → source → analyser → 10 段 EQ →（变调 w
 - 路由（`src/renderer/src/router/index.ts`，hash 模式）：`MainLayout` 外壳子路由（search/discover/charts/playlists/download/settings + 详情页 playlist/album/artist/local），`/player` 是**全屏顶层路由**（覆盖外壳）。启动恢复上次页面（localStorage `kunyin:lastRoute`，播放页不记）。
 - 状态用 Pinia（`src/renderer/src/stores/`：player/search/library/settings/download/artist/mv）。
 - **UI 方向（用户已定）**：全屏播放器页 = Apple Music 招牌（封面取色流体渐变 `FluidBackground` + 逐字歌词 + 白色前景）；其余页面 = LX Music 风（绿意浅色，单主色派生换肤引擎 `src/renderer/src/theme/`，运行期注入 CSS 变量）。**不要自创中性色板或「AI 味」设计**，列表/设置/详情用 LX 语义变量（`--color-primary-background(-hover/-active)`、`--color-font(-label)`、`--color-button-*`）。
+- **下拉框一律用 `components/BaseSelect.vue`，别写原生 `<select>`**：原生弹出层是系统控件（Windows 上方角白底蓝高亮），跟主题配不上。BaseSelect 的弹层是 `popover="manual"` 进顶层（不被滚动容器裁、能盖住原生模态 `<dialog>`），定位要除以 `currentCSSZoom`（`#app` 带字体大小档位的 zoom）；分组用选项的 `group` 字段，不再支持 `<option>` 插槽。
 
 ## 设置页分类
 
-`views/settings/index.vue` 的 `tocList` 就是分类与顺序的唯一真源，**按 lx-music-desktop 的设置页对齐**：基本设置 → 播放设置 → 播放详情页设置 → 桌面歌词设置 → 列表设置 → 下载设置 → 快捷键设置 → 数据同步 → 网络设置 → 备份与恢复 → 其他 →（开发者）→ 软件更新 → 关于。括号里那项是坤音自己加的。
+`views/settings/index.vue` 的 `tocList` 就是分类与顺序的唯一真源，**按 lx-music-desktop 的设置页对齐**：基本设置 → 播放设置 → 播放详情页设置 → 桌面歌词设置 → 列表设置 → 下载设置 → 快捷键设置 → 数据同步 → 网络设置 → 备份与恢复 →（卡密管理）→ 其他 →（开发者）→ 软件更新 → 关于。括号里的是坤音自己加的。
 
 跟着 LX 的几条归属约定，新增设置项时照此放：
 

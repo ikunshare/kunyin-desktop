@@ -84,8 +84,8 @@ export interface AppSettings {
     /** 显示列表操作按钮（歌曲行 hover 的试听/添加/下载） */
     showOperationButtons: boolean
     /**
-     * 往歌单/收藏里添加歌曲时插在哪（对应 LX 的「添加歌曲到列表时的位置」）。
-     * 只管用户主动「添加到列表」的动作；试听列表是播放时自动累积的，仍按播放顺序追加。
+     * 往歌单/收藏/试听列表里添加歌曲时插在哪（对应 LX 的「添加歌曲到列表时的位置」）。
+     * 已在列表里的歌不挪位置（试听列表里重听一首老歌不会把它顶到最前）。
      */
     addToPlaylistPosition: 'top' | 'bottom'
     /** 歌手页专辑用列表视图（false=网格；对应 Android albumListMode） */
@@ -258,6 +258,11 @@ export interface AppSettings {
     saveAlbumCover: boolean
     /** 文件名追加采样率/位深标记，如 [16Bit-44.1kHz]（仅无损，对应 Android downloadSampleRateTag） */
     appendQualityTag: boolean
+    /**
+     * Apple Music 无损（ALAC）下载后自动无损转成 FLAC。关掉则保留原始的 ALAC `.m4a`
+     * （音频数据一样，只是容器与编码不同；有的播放器 / 设备只认其中一种）。
+     */
+    appleAlacToFlac: boolean
     maxConcurrent: number
     /** 文件命名风格（对应 Android DownloadNamingStyle） */
     namingStyle: 'artist-title' | 'title-artist' | 'title-only'
@@ -442,6 +447,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     preferredQuality: 'flac',
     saveAlbumCover: true,
     appendQualityTag: true,
+    appleAlacToFlac: true,
     maxConcurrent: 3,
     namingStyle: 'artist-title',
     trackNumberPrefix: true,
@@ -515,3 +521,40 @@ export interface AuthState {
   /** 校验反馈信息 */
   message: string
 }
+
+/**
+ * 卡密额度（POST /cdk/query 的 data.quota，对应后端 model.QuotaState）。
+ * 只统计 QQ / 酷狗 / Apple Music 回源成功的取链，命中后端缓存、取链失败都不计。
+ */
+export interface CdkQuota {
+  /** 每周期上限，0 表示不限 */
+  limit: number
+  /** 当前周期已用次数 */
+  used: number
+  /** 0 = 有效期内累计、不自动重置；>0 = 从激活起每 N 天重置 */
+  periodDays: number
+  /** 下次自动重置时间（带时区偏移的 RFC3339）；不自动重置或尚未激活时为空串 */
+  resetAt: string
+  /** 本周期额度已用完，付费音源取链会被拒绝 */
+  exceeded: boolean
+}
+
+/** 持卡人自查到的卡密信息（POST /cdk/query 的 data）。后端不返回绑定 QQ、批次等后台字段。 */
+export interface CdkInfo {
+  /** 卡密类型：week 周卡 / month 月卡 / year 年卡 / permanent 永久 */
+  type: string
+  /**
+   * 卡密状态：valid 有效 / inactive 未激活（可正常使用，首次使用后开始计算有效期）/
+   * expired 已过期 / banned 已停用
+   */
+  state: string
+  /** 首次使用（激活）时间，带时区偏移的 RFC3339；未激活为空串 */
+  activatedAt: string
+  /** 到期时间，格式同上；永久卡或未激活为空串 */
+  expiresAt: string
+  quota: CdkQuota
+}
+
+/** 卡密自查结果。message 成功时是后端给的展示文案（额度用完时换成重置提示），失败时是原因。 */
+export type CdkQueryResult =
+  { ok: true; message: string; info: CdkInfo } | { ok: false; message: string }

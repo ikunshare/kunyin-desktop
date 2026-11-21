@@ -14,11 +14,14 @@
  * 跟 crypto/qmcWasm.ts 一样刻意不 import core/logger（那条链会拉进 electron），
  * 好让 tools/dolbyDecoder.test.mjs 在纯 Node 里跑；状态由 dolbyWasmStatus() 暴露。
  */
-import { randomFillSync } from 'node:crypto'
 import { DOLBY_WASM_BASE64 } from './dolbyWasmBinary'
+import { wasiImports } from './wasi'
 
 /** 'ac3' 同时覆盖 AC-3 与 E-AC-3（同一个解码器按帧头的 bsid 切换） */
 export type DolbyCodec = 'ac3' | 'ac4' | 'alac'
+
+/** 软解链路上的全部编码：本模块的几种 + Audio Vivid（另一个 wasm，见 av3aDecoder.ts，接口相同） */
+export type SoftCodec = DolbyCodec | 'av3a'
 
 /** 与 shim.c 的 DEC_* 一一对应 */
 const CODEC_IDS: Record<DolbyCodec, number> = { ac3: 0, ac4: 1, alac: 2 }
@@ -34,7 +37,7 @@ export interface PcmChunk {
 }
 
 export interface DolbyDecoder {
-  readonly codec: DolbyCodec
+  readonly codec: SoftCodec
   /** 'ac3'：喂一段码流，返回这段新解出的 PCM（多数情况 0～1 段） */
   decode(bytes: Uint8Array): PcmChunk[]
   /** 'ac4'：喂一个完整的帧，返回它解出的 PCM；没出声（I 帧之前、坏帧）返回空数组 */
@@ -92,46 +95,6 @@ export function dolbyWasmStatus(): { available: boolean; reason?: string } {
   return getModule() ? { available: true } : { available: false, reason: failReason || '未知原因' }
 }
 
-const ERRNO_BADF = 8
-const ERRNO_NOSYS = 52
-
-/**
- * wasi-libc 需要的系统调用桩。解码器用不到文件、环境变量：一律「没有」；
- * 只有 libc 初始化会问环境变量个数（报错它会直接退出，所以要老实答 0），
- * av_log 默认回调已在 shim 里换成空函数，fd_write 兜底吞掉。
- */
-function wasiImports(memory: () => WebAssembly.Memory): WebAssembly.ModuleImports {
-  const view = (): DataView => new DataView(memory().buffer)
-  const known: WebAssembly.ModuleImports = {
-    environ_sizes_get: (countPtr: number, sizePtr: number) => {
-      view().setUint32(countPtr, 0, true)
-      view().setUint32(sizePtr, 0, true)
-      return 0
-    },
-    environ_get: () => 0,
-    clock_time_get: (_id: number, _precision: bigint, outPtr: number) => {
-      view().setBigUint64(outPtr, process.hrtime.bigint(), true)
-      return 0
-    },
-    random_get: (ptr: number, len: number) => {
-      randomFillSync(new Uint8Array(memory().buffer, ptr, len))
-      return 0
-    },
-    fd_write: (_fd: number, iovs: number, iovsLen: number, nwrittenPtr: number) => {
-      const v = view()
-      let n = 0
-      for (let i = 0; i < iovsLen; i++) n += v.getUint32(iovs + i * 8 + 4, true)
-      v.setUint32(nwrittenPtr, n, true)
-      return 0
-    },
-    fd_prestat_get: () => ERRNO_BADF,
-    proc_exit: (code: number) => {
-      throw new Error(`dolby wasm 调用了 proc_exit(${code})`)
-    }
-  }
-  return new Proxy(known, { get: (t, name: string) => t[name] ?? (() => ERRNO_NOSYS) })
-}
-
 /**
  * 新建一路解码器；wasm 不可用返回 null。每路一个实例：解码器状态、输出缓冲都在该实例的
  * 线性内存里，丢掉实例就整块回收，播放流与下载任务也互不干扰。
@@ -152,7 +115,7 @@ export function createDolbyDecoder(opts: {
   let ex: DolbyExports
   try {
     const instance = new WebAssembly.Instance(mod, {
-      wasi_snapshot_preview1: wasiImports(() => ex.memory)
+      wasi_snapshot_preview1: wasiImports(() => ex.memory, 'dolby')
     })
     ex = instance.exports as unknown as DolbyExports
     ex._initialize()

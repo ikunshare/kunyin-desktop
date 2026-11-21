@@ -14,18 +14,21 @@ export function maskUrl(value: unknown): string {
 }
 export function sanitizeText(value: unknown, limit = 2000): string {
   if (typeof value !== 'string') return '[non-string]'
-  return value
-    .slice(0, 16000)
-    .replace(/(?:https?|blob|kunyin|file):[^\s"'<>]+/gi, (url) => maskUrl(url))
-    .replace(/\b(?:Bearer|Basic)\s+[^\s,;"']+/gi, '[authorization omitted]')
-    .replace(/\b(?:cookie|set-cookie|authorization)\s*[:=][^\r\n]+/gi, '[credentials omitted]')
-    .replace(
-      /(\b[\w-]{0,60}(?:cookie|ticket|token|password|passwd|secret|credential|session|ekey|cdk|sign|key|auth|uin)[\w-]{0,40}["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;}]+)/gi,
-      '$1[REDACTED]'
-    )
-    .replace(/\?[^\s"'<>]+/g, '?[query omitted]')
-    .replace(/[\r\n\u0000-\u001f]/g, ' ')
-    .slice(0, limit)
+  return (
+    value
+      .slice(0, 16000)
+      .replace(/(?:https?|blob|kunyin|file):[^\s"'<>]+/gi, (url) => maskUrl(url))
+      .replace(/\b(?:Bearer|Basic)\s+[^\s,;"']+/gi, '[authorization omitted]')
+      .replace(/\b(?:cookie|set-cookie|authorization)\s*[:=][^\r\n]+/gi, '[credentials omitted]')
+      .replace(
+        /(\b[\w-]{0,60}(?:cookie|ticket|token|password|passwd|secret|credential|session|ekey|cdk|sign|key|auth|uin)[\w-]{0,40}["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;}]+)/gi,
+        '$1[REDACTED]'
+      )
+      .replace(/\?[^\s"'<>]+/g, '?[query omitted]')
+      // eslint-disable-next-line no-control-regex -- Strip C0 control characters from single-line logs.
+      .replace(/[\u0000-\u001f]/g, ' ')
+      .slice(0, limit)
+  )
 }
 export function redact(value: unknown): unknown {
   let budget = 160

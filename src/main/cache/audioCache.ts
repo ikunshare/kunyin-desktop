@@ -296,18 +296,22 @@ export async function verifyBlock(
   return false
 }
 
-/** 落一个完整块。data 长度必须等于该块应有长度，否则忽略。 */
-async function commitBlock(
+/**
+ * 落一个完整块。data 长度必须等于该块应有长度，否则忽略。
+ * @returns 这一块现在是否在缓存里（条目已被淘汰 / 长度不符 / 写盘失败都是 false）。
+ *   播放预取靠它判断「这块到底落没落下」，否则条目被淘汰后会对着同一块无限重取。
+ */
+export async function commitAudioBlock(
   key: string,
   record: CacheRecord,
   blockIndex: number,
   data: Buffer
-): Promise<void> {
-  if (index.get(key) !== record) return // 条目已被淘汰/重建
-  if (record.blocks.has(blockIndex)) return
-  if (data.length !== blockLength(record, blockIndex)) return
+): Promise<boolean> {
+  if (index.get(key) !== record) return false // 条目已被淘汰/重建
+  if (record.blocks.has(blockIndex)) return true
+  if (data.length !== blockLength(record, blockIndex)) return false
   const path = blockPath(key, blockIndex)
-  // tmp 名带随机后缀：<audio> 首帧常同时开两路请求，两个 writer 可能同时落同一块，
+  // tmp 名带随机后缀：<audio> 首帧常同时开两路请求，再加上预取，几个 writer 可能同时落同一块，
   // 固定名会撞在一起。各写各的再 rename，后者覆盖前者（内容本就相同）。
   const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`
   try {
@@ -320,17 +324,20 @@ async function commitBlock(
   } catch (error) {
     log.warn('音频缓存块写入失败', { error, blockIndex })
     void rm(tmp, { force: true }).catch(() => {})
-    return
+    return false
   }
   // 落盘期间条目可能已被淘汰：再确认一次，别把字节数算到已消失的条目上
   if (index.get(key) !== record) {
     void rm(path, { force: true }).catch(() => {})
-    return
+    return false
   }
+  // 另一个 writer 抢先登记了同一块：文件内容相同，别把字节数算两遍
+  if (record.blocks.has(blockIndex)) return true
   record.blocks.add(blockIndex)
   totalBytes += data.length
   evict()
   persist()
+  return index.get(key) === record
 }
 
 export interface BlockWriter {
@@ -379,7 +386,7 @@ export function openBlockWriter(
           buf.push(Buffer.from(data.subarray(0, take)))
           bufLen += take
           if (bufLen === len) {
-            void commitBlock(key, record, idx, Buffer.concat(buf, bufLen))
+            void commitAudioBlock(key, record, idx, Buffer.concat(buf, bufLen))
             reset(-1)
           }
         }

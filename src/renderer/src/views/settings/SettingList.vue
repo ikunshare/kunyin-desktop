@@ -36,9 +36,7 @@ const { settings } = storeToRefs(store)
         />
       </div>
     </div>
-    <p class="tip">
-      添加到歌单、我的收藏时插在开头还是末尾。试听列表是播放时自动累积的，始终按播放先后追加。
-    </p>
+    <p class="tip">添加到歌单、我的收藏、试听列表时插在开头还是末尾；已在列表里的歌曲保持原位。</p>
     <p class="tip">歌手页的专辑排列方式与排序方向在该页面内切换，不在这里设置。</p>
   </dd>
 </template>

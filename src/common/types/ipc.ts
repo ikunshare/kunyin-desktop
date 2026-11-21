@@ -25,7 +25,22 @@ import type {
   UserInfo
 } from './provider'
 import type { ChartInfo, PlaylistCategory } from './provider'
-import type { AppSettings, AuthState, CacheKind, CacheStats, ProxyStatus } from './settings'
+import type {
+  AppSettings,
+  AuthState,
+  CacheKind,
+  CacheStats,
+  CdkQueryResult,
+  ProxyStatus
+} from './settings'
+import type {
+  KunyinAccount,
+  KunyinKeyResult,
+  KunyinLoginResult,
+  KunyinQRCode,
+  KunyinQRPoll,
+  LocalQQAccount
+} from './kunyin'
 import type { LocalPlaylist } from './library'
 import type { AddDownloadInput, DownloadTask } from './download'
 
@@ -93,6 +108,20 @@ export const IpcChannels = {
   AUTH_GET: 'auth:get',
   AUTH_VALIDATE: 'auth:validate',
   AUTH_CLEAR: 'auth:clear',
+  AUTH_QUERY: 'auth:query',
+
+  // 网页版坤音账号（QQ 登录 + 名下卡密管理）
+  KUNYIN_ACCOUNT_GET: 'kunyin:account:get',
+  KUNYIN_ACCOUNT_REFRESH: 'kunyin:account:refresh',
+  KUNYIN_ACCOUNT_LOGOUT: 'kunyin:account:logout',
+  KUNYIN_LOGIN_LOCAL_ACCOUNTS: 'kunyin:login:localAccounts',
+  KUNYIN_LOGIN_QUICK: 'kunyin:login:quick',
+  KUNYIN_LOGIN_QR_NEW: 'kunyin:login:qrNew',
+  KUNYIN_LOGIN_QR_POLL: 'kunyin:login:qrPoll',
+  KUNYIN_KEY_USE: 'kunyin:key:use',
+  KUNYIN_KEY_BIND: 'kunyin:key:bind',
+  KUNYIN_KEY_MIGRATE: 'kunyin:key:migrate',
+  KUNYIN_KEY_GROUP_CODE: 'kunyin:key:groupCode',
 
   // 本地曲库（歌单 / 收藏 / 试听）
   LIBRARY_PLAYLISTS: 'library:playlists',
@@ -555,6 +584,36 @@ export interface WindowApi {
     /** 提交卡密校验并保存，返回最新状态 */
     validate(authst: string): Promise<AuthState>
     clear(): Promise<AuthState>
+    /** 查询当前卡密的类型、状态、有效期与额度（只读，不计使用次数） */
+    query(): Promise<CdkQueryResult>
+  }
+
+  /**
+   * 网页版坤音账号：QQ 登录 + 名下卡密管理。
+   * 会话（qq_auth cookie）由主进程持有并加密落盘，渲染层只读写展示状态。
+   */
+  kunyin: {
+    /** 当前账号与名下卡密（未登录时 loggedIn=false） */
+    account(): Promise<KunyinAccount>
+    /** 主动刷新 /user/me */
+    refresh(): Promise<KunyinAccount>
+    logout(): Promise<KunyinAccount>
+    /** 探测本机 QQ 客户端里已登录的账号（快捷登录第一步） */
+    localAccounts(): Promise<LocalQQAccount[]>
+    /** 用指定 uin 完成快捷登录；no_qq 表示应回退扫码 */
+    quickLogin(uin: string): Promise<KunyinLoginResult>
+    /** 扫码登录（后端代理）：取二维码 */
+    qrNew(): Promise<KunyinQRCode>
+    /** 扫码登录：轮询状态，done 时会带上账号 */
+    qrPoll(qrsig: string): Promise<KunyinQRPoll>
+    /** 把名下某张卡密设为当前 authst（走 /app/checkAuth 校验后持久化） */
+    useKey(key: string): Promise<AuthState>
+    /** 把一张未绑定的卡密绑定到当前 QQ */
+    bindKey(key: string): Promise<KunyinKeyResult>
+    /** 旧卡换新卡（旧卡立即作废） */
+    migrateKey(oldKey: string): Promise<KunyinKeyResult>
+    /** 生成进群验证码（一次性 6 位） */
+    groupCode(key: string): Promise<KunyinKeyResult>
   }
 
   /** 本地曲库：歌单 / 收藏 / 试听（最近播放） */

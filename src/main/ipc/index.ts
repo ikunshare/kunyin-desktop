@@ -8,6 +8,7 @@ import { registerSearchHandlers } from './handlers/search'
 import { registerPlayerHandlers } from './handlers/player'
 import { registerCommentHandlers } from './handlers/comment'
 import { registerAuthHandlers } from './handlers/auth'
+import { registerKunyinHandlers } from './handlers/kunyin'
 import { registerLibraryHandlers } from './handlers/library'
 import { registerDiscoverHandlers } from './handlers/discover'
 import { registerDownloadHandlers } from './handlers/download'
@@ -25,6 +26,7 @@ export function registerIpc(): void {
   registerPlayerHandlers()
   registerCommentHandlers()
   registerAuthHandlers()
+  registerKunyinHandlers()
   registerLibraryHandlers()
   registerDiscoverHandlers()
   registerDownloadHandlers()
